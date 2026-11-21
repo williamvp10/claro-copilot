@@ -12,8 +12,7 @@ flowchart LR
   T["Telegram Bot API"] --> Edge
   A["Asesor y administración"] --> Edge
   Edge --> Web["Next.js · chat y consola"]
-  Web -->|"/api y SSE"| API["NestJS · API"]
-  Edge -->|"Webhook HTTPS"| API
+  Web -->|"/api, SSE y webhook HTTPS"| API["NestJS · API"]
   API --> PG[("PostgreSQL · casos, outbox, índice pgvector")]
   PG --> Worker["NestJS · worker LangGraph"]
   Worker --> PG
@@ -37,7 +36,7 @@ flowchart LR
 | ml y ml-jobs | MLflow OSS registra modelos con SQLite y persistencia en mlflow-data. La publicación verifica el modelo y su firma. FastAPI carga el bundle fijado desde ml-models en solo lectura y guarda señales en ml-state. Los fallos del predictor se auditan y la atención continúa. |
 | observability | Prometheus obtiene métricas del backend. El agente exporta trazas OTLP saneadas a Langfuse. El Compose separado de Langfuse contiene web, worker, PostgreSQL, ClickHouse, Redis y almacenamiento compatible con S3. |
 
-## Recorrido de atención
+## Atención y acción aprobada
 
 ```mermaid
 sequenceDiagram
@@ -46,6 +45,7 @@ sequenceDiagram
   participant DB as Caso y outbox
   participant Agent as Worker
   actor Advisor as Asesor
+  participant CRM as CRM simulado
   Client->>API: Mensaje de planes o soporte
   API->>DB: Persiste turno con canal e idempotencia
   Agent->>DB: Lee turno y ámbito
@@ -60,6 +60,15 @@ sequenceDiagram
   DB-->>Advisor: SSE de consola
   Advisor->>API: Responde en la misma conversación
   API-->>Client: Envía respuesta al canal de origen
+  opt Retención elegible y alternativa aceptada
+    Client->>API: Acepta alternativa por el canal de origen
+    Agent->>DB: Guarda propuesta pendiente
+    Advisor->>API: Aprueba la propuesta
+    API->>DB: Publica comando con clave idempotente
+    Agent->>CRM: Revalida y registra una sola operación
+    CRM-->>DB: Conserva referencia confirmada
+    DB-->>Advisor: Entrega evidencia privada
+  end
 ```
 
 El navegador recibe un identificador opaco por cookie HttpOnly. El servidor proyecta el historial público y deriva el caso desde esa sesión. Telegram vincula el chat desde el webhook autenticado. Vincular identidades de distintos canales requiere verificación explícita. El asesor toma el caso y la plataforma revalida rol y titularidad antes de acceder a hechos privados. Una aprobación habilita un efecto idempotente.
