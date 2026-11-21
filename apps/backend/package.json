@@ -6,7 +6,13 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "start": "node dist/main.js",
-    "worker": "node dist/worker.js"
+    "worker": "node dist/worker.js",
+    "migrate": "node dist/migrate.js",
+    "seed": "node dist/seed.js",
+    "test": "node --test test/*.test.mjs",
+    "test:integration": "node test/platform-e2e.mjs",
+    "knowledge:ingest": "node dist/knowledge-ingest.js",
+    "knowledge:mcp": "node dist/mcp.js"
   },
   "dependencies": {
     "@claro/contracts": "workspace:*",
@@ -14,7 +20,19 @@
     "@nestjs/core": "11.2.11",
     "@nestjs/platform-express": "11.2.11",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.2"
+    "rxjs": "^7.8.2",
+    "better-auth": "1.7.27",
+    "typeorm": "^0.3.28",
+    "pg": "^8.22.0",
+    "redis": "^5.0.14",
+    "express": "^5.1.0",
+    "zod": "^4.1.0",
+    "@claro/agent": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.2"
   },
-  "devDependencies": {"@types/node": "^24.0.0"}
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/express": "^5.0.0",
+    "@types/pg": "^8.15.0"
+  }
 }

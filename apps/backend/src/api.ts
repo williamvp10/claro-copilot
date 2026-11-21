@@ -1,0 +1,263 @@
+import {
+  BadRequestException, Body, Controller, ForbiddenException, Get, Inject, Module, Param, Post,
+  Req, Res, ServiceUnavailableException, UnauthorizedException, type DynamicModule
+} from '@nestjs/common';
+import { z } from 'zod';
+import type { Request, Response } from 'express';
+import { type DataSource } from 'typeorm';
+import { randomUUID } from 'node:crypto';
+import { CloseCase, DecideProposal, OpenCase, SendMessage, Text, VerifyHolder, Id, type CaseEvent, type Dashboard, type Viewer } from '@claro/contracts';
+import { AUTH, getViewer, type createAuth } from './auth.js';
+import { Cases, constantEqual } from './cases.js';
+import { createDatabase, DATABASE } from './database.js';
+import { readModelMetrics } from './telemetry.js';
+
+const Webhook = z.object({
+  update_id: z.number().int().nonnegative(),
+  message: z.object({
+    chat: z.object({ id: z.number().int().safe(), type: z.string() }),
+    text: Text.optional()
+  }).optional()
+});
+const Synthetic = z.object({ contact_ref: Id, text: Text, idempotency_key: Id });
+const Prompts = z.object({ prompts: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/), Text) })
+  .refine(({ prompts }) => Object.keys(prompts).length <= 15);
+
+function parse<T>(schema: z.ZodType<T>, value: unknown): T {
+  const result = schema.safeParse(value);
+  if (!result.success) throw new BadRequestException('Solicitud inválida');
+  return result.data;
+}
+
+type Auth = ReturnType<typeof createAuth>['auth'];
+
+@Controller()
+class HealthController {
+  constructor(@Inject(DATABASE) private readonly db: DataSource) {}
+
+  @Get('healthz')
+  live() { return { status: 'ok' }; }
+
+  @Get('readyz')
+  async ready() {
+    try {
+      await this.db.query('SELECT revision FROM prompt_revision WHERE activated');
+      return { status: 'ready' };
+    } catch {
+      throw new ServiceUnavailableException();
+    }
+  }
+}
+
+@Controller('api/v1')
+class PlatformController {
+  constructor(private readonly cases: Cases, @Inject(DATABASE) private readonly db: DataSource, @Inject(AUTH) private readonly auth: Auth) {}
+
+  private async viewer(req: Request) {
+    if (!['GET', 'HEAD'].includes(req.method) && req.get('Origin') !== new URL(process.env.BETTER_AUTH_URL!).origin) {
+      throw new ForbiddenException('Origen inválido');
+    }
+    return getViewer(req, this.auth, this.db);
+  }
+
+  private async admin(req: Request): Promise<Viewer> {
+    const viewer = await this.viewer(req);
+    if (viewer.role !== 'admin') throw new ForbiddenException();
+    return viewer;
+  }
+
+  @Get('me')
+  me(@Req() req: Request) { return this.viewer(req); }
+
+  @Get('contacts')
+  async contacts(@Req() req: Request) { return this.cases.contacts(await this.viewer(req)); }
+
+  @Get('cases')
+  async list(@Req() req: Request) { return this.cases.list(await this.viewer(req)); }
+
+  @Post('cases')
+  async open(@Req() req: Request, @Body() data: unknown) {
+    return this.cases.open(await this.viewer(req), parse(OpenCase, data));
+  }
+
+  @Get('cases/:id')
+  async read(@Req() req: Request, @Param('id') id: string) {
+    return this.cases.get(await this.viewer(req), parse(Id, id));
+  }
+
+  @Post('cases/:id/take')
+  async take(@Req() req: Request, @Param('id') id: string) {
+    return this.cases.take(await this.viewer(req), parse(Id, id));
+  }
+
+  @Post('cases/:id/verify-holder')
+  async verify(@Req() req: Request, @Param('id') id: string, @Body() data: unknown) {
+    return this.cases.verify(await this.viewer(req), parse(Id, id), parse(VerifyHolder, data).verification_code);
+  }
+
+  @Post('cases/:id/messages')
+  async send(@Req() req: Request, @Param('id') id: string, @Body() data: unknown) {
+    return this.cases.send(await this.viewer(req), parse(Id, id), parse(SendMessage, data));
+  }
+
+  @Post('cases/:id/close')
+  async close(@Req() req: Request, @Param('id') id: string, @Body() data: unknown) {
+    return this.cases.close(await this.viewer(req), parse(Id, id), parse(CloseCase, data).resolved);
+  }
+
+  @Post('proposals/:id/decision')
+  async decide(@Req() req: Request, @Param('id') id: string, @Body() data: unknown) {
+    return this.cases.decide(await this.viewer(req), parse(Id, id), parse(DecideProposal, data));
+  }
+
+  @Get('cases/:id/events')
+  async events(@Req() req: Request, @Res() res: Response, @Param('id') rawId: string) {
+    const id = parse(Id, rawId);
+    const snapshot = await this.cases.get(await this.viewer(req), id);
+    const rawCursor = req.get('Last-Event-ID') ?? String(req.query.cursor ?? 0);
+    const cursorValue = /^\d+$/.test(rawCursor) ? Number(rawCursor) : 0;
+    let cursor = Number.isSafeInteger(cursorValue) ? Math.min(cursorValue, snapshot.cursor) : 0;
+    res.set({
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-store',
+      'X-Accel-Buffering': 'no',
+      Connection: 'keep-alive'
+    });
+    res.flushHeaders();
+    const write = (next: typeof snapshot) => {
+      if (next.cursor <= cursor) return;
+      const event: CaseEvent = { type: 'case.updated', cursor: next.cursor, snapshot: next };
+      cursor = next.cursor;
+      if (!res.write(`id: ${cursor}\nevent: case.updated\ndata: ${JSON.stringify(event)}\n\n`)) res.end();
+    };
+    write(snapshot);
+    let active = true;
+    let timer: NodeJS.Timeout;
+    let beats = 0;
+    const poll = async () => {
+      try {
+        if (!active || res.writableEnded) return;
+        write(await this.cases.get(await this.viewer(req), id));
+        if (++beats % 15 === 0) res.write(': heartbeat\n\n');
+        if (active && !res.writableEnded) timer = setTimeout(() => void poll(), 1000);
+      } catch {
+        res.end();
+      }
+    };
+    res.once('close', () => { active = false; clearTimeout(timer); });
+    timer = setTimeout(() => void poll(), 1000);
+  }
+
+  @Post('webhooks/telegram')
+  async webhook(@Req() req: Request, @Body() body: unknown) {
+    const configured = process.env.TELEGRAM_WEBHOOK_SECRET;
+    if (!configured || !constantEqual(req.get('X-Telegram-Bot-Api-Secret-Token') ?? '', configured)) throw new UnauthorizedException();
+    const { update_id, message } = parse(Webhook, body);
+    if (message?.chat.type === 'private' && message.text && !message.text.startsWith('/')) {
+      await this.cases.receiveTelegram({ update_id, chat_id: String(message.chat.id), text: message.text });
+    }
+    return { ok: true };
+  }
+
+  @Post('demo/incoming')
+  async synthetic(@Req() req: Request, @Body() body: unknown) {
+    const key = process.env.DEMO_INGRESS_TOKEN;
+    if (!key || !constantEqual(req.get('Authorization') ?? '', `Bearer ${key}`)) throw new UnauthorizedException();
+    const { contact_ref, text, idempotency_key } = parse(Synthetic, body);
+    await this.cases.receiveSynthetic(contact_ref, text, idempotency_key);
+    return { ok: true };
+  }
+
+  @Get('admin/dashboard')
+  async dashboard(@Req() req: Request): Promise<Dashboard> {
+    await this.admin(req);
+    const [ml, [{ p95 }]] = await Promise.all([readModelMetrics(), this.db.query(`SELECT
+      percentile_cont(.95) WITHIN GROUP (ORDER BY (metadata->>'ms')::numeric)::float AS p95 FROM attention_event
+      WHERE kind='agent_latency' AND created_at > now()-interval '7 days'`)]);
+    const [{ revision }] = await this.db.query('SELECT revision FROM prompt_revision WHERE activated');
+    const [{ total, resolved, aht }] = await this.db.query(`SELECT count(*)::integer AS total,
+      count(*) FILTER(WHERE resolved)::integer AS resolved,
+      avg(extract(epoch FROM ((snapshot->>'updated_at')::timestamptz-created_at))) FILTER(WHERE resolved IS NOT NULL) AS aht
+      FROM attention_case WHERE created_at > now() - interval '7 days'`);
+    const events: { kind: string; count: number }[] = await this.db.query(`SELECT kind,count(*)::integer FROM attention_event
+      WHERE created_at > now() - interval '7 days' GROUP BY kind`);
+    const counts = new Map(events.map(({ kind, count }) => [kind, count]));
+    const count = (kind: string) => counts.get(kind) ?? 0;
+    return {
+      window_days: 7, sample: process.env.DEMO_MODE === 'true' ? 'synthetic' : 'pilot', revision,
+      providers: [
+        { name: 'Worker', status: count('agent_completed') > 0 ? 'observed' : 'waiting' },
+        { name: 'Telegram', status: process.env.TELEGRAM_BOT_TOKEN ? 'configured' : 'simulation' },
+        { name: 'Langfuse', status: count('langfuse_exported') ? 'observed' : process.env.LANGFUSE_PUBLIC_KEY ? 'configured' : 'unconfigured' },
+        { name: 'ML en sombra', status: ml?.groups.length ? ml.groups.map(group => `${group.model_version} · ${group.drift?.status ?? 'sin referencia'}`).join(', ') : count('ml_predicted') > 0 ? 'observed' : 'waiting' }
+      ],
+      metrics: [
+        { id: 'cases', label: 'Conversaciones', value: total, unit: 'casos' },
+        { id: 'aht', label: 'Duración media de atención', value: aht === null ? null : Number(aht), unit: 's' },
+        { id: 'resolved', label: 'Resolución reportada', value: total ? resolved * 100 / total : null, unit: '%', denominator: total },
+        { id: 'handoff', label: 'Derivaciones', value: count('handoff'), unit: 'casos' },
+        { id: 'retention', label: 'Ofertas confirmadas', value: count('retention_confirmed'), unit: 'ofertas' },
+        { id: 'agent', label: 'Ejecuciones completadas', value: count('agent_completed'), unit: 'turnos' },
+        { id: 'discarded', label: 'Salidas obsoletas descartadas', value: count('agent_stale'), unit: 'turnos' },
+        { id: 'agent_errors', label: 'Errores de ejecución', value: count('job_failed'), unit: 'eventos' },
+        { id: 'ml', label: 'Predicciones en sombra', value: count('ml_predicted'), unit: 'turnos' },
+        { id: 'agent_p95', label: 'Latencia del worker p95', value: p95, unit: 'ms' },
+        { id: 'ml_f1', label: 'F1 macro agrupado de ML', value: ml?.offline?.metrics.macro_f1 ?? null, unit: 'F1' },
+        { id: 'ml_recall', label: 'Recall de cancelación de ML', value: ml?.offline?.metrics.cancelacion_recall ?? null, unit: 'recall' },
+        { id: 'ml_labels', label: 'Etiquetas supervisadas', value: ml ? ml.groups.reduce((n, group) => n + group.labels_count, 0) : null, unit: 'casos' },
+        { id: 'ml_errors', label: 'Fallos de inferencia en sombra', value: count('ml_unavailable'), unit: 'turnos' },
+        { id: 'csat', label: 'CSAT', value: null, unit: '%' },
+        { id: 'groundedness', label: 'Groundedness', value: null, unit: '%' },
+        { id: 'recall', label: 'Recall@k', value: null, unit: '%' }
+      ]
+    };
+  }
+
+  @Get('admin/prompts')
+  async prompts(@Req() req: Request) {
+    await this.admin(req);
+    return this.db.query('SELECT revision,status,prompts FROM prompt_revision ORDER BY created_at DESC LIMIT 50');
+  }
+
+  @Post('admin/prompts')
+  async candidate(@Req() req: Request, @Body() body: unknown) {
+    await this.admin(req);
+    const { prompts } = parse(Prompts, body);
+    const [candidate] = await this.db.query(`INSERT INTO prompt_revision(revision,base_revision,prompts,status)
+      SELECT $1,revision,$2,'candidate' FROM prompt_revision WHERE activated RETURNING revision,status,prompts`, [randomUUID(), prompts]);
+    return candidate;
+  }
+
+  @Post('admin/prompts/:revision/eval')
+  async evaluate(@Req() req: Request, @Param('revision') revision: string) {
+    await this.admin(req);
+    const [[candidate]] = await this.db.query(`UPDATE prompt_revision SET status='failed' WHERE revision=$1 AND NOT activated
+      AND status IN ('candidate','failed') RETURNING revision,status,prompts`, [parse(Id, revision)]);
+    if (!candidate) throw new BadRequestException('Revisión candidata no disponible');
+    return { ...candidate, reason: 'Evidencia de evaluación semántica independiente requerida' };
+  }
+
+  @Post('admin/prompts/:revision/activate')
+  async activate(@Req() req: Request, @Param('revision') revision: string) {
+    await this.admin(req);
+    return this.db.transaction(async (db) => {
+      const [active] = await db.query('SELECT revision FROM prompt_revision WHERE activated FOR UPDATE');
+      const [target] = await db.query(`SELECT revision FROM prompt_revision
+        WHERE revision=$1 AND status='passed' AND base_revision=$2 FOR UPDATE`, [parse(Id, revision), active?.revision]);
+      if (!target) throw new ForbiddenException('Se requiere evaluación aprobada para la revisión activa');
+      await db.query("UPDATE prompt_revision SET activated=false,status='passed' WHERE activated");
+      const [[updated]] = await db.query(`UPDATE prompt_revision SET activated=true,status='active' WHERE revision=$1 RETURNING revision,status,prompts`, [target.revision]);
+      return updated;
+    });
+  }
+}
+
+@Module({})
+export class ApiModule {
+  static create(auth: Auth): DynamicModule {
+    return {
+      module: ApiModule, controllers: [PlatformController, HealthController],
+      providers: [Cases, { provide: AUTH, useValue: auth }, { provide: DATABASE, useFactory: () => createDatabase().initialize() }]
+    };
+  }
+}
