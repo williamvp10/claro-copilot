@@ -1,3 +1,5 @@
+export { createKnowledgeMcpAdapter, safeKnowledgeQuery } from './mcp.js';
+export type { KnowledgeMcpOptions } from './mcp.js';
 export { createJevDecisionAdapter, createOpenAIEvidenceSelector, createJevSemanticEvaluator } from './providers.js';
 export type { JevOptions, OpenAISelectorOptions, EvidenceSelector, SemanticObservation, SemanticResult } from './providers.js';
 import type { EvidenceSelector } from './providers.js';
@@ -75,7 +77,8 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
   const get = async (key: string) => (await options.checkpoints?.get(key)) ?? results.get(key);
   const put = async (key: string, value: RunResult) => { results.set(key, value); await options.checkpoints?.put(key, value); };
   async function retrieve(turn: AgentTurn, profile: Decision['complexity']): Promise<Citation[]> {
-    let docs = options.knowledge ? await options.knowledge.search(turn.text, { business_date: turn.business_date, audience: turn.audience, channel: turn.channel }) : options.documents ?? defaultDocuments;
+    let docs: KnowledgeDocument[];
+    try { docs = options.knowledge ? await options.knowledge.search(turn.text, { business_date: turn.business_date, audience: turn.audience, channel: turn.channel }) : options.documents ?? defaultDocuments; } catch { return []; }
     docs = docs.filter(d => allowed(d, turn) && score(turn.text, d) > 0).sort((a,b) => score(turn.text,b) - score(turn.text,a));
     if (options.rerank && docs.length) {
       try {

@@ -39,3 +39,14 @@ test('semantic evaluation blocks failed deterministic checks and does not promot
  const observation={question:'María consulta factura 123456789',answer:'La factura está pendiente de pago',evidence:['Factura pendiente'],requiredFacts:['Factura pendiente'],deterministicPassed:false};assert.equal((await evaluator.evaluate(observation)).status,'fail');assert.equal(calls,0);observation.deterministicPassed=true;assert.equal((await evaluator.evaluate(observation)).status,'review');assert.doesNotMatch(JSON.stringify(body),/María|123456789/);
 });
 test('priority handoff never calls remote decision adapter',async()=>{const f=fixture();let calls=0;const a=createAgent(f.ports,{decision:{classify:async()=>{calls++;return null}}});await a.run(turn({text:'Quiero hablar con un supervisor'}));assert.equal(calls,0);});
+test('MCP read-only adapter sends a minimized query and accepts structured documents',async()=>{
+ const {createKnowledgeMcpAdapter}=await import('../dist/index.js');const requests=[];
+ const fake=async(_url,init)=>{if (init.method==='GET') return new Response(null,{status:405});const body=init.body?JSON.parse(init.body):null;requests.push(body);
+  if (!body?.id && body?.id!==0) return new Response(null,{status:202});
+  const result=body.method==='initialize'?{protocolVersion:'2025-06-18',capabilities:{tools:{}},serverInfo:{name:'test',version:'1'}}:{content:[],structuredContent:{documents:[{id:'faq',title:'E-202',excerpt:'Refrescar señal',version:'v1',scope:'public',effective_from:'2026-01-01',status:'ready'}]}};
+  return new Response(JSON.stringify({jsonrpc:'2.0',id:body.id,result}),{status:200,headers:{'content-type':'application/json'}});
+ };
+ const adapter=createKnowledgeMcpAdapter({url:'http://localhost:3001/mcp',fetch:fake});const result=await adapter.search('María 3101234567 tiene error E-202 en televisor',{business_date:'2026-11-18',audience:'cliente',channel:'telegram'});
+ assert.equal(result[0].id,'faq');const call=requests.find(r=>r?.method==='tools/call');assert.equal(call.params.name,'search_knowledge');assert.match(call.params.arguments.query,/E-202/);assert.doesNotMatch(JSON.stringify(call),/María|3101234567/);
+});
+test('knowledge adapter failures produce safe handoff',async()=>{const f=fixture();const a=createAgent(f.ports,{knowledge:{search:async()=>{throw Error('offline')}}});const result=await a.run(turn({audience:'cliente',text:'precio Fibra 500'}));assert.equal(result.type,'handoff');});
