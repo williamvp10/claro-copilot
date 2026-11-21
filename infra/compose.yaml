@@ -1,0 +1,132 @@
+name: claro-copiloto
+x-app: &app
+  image: ${CLARO_IMAGE:-claro-copiloto:local}
+  build:
+    context: ..
+    dockerfile: infra/Dockerfile
+  restart: unless-stopped
+  environment: &app-env
+    NODE_ENV: production
+    DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL using the postgres service hostname}
+    REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+    BETTER_AUTH_URL: ${BETTER_AUTH_URL:?Set BETTER_AUTH_URL}
+    BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Set BETTER_AUTH_SECRET}
+    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN}
+    TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:?Set TELEGRAM_WEBHOOK_SECRET}
+    DEMO_MODE: ${DEMO_MODE:-true}
+    DEMO_HOLDER_CODE: ${DEMO_HOLDER_CODE:-}
+    DEMO_ASSESSOR_EMAIL: ${DEMO_ASSESSOR_EMAIL:-}
+    DEMO_ASSESSOR_PASSWORD: ${DEMO_ASSESSOR_PASSWORD:-}
+    DEMO_ADMIN_EMAIL: ${DEMO_ADMIN_EMAIL:-}
+    DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:-}
+    DEMO_BILLING_CHAT_ID: ${DEMO_BILLING_CHAT_ID:-}
+    DEMO_RETENTION_CHAT_ID: ${DEMO_RETENTION_CHAT_ID:-}
+    DEMO_ASSIGNED_CHAT_ID: ${DEMO_ASSIGNED_CHAT_ID:-}
+    ML_API_URL: ${ML_API_URL:-}
+    ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-}
+    OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+    LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+    LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-}
+    OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+  depends_on:
+    postgres: {condition: service_healthy}
+    redis: {condition: service_healthy}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-claro_demo}
+      POSTGRES_USER: ${POSTGRES_USER:-claro}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: [redis-server, --appendonly, 'yes']
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  migrate:
+    <<: *app
+    restart: 'no'
+    command: [node, apps/backend/dist/migrate.js]
+  seed:
+    <<: *app
+    profiles: [jobs]
+    restart: 'no'
+    command: [node, apps/backend/dist/seed.js]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+  api:
+    <<: *app
+    command: [node, apps/backend/dist/main.js]
+    environment:
+      <<: *app-env
+      HOST: 0.0.0.0
+      PORT: '3000'
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+  worker:
+    <<: *app
+    command: [node, apps/backend/dist/worker.js]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+  web:
+    <<: *app
+    command: [pnpm, --filter, '@claro/web', start]
+    environment:
+      <<: *app-env
+      HOSTNAME: 0.0.0.0
+      PORT: '3000'
+    depends_on:
+      api: {condition: service_healthy}
+    ports: ['${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3000}:3000']
+  ml:
+    profiles: [ml]
+    image: ${ML_IMAGE:-claro-ml:local}
+    build:
+      context: ../services/ml
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment: &ml-env
+      ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-}
+      ML_BUNDLE_DIR: /data/bundles
+      ML_STATE_DB: /data/state/ml.sqlite
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-}
+    volumes: [ml-data:/data]
+  otel:
+    profiles: [observability]
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    command: ['--config=/etc/otel/config.yaml']
+    volumes: ['./observability/otel.yaml:/etc/otel/config.yaml:ro']
+  prometheus:
+    profiles: [observability]
+    image: prom/prometheus:v3.2.1
+    command: ['--config.file=/etc/prometheus/prometheus.yml', '--storage.tsdb.path=/prometheus']
+    volumes:
+      - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports: ['127.0.0.1:${PROMETHEUS_PORT:-9090}:9090']
+volumes:
+  postgres-data:
+  redis-data:
+  ml-data:
+  prometheus-data:
