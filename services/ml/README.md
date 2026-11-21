@@ -10,4 +10,4 @@ Release with `python -m app.release VERSION /models/releases/VERSION` and `ML_IM
 
 Run locally with `uv sync --frozen` then `uv run uvicorn app.main:app --port 8000`; tests with `uv run pytest`. No training data or model artifacts should be committed.
 
-MLflow 2.22 does not support `skops` through its sklearn flavor. Training therefore registers a custom `claro_skops` model directory with MLflow signature and synthetic input example; the release resolver validates and loads it using the reviewed allowlist.
+Training registers a custom `claro_skops` model directory with MLflow signature and synthetic input example; the release resolver validates and loads it using the reviewed allowlist.
