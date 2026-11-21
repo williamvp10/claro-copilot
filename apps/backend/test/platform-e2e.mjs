@@ -91,7 +91,7 @@ try {
   await cards(eligible.id, x=>x.card?.reason_codes.includes('retention_eligible'));
   await post(`/cases/${eligible.id}/messages`, {text:'Puedo ofrecer el descuento del 30 %.',idempotency_key:randomUUID()});
   await cards(eligible.id, x=>x.card?.next_action.includes('Esperar la decisión'));
-  await incoming('C-1004','Acepto el descuento del 30 %.'); 
+  await incoming('C-1004','Acepto el descuento del 30 %.');
   const proposed = await cards(eligible.id, x=>x.card?.proposal?.status==='pending_approval');
   const p = proposed.card.proposal;
   const confirm = {decision:'approved',revision:p.revision,idempotency_key:randomUUID()};
