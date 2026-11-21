@@ -53,7 +53,14 @@ Run the preliminary suite probe with `pnpm --filter @claro/backend quality:probe
 
 The customer UI is at /chat. The advisor UI remains at /. The web demo uses separate synthetic sessions. For Telegram delivery, provision the bot token and configure the authorized chats before enabling the HTTPS webhook.
 
-Deploy compose.langfuse.yaml separately. Set LANGFUSE_SHARED_NETWORK to the application Compose network. Generate independent hexadecimal secrets for the Langfuse database, salt, encryption, auth, ClickHouse, Redis and storage variables declared in the Compose file. Set the generated LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY in both stacks, configure the operator account and use LANGFUSE_BASE_URL=http://langfuse-web:3000 for the worker. The UI binds to localhost for operator access through a tunnel. Keep env files private and pass them explicitly with --env-file.
+Deploy `compose.langfuse.yaml` under its own project name. Set `LANGFUSE_SHARED_NETWORK` to the application Compose network. Start the application first so that network exists.
+
+```sh
+docker compose --env-file .env -f infra/compose.yaml --profile knowledge --profile ml --profile observability up -d --build
+docker compose --project-name claro-langfuse --env-file .env -f infra/compose.langfuse.yaml up -d
+```
+
+Use the pinned release digest and pull without rebuilding in Dokploy. Generate independent hexadecimal secrets for the Langfuse database, salt, encryption, auth, ClickHouse, Redis and storage variables declared in the Compose file. Set the generated LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY in both stacks, configure the operator account and use LANGFUSE_BASE_URL=http://langfuse-web:3000 for the worker. The UI binds to localhost for operator access through a tunnel. Keep env files private and pass them explicitly with --env-file.
 
 Create a candidate in administration with a public_answer prompt. From a private mounted copy of the evaluation inputs, run:
 
