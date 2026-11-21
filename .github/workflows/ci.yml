@@ -1,0 +1,131 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [develop, main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm test
+      - name: Validate Compose
+        env:
+          DATABASE_URL: postgresql://claro:ci@postgres:5432/claro_demo
+          POSTGRES_PASSWORD: ci
+          BETTER_AUTH_URL: http://localhost:3000
+          BETTER_AUTH_SECRET: ci-only-placeholder
+          TELEGRAM_BOT_TOKEN: ci-only-placeholder
+          TELEGRAM_WEBHOOK_SECRET: ci-only-placeholder
+        run: docker compose -f infra/compose.yaml config --quiet
+      - name: Build container locally
+        run: docker build -f infra/Dockerfile -t claro-copiloto:ci .
+  platform-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: claro
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: claro_e2e
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U claro -d claro_e2e"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://claro:ci@127.0.0.1:5432/claro_e2e
+      BETTER_AUTH_URL: http://127.0.0.1:39081
+      BETTER_AUTH_SECRET: ci-only-randomish-32-character-secret-123456
+      HOST: 127.0.0.1
+      PORT: '39081'
+      DEMO_MODE: 'true'
+      DEMO_INGRESS_TOKEN: ci-only-demo-ingress-token
+      ML_API_URL: http://127.0.0.1:39199
+      ML_SERVICE_TOKEN: ci-only-shadow-service-token
+      DEMO_HOLDER_CODE: '927186'
+      DEMO_ASESSOR_EMAIL: asesor@example.test
+      DEMO_ASESSOR_PASSWORD: CI-only-advisor-password-123
+      DEMO_ADMIN_EMAIL: admin@example.test
+      DEMO_ADMIN_PASSWORD: CI-only-admin-password-123
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Migrate, seed and test running API and worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter @claro/backend migrate
+          pnpm --filter @claro/backend seed
+          node apps/backend/dist/main.js > api-e2e.log 2>&1 &
+          api_pid=$!
+          node apps/backend/dist/worker.js > worker-e2e.log 2>&1 &
+          worker_pid=$!
+          trap 'kill "$api_pid" "$worker_pid" 2>/dev/null || true; cat api-e2e.log worker-e2e.log' EXIT
+          node --input-type=module -e 'for(let i=0;i<60;i++){try{if((await fetch(process.env.BETTER_AUTH_URL+"/readyz")).ok)process.exit(0)}catch{} await new Promise(r=>setTimeout(r,500))}process.exit(1)'
+          pnpm --filter @claro/backend test:integration
+  ml-checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - run: uv run --frozen pytest -q
+  candidate:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [checks, platform-integration, ml-checks]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}/claro-copiloto" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: .
+          file: infra/Dockerfile
+          push: true
+          tags: ${{ steps.image.outputs.name }}:candidate-${{ github.sha }}
+      - name: Record immutable candidate reference
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: printf '%s@%s\n' "$IMAGE" "$DIGEST" | tee candidate-image.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-image
+          path: candidate-image.txt

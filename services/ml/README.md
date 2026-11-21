@@ -1,0 +1,13 @@
+# Intent classifier
+
+Private service. `ML_SERVICE_TOKEN` is required for `/internal/v1/*` using Bearer authentication; expose health endpoints only on a private network. `ML_BUNDLE_DIR` points to an approved, read-only version directory and `ML_STATE_DB` to a writable persistent SQLite file. SQLite requires one host and a persistent volume; do not share it over a network filesystem. The service fails readiness without credentials, valid state and a verified model. Only derived features and hashes, never input text, are persisted.
+
+Train with `python -m app.train /path/to/tickets.csv`; set `MLFLOW_TRACKING_URI` and credentials appropriate to the private tracking server. CSV must provide `descripcion,categoria`; five classes and grouped test coverage are required. Set `GIT_SHA` for traceability. Conflicting template groups are retained together in each fold and logged as hashes and label counts for review; excluding all conflicts from the supplied data removes entire classes. No conflict exclusions are applied. The pipeline logs an MLflow run and registers a numeric version with candidate alias.
+
+Release with `python -m app.release VERSION /models/releases/VERSION` and `ML_IMAGE_DIGEST` set. The version must be numeric, destination must not exist, and publication validates the bundle before an atomic rename. Mount the selected release read-only at `ML_BUNDLE_DIR`. MLflow is not needed during serving. Protect the release volume and manifest from tampering: checksum detects corruption but is not a cryptographic signature. Use the same pinned runtime image for training, release and serving.
+
+`python -m app.drift` writes a report to the state database. This initial implementation uses a clearly identified score/OOV heuristic, not Evidently: it requires three seven-day windows with 100 observations each and reports review only when both recent windows differ from the preceding reference. It is not a substitute for a curated conversational reference. Until sufficient data exists the status is `sin referencia`. Schedule this command separately, not in the API process. Offline grouped quality is returned from the checksum-verified release evaluation; online quality uses the latest received supervised label per prediction and includes its sample size.
+
+Run locally with `uv sync --frozen` then `uv run uvicorn app.main:app --port 8000`; tests with `uv run pytest`. No training data or model artifacts should be committed.
+
+MLflow 2.22 does not support `skops` through its sklearn flavor. Training therefore registers a custom `claro_skops` model directory with MLflow signature and synthetic input example; the release resolver validates and loads it using the reviewed allowlist.

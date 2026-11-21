@@ -2,6 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "module": "NodeNext",
+    "lib": ["ES2023"],
     "rootDir": "src",
     "outDir": "dist",
     "experimentalDecorators": true,
