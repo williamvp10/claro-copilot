@@ -1,0 +1,222 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "quality_profile": "showcase",
+    "title": "Del documento a una respuesta con cita",
+    "output": "diagramas/conocimiento.html",
+    "locale": "es",
+    "visual_preset": "blueprint"
+  },
+  "lanes": [
+    {
+      "id": "ing",
+      "label": "Preparación documental"
+    },
+    {
+      "id": "idx",
+      "label": "Publicación del índice"
+    },
+    {
+      "id": "q",
+      "label": "Respuesta a una consulta"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "entra",
+      "lane": "ing",
+      "col": 0,
+      "type": "external",
+      "label": "Documento nuevo",
+      "sublabel": "PDF, correo o audio"
+    },
+    {
+      "id": "limpia",
+      "lane": "ing",
+      "col": 1,
+      "type": "backend",
+      "label": "Extrae y sanea",
+      "sublabel": "OCR o transcripción"
+    },
+    {
+      "id": "chunk",
+      "lane": "ing",
+      "col": 2,
+      "type": "backend",
+      "label": "Chunking",
+      "sublabel": "Secciones y filas"
+    },
+    {
+      "id": "meta",
+      "lane": "ing",
+      "col": 3,
+      "type": "backend",
+      "label": "Anota el pasaje",
+      "sublabel": "Origen, versión y fecha"
+    },
+    {
+      "id": "embed",
+      "lane": "idx",
+      "col": 3,
+      "type": "backend",
+      "label": "Genera embeddings",
+      "sublabel": "Vector por pasaje"
+    },
+    {
+      "id": "idx",
+      "lane": "idx",
+      "col": 4,
+      "type": "database",
+      "label": "Publica el índice",
+      "sublabel": "PostgreSQL y pgvector"
+    },
+    {
+      "id": "preg",
+      "lane": "q",
+      "col": 0,
+      "type": "external",
+      "label": "Pregunta",
+      "sublabel": "Fecha y audiencia"
+    },
+    {
+      "id": "filtro",
+      "lane": "q",
+      "col": 1,
+      "type": "security",
+      "label": "Filtra pasajes",
+      "sublabel": "Vigencia y permisos"
+    },
+    {
+      "id": "busca",
+      "lane": "q",
+      "col": 2,
+      "type": "backend",
+      "label": "Búsqueda híbrida",
+      "sublabel": "Texto + vectores"
+    },
+    {
+      "id": "rrf",
+      "lane": "q",
+      "col": 3,
+      "type": "backend",
+      "label": "Fusiona listas",
+      "sublabel": "RRF por posición"
+    },
+    {
+      "id": "ranking",
+      "lane": "q",
+      "col": 4,
+      "type": "backend",
+      "label": "Reranking",
+      "sublabel": "Consulta frente a pasaje"
+    },
+    {
+      "id": "cita",
+      "lane": "q",
+      "col": 5,
+      "type": "frontend",
+      "label": "Agente cita",
+      "sublabel": "Fuente, versión y sección"
+    }
+  ],
+  "edges": [
+    {
+      "id": "entra-limpia",
+      "from": "entra",
+      "to": "limpia",
+      "variant": "emphasis"
+    },
+    {
+      "id": "limpia-chunk",
+      "from": "limpia",
+      "to": "chunk",
+      "variant": "emphasis"
+    },
+    {
+      "id": "chunk-meta",
+      "from": "chunk",
+      "to": "meta",
+      "variant": "emphasis"
+    },
+    {
+      "id": "meta-embed",
+      "from": "meta",
+      "to": "embed",
+      "variant": "emphasis"
+    },
+    {
+      "id": "embed-idx",
+      "from": "embed",
+      "to": "idx",
+      "variant": "emphasis"
+    },
+    {
+      "id": "preg-filtro",
+      "from": "preg",
+      "to": "filtro",
+      "variant": "emphasis"
+    },
+    {
+      "id": "filtro-busca",
+      "from": "filtro",
+      "to": "busca",
+      "variant": "emphasis"
+    },
+    {
+      "id": "idx-busca",
+      "from": "idx",
+      "to": "busca",
+      "variant": "default"
+    },
+    {
+      "id": "busca-rrf",
+      "from": "busca",
+      "to": "rrf",
+      "variant": "emphasis"
+    },
+    {
+      "id": "rrf-ranking",
+      "from": "rrf",
+      "to": "ranking",
+      "variant": "emphasis"
+    },
+    {
+      "id": "ranking-cita",
+      "from": "ranking",
+      "to": "cita",
+      "variant": "emphasis"
+    }
+  ],
+  "mainPath": [
+    "preg",
+    "filtro",
+    "busca",
+    "rrf",
+    "ranking",
+    "cita"
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Chunking y linaje",
+      "items": [
+        "Una fila de tarifa conserva importe, unidad, plan y condiciones juntos. Cada pasaje enlaza al documento, revisión y localizador para poder justificar una cifra."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Cotización 2027",
+      "items": [
+        "Ejemplo de diseño para el mismo producto y ámbito: aprobar la nueva versión con vigencia desde el 1 de enero de 2027, cerrar la anterior en esa fecha de forma atómica y conservar ambas para auditoría. Una llegada anticipada no adelanta su vigencia."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Calidad de recuperación",
+      "items": [
+        "Primero se filtra por fecha y permisos. La búsqueda textual y vectorial produce dos listas que RRF fusiona por posición. El diseño añade un cross-encoder para reordenar pares pregunta–pasaje. Si expira se conserva el ranking filtrado. Si falta evidencia, aclarar o derivar."
+      ]
+    }
+  ]
+}

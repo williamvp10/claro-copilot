@@ -1,0 +1,367 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AWS · Despliegue de atención por país",
+    "locale": "es",
+    "visual_preset": "blueprint",
+    "quality_profile": "showcase",
+    "output": "diagramas/aws-atencion.html",
+    "engineering_profile": "deployment-ownership"
+  },
+  "components": [
+    {
+      "id": "web",
+      "type": "external",
+      "label": "Web y Telegram",
+      "sublabel": "Asesor y webhook del bot",
+      "pos": [
+        35,
+        60
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Canales"
+    },
+    {
+      "id": "social",
+      "type": "cloud",
+      "label": "WhatsApp Business",
+      "sublabel": "End User Messaging Social",
+      "pos": [
+        35,
+        240
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Canales"
+    },
+    {
+      "id": "voice",
+      "type": "cloud",
+      "label": "Amazon Connect + Kinesis",
+      "sublabel": "Voz y segmentos de Contact Lens",
+      "pos": [
+        35,
+        420
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Canales"
+    },
+    {
+      "id": "edge",
+      "type": "security",
+      "label": "WAF + ALB",
+      "sublabel": "Entrada pública HTTPS",
+      "pos": [
+        328,
+        60
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Infraestructura"
+    },
+    {
+      "id": "adapter",
+      "type": "backend",
+      "label": "SNS + Lambda",
+      "sublabel": "Adaptador de WhatsApp",
+      "pos": [
+        328,
+        240
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Plataforma"
+    },
+    {
+      "id": "stream",
+      "type": "backend",
+      "label": "Lambda de voz",
+      "sublabel": "Segmentos a turnos de chat",
+      "pos": [
+        328,
+        420
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Plataforma"
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "API en ECS Fargate",
+      "sublabel": "Web y API · AZ A/B",
+      "pos": [
+        640,
+        240
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Plataforma"
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "Aurora PostgreSQL",
+      "sublabel": "Writer y réplica · AZ A/B",
+      "pos": [
+        640,
+        60
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Datos"
+    },
+    {
+      "id": "relay",
+      "type": "backend",
+      "label": "Relé de outbox",
+      "sublabel": "Fargate · publicación fiable",
+      "pos": [
+        945,
+        60
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Plataforma"
+    },
+    {
+      "id": "queue",
+      "type": "messagebus",
+      "label": "SQS FIFO + DLQ",
+      "sublabel": "Un grupo por conversación",
+      "pos": [
+        1255,
+        60
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Infraestructura"
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "Worker en Fargate",
+      "sublabel": "Tareas privadas · AZ A/B",
+      "pos": [
+        945,
+        240
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Agente"
+    },
+    {
+      "id": "crm",
+      "type": "external",
+      "label": "CRM y facturación",
+      "sublabel": "Enlace privado con Claro",
+      "pos": [
+        640,
+        580
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Claro"
+    },
+    {
+      "id": "bed",
+      "type": "cloud",
+      "label": "Amazon Bedrock",
+      "sublabel": "Converse y Guardrails",
+      "pos": [
+        1255,
+        240
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Agente"
+    },
+    {
+      "id": "watch",
+      "type": "cloud",
+      "label": "CloudWatch + SNS",
+      "sublabel": "Trazas, alarmas y guardia",
+      "pos": [
+        1255,
+        420
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "SRE"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Cuenta de atención · región autorizada para el país",
+      "wraps": [
+        "edge",
+        "adapter",
+        "stream",
+        "api",
+        "db",
+        "relay",
+        "worker",
+        "queue",
+        "bed",
+        "watch"
+      ],
+      "pad": 28
+    },
+    {
+      "kind": "security-group",
+      "label": "VPC · capa privada en dos zonas",
+      "wraps": [
+        "api",
+        "db",
+        "relay",
+        "worker"
+      ],
+      "pad": 12
+    },
+    {
+      "kind": "region",
+      "label": "Cuenta de canales · región habilitada",
+      "wraps": [
+        "social",
+        "voice"
+      ],
+      "pad": 13
+    }
+  ],
+  "connections": [
+    {
+      "from": "web",
+      "to": "edge",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "from": "social",
+      "to": "adapter",
+      "label": "Evento SNS",
+      "variant": "dashed"
+    },
+    {
+      "from": "voice",
+      "to": "stream",
+      "label": "Segmentos",
+      "variant": "dashed"
+    },
+    {
+      "from": "edge",
+      "to": "api",
+      "label": "HTTPS",
+      "variant": "security"
+    },
+    {
+      "from": "adapter",
+      "to": "api",
+      "label": "Turno",
+      "variant": "emphasis"
+    },
+    {
+      "from": "stream",
+      "to": "api",
+      "label": "Turno",
+      "variant": "emphasis"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "Turno + outbox",
+      "variant": "security"
+    },
+    {
+      "from": "relay",
+      "to": "db",
+      "label": "Lee outbox",
+      "variant": "default"
+    },
+    {
+      "from": "relay",
+      "to": "queue",
+      "label": "Publica",
+      "variant": "dashed"
+    },
+    {
+      "from": "queue",
+      "to": "worker",
+      "label": "Consume",
+      "variant": "dashed"
+    },
+    {
+      "from": "worker",
+      "to": "bed",
+      "label": "IAM / TLS",
+      "variant": "security"
+    },
+    {
+      "from": "api",
+      "to": "crm",
+      "label": "Aprobación",
+      "variant": "security"
+    },
+    {
+      "from": "worker",
+      "to": "watch",
+      "label": "OTel",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Entrada y respuesta",
+      "items": [
+        "El ALB recibe la consola y el webhook de Telegram. WhatsApp entrega eventos a SNS estándar y voz llega desde Contact Lens a Kinesis. Las Lambda validan y entregan turnos. Las respuestas salen por el adaptador del canal.",
+        "Connect y su flujo Kinesis residen en la misma cuenta y región. La Lambda de atención consume el flujo con permisos explícitos entre cuentas y conserva el identificador del contacto."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Fronteras y continuidad",
+      "items": [
+        "La API persiste turno y outbox en una transacción. El relé publica en SQS FIFO. Mensajes fallidos se reconcilian por conversación antes de reanudar. Tareas repartidas entre dos zonas y réplica de Aurora en otra zona."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Acciones humanas y operación",
+      "items": [
+        "La API controla identidad, aprobación e idempotencia antes de invocar Claro. En voz asistida responde la persona. El worker exporta trazas saneadas y CloudWatch alerta por edad de cola, fallos y latencia."
+      ]
+    }
+  ]
+}

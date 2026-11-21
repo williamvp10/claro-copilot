@@ -25,6 +25,8 @@ Con la titularidad verificada, la consola reúne datos de CRM y facturación con
 
 ## Arquitectura
 
+[Ver los diagramas del MVP y de la arquitectura propuesta en AWS](docs/arquitectura/README.md)
+
 - **Plataforma.** Next.js y shadcn/ui para la consola. NestJS, Better Auth, TypeORM y PostgreSQL para sesiones, casos, integraciones y aprobaciones.
 - **Agente.** LangGraph.js en un worker de NestJS. OpenAI genera las respuestas, Jev clasifica los turnos y el agente recupera fuentes vigentes con búsqueda híbrida, re-ranking y herramientas MCP.
 - **Aprendizaje automático.** FastAPI sirve el clasificador clásico de intención y MLflow registra sus versiones. El modelo opera en sombra para medir su desempeño durante la atención.

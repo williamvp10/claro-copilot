@@ -1,0 +1,160 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Ciclo de MLOps del clasificador de intención",
+    "locale": "es",
+    "quality_profile": "showcase",
+    "output": "diagramas/mlops.html",
+    "visual_preset": "blueprint"
+  },
+  "lanes": [
+    {
+      "id": "datos",
+      "label": "Datos y entrenamiento"
+    },
+    {
+      "id": "registro",
+      "label": "MLflow"
+    },
+    {
+      "id": "serving",
+      "label": "Inferencia"
+    },
+    {
+      "id": "monitor",
+      "label": "Monitoreo"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "datos",
+      "lane": "datos",
+      "col": 0,
+      "type": "database",
+      "label": "Tickets etiquetados",
+      "sublabel": "Descripción y categoría"
+    },
+    {
+      "id": "particion",
+      "lane": "datos",
+      "col": 1,
+      "type": "backend",
+      "label": "Limpieza y partición",
+      "sublabel": "Grupos de plantillas"
+    },
+    {
+      "id": "entrena",
+      "lane": "datos",
+      "col": 2,
+      "type": "backend",
+      "label": "Entrena y evalúa",
+      "sublabel": "TF-IDF, F1 y recall"
+    },
+    {
+      "id": "candidato",
+      "lane": "registro",
+      "col": 3,
+      "type": "database",
+      "label": "MLflow Registry",
+      "sublabel": "Run y versión candidata"
+    },
+    {
+      "id": "promueve",
+      "lane": "registro",
+      "col": 4,
+      "type": "security",
+      "label": "Publica el bundle",
+      "sublabel": "Firma y versión exacta"
+    },
+    {
+      "id": "publica",
+      "lane": "serving",
+      "col": 5,
+      "type": "backend",
+      "label": "FastAPI en sombra",
+      "sublabel": "Carga al arrancar"
+    },
+    {
+      "id": "observa",
+      "lane": "monitor",
+      "col": 5,
+      "type": "database",
+      "label": "Mide drift",
+      "sublabel": "Etiquetas verificadas"
+    }
+  ],
+  "edges": [
+    {
+      "id": "datos-particion",
+      "from": "datos",
+      "to": "particion",
+      "variant": "emphasis"
+    },
+    {
+      "id": "particion-entrena",
+      "from": "particion",
+      "to": "entrena",
+      "variant": "emphasis"
+    },
+    {
+      "id": "entrena-candidato",
+      "from": "entrena",
+      "to": "candidato",
+      "label": "Log del run",
+      "variant": "emphasis"
+    },
+    {
+      "id": "candidato-promueve",
+      "from": "candidato",
+      "to": "promueve",
+      "variant": "emphasis"
+    },
+    {
+      "id": "promueve-publica",
+      "from": "promueve",
+      "to": "publica",
+      "label": "Modo aprobado",
+      "variant": "security"
+    },
+    {
+      "id": "publica-observa",
+      "from": "publica",
+      "to": "observa",
+      "variant": "dashed",
+      "role": "async"
+    }
+  ],
+  "mainPath": [
+    "datos",
+    "particion",
+    "entrena",
+    "candidato",
+    "promueve",
+    "publica",
+    "observa"
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Datos sintéticos y fuga de evaluación",
+      "items": [
+        "Las plantillas repetidas se mantienen juntas en el split. La transferencia se valida por separado con texto conversacional."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Activación en atención",
+      "items": [
+        "El worker envía una tarea asíncrona a FastAPI. La etiqueta y la versión se registran para comparar con la revisión humana. El grafo mantiene el control de la ruta."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Aprendizaje con etiquetas",
+      "items": [
+        "El job vigila distribuciones. F1 en operación requiere revisiones etiquetadas; una alerta abre revisión antes de reentrenar."
+      ]
+    }
+  ]
+}

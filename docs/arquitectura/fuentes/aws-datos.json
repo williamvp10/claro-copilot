@@ -1,0 +1,349 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AWS · Conocimiento y ciclo del modelo",
+    "locale": "es",
+    "visual_preset": "blueprint",
+    "quality_profile": "showcase",
+    "output": "diagramas/aws-datos.html",
+    "engineering_profile": "deployment-ownership"
+  },
+  "components": [
+    {
+      "id": "docs",
+      "type": "cloud",
+      "label": "S3 · documentos",
+      "sublabel": "Fuentes versionadas por país",
+      "pos": [
+        35,
+        58
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Datos"
+    },
+    {
+      "id": "ing",
+      "type": "backend",
+      "label": "SQS + ingesta ECS",
+      "sublabel": "OCR, saneamiento y embeddings",
+      "pos": [
+        323,
+        58
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Agente"
+    },
+    {
+      "id": "vec",
+      "type": "database",
+      "label": "Aurora + pgvector",
+      "sublabel": "Texto, vectores y vigencia",
+      "pos": [
+        620,
+        58
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Datos"
+    },
+    {
+      "id": "cache",
+      "type": "database",
+      "label": "ElastiCache",
+      "sublabel": "Contexto Redis con TTL",
+      "pos": [
+        925,
+        58
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Infraestructura"
+    },
+    {
+      "id": "bed",
+      "type": "cloud",
+      "label": "Amazon Bedrock",
+      "sublabel": "Síntesis con Guardrails",
+      "pos": [
+        323,
+        240
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Agente"
+    },
+    {
+      "id": "work",
+      "type": "backend",
+      "label": "Worker en Fargate",
+      "sublabel": "Recupera evidencia del caso",
+      "pos": [
+        620,
+        240
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Agente"
+    },
+    {
+      "id": "ep",
+      "type": "backend",
+      "label": "Endpoint SageMaker",
+      "sublabel": "Versión aprobada en sombra",
+      "pos": [
+        925,
+        240
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Equipo ML"
+    },
+    {
+      "id": "obs",
+      "type": "cloud",
+      "label": "CloudWatch + SNS",
+      "sublabel": "Drift, errores y latencia",
+      "pos": [
+        1235,
+        240
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "SRE"
+    },
+    {
+      "id": "train",
+      "type": "backend",
+      "label": "SageMaker Pipelines",
+      "sublabel": "Entrena y evalúa por grupos",
+      "pos": [
+        35,
+        450
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Equipo ML"
+    },
+    {
+      "id": "mf",
+      "type": "cloud",
+      "label": "MLflow en SageMaker",
+      "sublabel": "Experimentos y versiones",
+      "pos": [
+        323,
+        450
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Equipo ML"
+    },
+    {
+      "id": "ar",
+      "type": "database",
+      "label": "S3 · artefactos ML",
+      "sublabel": "Modelo, firma y métricas",
+      "pos": [
+        323,
+        630
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Equipo ML"
+    },
+    {
+      "id": "reg",
+      "type": "security",
+      "label": "Model Registry",
+      "sublabel": "Revisión y aprobación",
+      "pos": [
+        620,
+        450
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Equipo ML"
+    },
+    {
+      "id": "rel",
+      "type": "backend",
+      "label": "Pipeline de despliegue",
+      "sublabel": "Empaqueta y fija versión",
+      "pos": [
+        925,
+        450
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Equipo ML"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Cuenta de producción · ámbito de datos del país",
+      "wraps": [
+        "docs",
+        "ing",
+        "vec",
+        "cache",
+        "bed",
+        "work",
+        "ep",
+        "obs",
+        "train",
+        "mf",
+        "ar",
+        "reg",
+        "rel"
+      ],
+      "pad": 26
+    },
+    {
+      "kind": "security-group",
+      "label": "Ciclo controlado de publicación del modelo",
+      "wraps": [
+        "train",
+        "mf",
+        "ar",
+        "reg",
+        "rel"
+      ],
+      "pad": 13
+    },
+    {
+      "kind": "security-group",
+      "label": "VPC · subredes de datos privadas",
+      "wraps": [
+        "vec",
+        "cache"
+      ],
+      "pad": 12
+    }
+  ],
+  "connections": [
+    {
+      "from": "docs",
+      "to": "ing",
+      "label": "Evento S3",
+      "variant": "dashed"
+    },
+    {
+      "from": "ing",
+      "to": "vec",
+      "label": "Indexa",
+      "variant": "emphasis"
+    },
+    {
+      "from": "work",
+      "to": "vec",
+      "label": "SQL + vector",
+      "variant": "emphasis"
+    },
+    {
+      "from": "work",
+      "to": "cache",
+      "label": "Sesión",
+      "variant": "default"
+    },
+    {
+      "from": "work",
+      "to": "bed",
+      "label": "Converse",
+      "variant": "security"
+    },
+    {
+      "from": "work",
+      "to": "ep",
+      "label": "Tarea ML",
+      "variant": "dashed"
+    },
+    {
+      "from": "ep",
+      "to": "obs",
+      "label": "Métricas",
+      "variant": "dashed"
+    },
+    {
+      "from": "train",
+      "to": "mf",
+      "label": "Registra run",
+      "variant": "emphasis"
+    },
+    {
+      "from": "mf",
+      "to": "ar",
+      "label": "Artefactos",
+      "variant": "emphasis"
+    },
+    {
+      "from": "mf",
+      "to": "reg",
+      "label": "Sincroniza",
+      "variant": "emphasis"
+    },
+    {
+      "from": "reg",
+      "to": "rel",
+      "label": "Aprobado",
+      "variant": "security"
+    },
+    {
+      "from": "rel",
+      "to": "ep",
+      "label": "Despliega",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Evidencia y sesión",
+      "items": [
+        "S3 emite eventos de fuente. La ingesta extrae, sanea y calcula embeddings antes de escribir en Aurora PostgreSQL. El worker filtra por país, vigencia y permiso. ElastiCache guarda contexto con TTL."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "MLflow administrado y serving",
+      "items": [
+        "SageMaker Pipelines registra parámetros, métricas, firma y modelo en una MLflow App. S3 conserva los artefactos. Se habilita la sincronización con SageMaker Model Registry. La aprobación autoriza al pipeline a verificar, empaquetar y desplegar una versión en el endpoint."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Drift y recuperación",
+      "items": [
+        "Un job de Processing compara señales por canal y versión con etiquetas revisadas. Publica métricas en CloudWatch y avisa por SNS. La promoción requiere revisión. El rollback recupera la configuración anterior del endpoint."
+      ]
+    }
+  ]
+}

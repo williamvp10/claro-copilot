@@ -1,0 +1,186 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "quality_profile": "showcase",
+    "title": "Mejora del agente con TDD y EDD",
+    "output": "diagramas/evals.html",
+    "locale": "es",
+    "visual_preset": "blueprint"
+  },
+  "lanes": [
+    {
+      "id": "prepara",
+      "label": "Equipo de producto"
+    },
+    {
+      "id": "ejecuta",
+      "label": "Agente y pruebas de código"
+    },
+    {
+      "id": "revisa",
+      "label": "Evaluación y publicación"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "caso",
+      "lane": "prepara",
+      "col": 0,
+      "type": "external",
+      "label": "Caso de referencia",
+      "sublabel": "Hechos y efecto esperados"
+    },
+    {
+      "id": "cambio",
+      "lane": "prepara",
+      "col": 1,
+      "type": "backend",
+      "label": "Ajusta el prompt",
+      "sublabel": "Crea una revisión"
+    },
+    {
+      "id": "replay",
+      "lane": "ejecuta",
+      "col": 1,
+      "type": "backend",
+      "label": "Ejecuta A y B",
+      "sublabel": "Mismo caso y contexto"
+    },
+    {
+      "id": "control",
+      "lane": "ejecuta",
+      "col": 2,
+      "type": "security",
+      "label": "Pruebas de código",
+      "sublabel": "Permisos y efecto en CRM"
+    },
+    {
+      "id": "jev",
+      "lane": "ejecuta",
+      "col": 3,
+      "type": "backend",
+      "label": "Jev como juez",
+      "sublabel": "Pregunta de rúbrica"
+    },
+    {
+      "id": "lf",
+      "lane": "revisa",
+      "col": 3,
+      "type": "database",
+      "label": "Langfuse",
+      "sublabel": "Compara trazas y scores"
+    },
+    {
+      "id": "persona",
+      "lane": "revisa",
+      "col": 4,
+      "type": "security",
+      "label": "Revisión humana",
+      "sublabel": "Examina la diferencia"
+    },
+    {
+      "id": "pub",
+      "lane": "revisa",
+      "col": 5,
+      "type": "frontend",
+      "label": "Publica la versión",
+      "sublabel": "Si cumple los criterios"
+    }
+  ],
+  "edges": [
+    {
+      "id": "caso-cambio",
+      "from": "caso",
+      "to": "cambio",
+      "variant": "emphasis"
+    },
+    {
+      "id": "cambio-replay",
+      "from": "cambio",
+      "to": "replay",
+      "variant": "emphasis"
+    },
+    {
+      "id": "replay-control",
+      "from": "replay",
+      "to": "control",
+      "variant": "emphasis"
+    },
+    {
+      "id": "control-jev",
+      "from": "control",
+      "to": "jev",
+      "variant": "emphasis",
+      "label": "Pasa"
+    },
+    {
+      "id": "jev-lf",
+      "from": "jev",
+      "to": "lf",
+      "variant": "emphasis"
+    },
+    {
+      "id": "lf-persona",
+      "from": "lf",
+      "to": "persona",
+      "variant": "emphasis"
+    },
+    {
+      "id": "persona-pub",
+      "from": "persona",
+      "to": "pub",
+      "variant": "security",
+      "label": "Aprueba"
+    },
+    {
+      "id": "persona-cambio",
+      "from": "persona",
+      "to": "cambio",
+      "variant": "dashed",
+      "label": "Revisar",
+      "role": "return"
+    },
+    {
+      "id": "control-cambio",
+      "from": "control",
+      "to": "cambio",
+      "variant": "security",
+      "label": "Falla",
+      "role": "return"
+    }
+  ],
+  "mainPath": [
+    "caso",
+    "cambio",
+    "replay",
+    "control",
+    "jev",
+    "lf",
+    "persona",
+    "pub"
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "TDD · Herramientas y trayectoria",
+      "items": [
+        "Escribir una prueba que falle, corregir el comportamiento y refactorizar. Usar dobles para reproducir decisiones del modelo y comprobar autorización, llamadas, idempotencia y efectos."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "EDD · Misma tarea, dos revisiones",
+      "items": [
+        "Fijar caso, fecha, corpus, modelo, herramientas y rúbrica. Repetir las corridas cuando haya variación. Jev recibe observación saneada y preguntas tipadas. En el diseño, Langfuse vincula veredicto y latencia con caso, traza y revisión del prompt."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Human-in-the-loop",
+      "items": [
+        "Un revisor contrasta la rúbrica con ejemplos etiquetados y resuelve ambigüedades antes de promover. Añadir los errores confirmados a la suite de referencia. Durante la atención, el asesor autoriza por separado las acciones comerciales."
+      ]
+    }
+  ]
+}
