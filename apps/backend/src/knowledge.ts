@@ -5,6 +5,7 @@ import { Citation } from '@claro/contracts';
 import type { KnowledgeAdapter, KnowledgeDocument } from '@claro/agent';
 
 export const Document = Citation.extend({
+  url: z.url({protocol:/^https$/}).optional(), excerpt:z.string().trim().min(1).max(8000),
   scope: z.enum(['public', 'advisor']), effective_from: z.iso.date(), effective_to: z.iso.date().optional(),
   status: z.enum(['ready', 'draft']).default('ready'), channels: z.array(z.string()).optional(),
   products: z.array(z.string()).optional(), type: z.string().optional()
@@ -38,7 +39,7 @@ export async function writeDocument(db: Pick<EntityManager, 'query'>, input: z.i
   const doc = Document.parse(input);
   await db.query(`INSERT INTO knowledge_document(id,version,document) VALUES ($1,$2,$3)
     ON CONFLICT(id,version) DO UPDATE SET document=EXCLUDED.document`, [doc.id,doc.version,doc]);
-  const [{ present }] = await db.query("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector') AS present");
+  const [{ present }] = await db.query("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='knowledge_document' AND column_name='embedding') AS present");
   if (present) await db.query('UPDATE knowledge_document SET embedding=$3::vector WHERE id=$1 AND version=$2',
     [doc.id,doc.version,encode(`${doc.title} ${doc.excerpt}`)]);
 }

@@ -178,7 +178,7 @@ async function predict(turn: AgentTurn) {
   try {
     const response = await fetch(new URL('/internal/v1/predict-intent', url), {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ text: turn.text, turn_id: turn.turn_id, idempotency_key: turn.turn_id, channel: turn.channel }),
+      body: JSON.stringify({ text: turn.text, turn_id: turn.turn_id, idempotency_key: turn.turn_id, channel: turn.channel, run_id: turn.run_id }),
       signal: AbortSignal.timeout(1000)
     });
     if (!response.ok) throw new Error('prediction unavailable');

@@ -53,8 +53,11 @@ try {
   assert.ok(['failed','passed'].includes(gated.status));
   if (gated.status === 'failed') await request(api+`/admin/prompts/${candidate.revision}/activate`, {cookie:admin,method:'POST',status:403});
 
+  await incoming('C-1001','Sale E-202 y no se ve ningún canal.');
+  await until(async () => (await db.query("SELECT snapshot FROM attention_case WHERE contact_ref='C-1001'")).rows[0]?.snapshot.messages.some(m=>m.actor==='agente' && m.citations?.some(c=>c.id==='faq-decodificador-e202')), 'E-202 with correct retrieval');
+
   await incoming('C-1001','Quiero información del plan Fibra 500.');
-  await until(async () => (await db.query("SELECT snapshot FROM attention_case WHERE contact_ref='C-1001'")).rows[0]?.snapshot.messages.some(m=>m.actor==='agente' && m.citations?.length), 'public plan citation');
+  await until(async () => (await db.query("SELECT snapshot FROM attention_case WHERE contact_ref='C-1001'")).rows[0]?.snapshot.messages.some(m=>m.actor==='agente' && m.citations?.some(c=>c.id==='catalogo-2026-fibra500')), 'public plan citation');
   await incoming('C-1001','¿Cuánto debo de mi factura de noviembre?');
   const billingCase = await until(async () => (await get('/cases')).find(c=>c.display_name==='Cliente C-1001'), 'handoff');
   const billingId = billingCase.id;
@@ -69,11 +72,12 @@ try {
   const reader = stream.body.getReader();
   await verify(billingId);
   const billing = await cards(billingId, x => x.card?.facts.some(f=>f.value==='$169.315'));
-  assert.equal(billing.messages.filter(m=>m.actor==='agente').length, 2);
+  assert.equal(billing.messages.filter(m=>m.actor==='agente').length, 3);
   const {value} = await reader.read();
   assert.match(new TextDecoder().decode(value), /case.updated/);
   await reader.cancel();
   assert.equal(await count(billingId,'billing_read'), 1);
+  if (process.env.ML_API_URL) await until(async ()=>(await count(billingId,'ml_unavailable'))>0 || (await count(billingId,'ml_predicted'))>0, 'independent shadow inference');
 
   const eligible = await post('/cases', {contact_ref:'C-1004',text:'Hola, soy tu asesor Claro.',idempotency_key:randomUUID()});
   await incoming('C-1004','Quiero cancelar el servicio.');

@@ -76,7 +76,7 @@ export async function queueRun(tx: EntityManager, row: CaseRow, message = latest
     run_id: randomUUID(), case_id: row.id, conversation_id: row.snapshot.conversation_id, turn_id: message.id,
     channel: row.snapshot.channel, actor: message.actor, turn_seq: message.turn_seq, case_revision: row.snapshot.revision,
     attention_mode: row.snapshot.attention_mode, audience: row.snapshot.attention_mode === 'asistido' ? 'asesor' : 'cliente',
-    scope_ref: scope, config_revision: revision, business_date: process.env.DEMO_MODE === 'true' ? '2026-11-18' : new Date().toISOString().slice(0, 10),
+    scope_ref: scope, config_revision: revision, business_date: process.env.DEMO_MODE === 'true' ? (process.env.DEMO_BUSINESS_DATE || '2026-11-18') : new Date().toISOString().slice(0, 10),
     text: clearPersonalData(message.text)
   });
   await tx.query('INSERT INTO agent_run VALUES ($1,$2,$3)', [turn.run_id, row.id, turn]);
