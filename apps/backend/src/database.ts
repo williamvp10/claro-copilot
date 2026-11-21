@@ -94,11 +94,27 @@ export class Feedback1795260000002 implements MigrationInterface {
   async down(db: QueryRunner) { await db.query('DROP TABLE case_feedback'); }
 }
 
+export class SupportPriority1795260000004 implements MigrationInterface {
+  async up(db: QueryRunner) {
+    await db.query(`ALTER TABLE telegram_contact DROP CONSTRAINT telegram_contact_fixture_check;
+      ALTER TABLE telegram_contact ADD CHECK (fixture IN ('C-1001', 'C-1004', 'C-1007', 'C-1013'));
+      CREATE TABLE support_ticket (
+        id text PRIMARY KEY, proposal_id text UNIQUE NOT NULL REFERENCES retention_proposal(id),
+        category text NOT NULL, priority text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+      );`);
+  }
+  async down(db: QueryRunner) {
+    await db.query(`DROP TABLE support_ticket;
+      ALTER TABLE telegram_contact DROP CONSTRAINT telegram_contact_fixture_check;
+      ALTER TABLE telegram_contact ADD CHECK (fixture IN ('C-1001','C-1004','C-1007'));`);
+  }
+}
+
 export function createDatabase() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is required');
   return new DataSource({
-    type: 'postgres', url, migrations: [InitialSchema1795260000000, Knowledge1795260000001, Feedback1795260000002, BoundBootstrapCatalog1795260000003],
+    type: 'postgres', url, migrations: [InitialSchema1795260000000, Knowledge1795260000001, Feedback1795260000002, BoundBootstrapCatalog1795260000003, SupportPriority1795260000004],
     migrationsTableName: 'claro_migrations', synchronize: false
   });
 }

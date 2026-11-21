@@ -23,6 +23,7 @@ x-app: &app
     DEMO_BILLING_CHAT_ID: ${DEMO_BILLING_CHAT_ID:-}
     DEMO_RETENTION_CHAT_ID: ${DEMO_RETENTION_CHAT_ID:-}
     DEMO_ASSIGNED_CHAT_ID: ${DEMO_ASSIGNED_CHAT_ID:-}
+    DEMO_SUPPORT_CHAT_ID: ${DEMO_SUPPORT_CHAT_ID:-}
     ML_API_URL: ${ML_API_URL:-}
     ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-}
     DEMO_BUSINESS_DATE: ${DEMO_BUSINESS_DATE:-2026-11-18}
@@ -146,6 +147,8 @@ services:
     build:
       context: ../services/ml
       dockerfile: Dockerfile
+    environment:
+      MLFLOW_SERVER_ALLOWED_HOSTS: 'mlflow:5000,localhost:5000,127.0.0.1:5000'
     command: [mlflow, server, --host, 0.0.0.0, --port, '5000', --backend-store-uri, 'sqlite:////mlflow/db/mlflow.db', --artifacts-destination, /mlflow/artifacts, --serve-artifacts]
     volumes: [mlflow-data:/mlflow]
     depends_on:

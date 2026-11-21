@@ -104,20 +104,30 @@ async function executeEffect(job: Extract<CaseJob, {kind: 'effect'}>) {
       'SELECT * FROM retention_proposal WHERE id=$1 AND case_id=$2 FOR UPDATE', [job.payload.proposal_id, row.id]);
     if (!record || record.proposal.status !== 'approved') return;
     const id = record.proposal.id;
-    const eligibility = await retention(tx, row, id);
+    const urgent = record.option_id === 'priority-ticket';
+    const eligibility = urgent ? null : await retention(tx, row, id);
+    const businessAllowed = urgent ? row.contact_ref === 'C-1013' :
+      eligibility?.eligible && eligibility.options.some((option) => option.id === record.option_id);
     const [owner] = await tx.query('SELECT role FROM operator_role WHERE user_id=$1', [row.snapshot.owner_id]);
     const allowed = row.snapshot.verified && owner?.role === 'asesor' && row.snapshot.status === 'open' &&
-      row.snapshot.revision === record.case_revision && eligibility.eligible &&
-      eligibility.options.some((option) => option.id === record.option_id) && Number(record.expires_at) > Date.now();
+      row.snapshot.revision === record.case_revision && businessAllowed && Number(record.expires_at) > Date.now();
     if (allowed) {
-      await tx.query('INSERT INTO crm_effect (id,proposal_id) VALUES ($1,$2) ON CONFLICT (proposal_id) DO NOTHING', [`crm-${id}`, id]);
-      const [effect] = await tx.query('SELECT id FROM crm_effect WHERE proposal_id=$1', [id]);
-      record.proposal.effect_ref = effect.id;
+      if (urgent) {
+        await tx.query(`INSERT INTO support_ticket(id,proposal_id,category,priority)
+          VALUES($1,$2,'soporte_tecnico','prioritaria') ON CONFLICT(proposal_id) DO NOTHING`, [`ticket-${id}`,id]);
+        const [effect] = await tx.query('SELECT id FROM support_ticket WHERE proposal_id=$1', [id]);
+        record.proposal.effect_ref = effect.id;
+        await audit(tx, row.id, 'support_ticket_confirmed');
+      } else {
+        await tx.query('INSERT INTO crm_effect (id,proposal_id) VALUES ($1,$2) ON CONFLICT (proposal_id) DO NOTHING', [`crm-${id}`, id]);
+        const [effect] = await tx.query('SELECT id FROM crm_effect WHERE proposal_id=$1', [id]);
+        record.proposal.effect_ref = effect.id;
+        await audit(tx, row.id, 'retention_confirmed');
+      }
       record.proposal.status = 'confirmed';
-      await audit(tx, row.id, 'retention_confirmed');
     } else {
       record.proposal.status = 'expired';
-      await audit(tx, row.id, 'retention_expired');
+      await audit(tx, row.id, urgent ? 'support_ticket_expired' : 'retention_expired');
     }
     await tx.query('UPDATE retention_proposal SET proposal=$2 WHERE id=$1', [id, record.proposal]);
     if (row.snapshot.card?.proposal?.id === id) row.snapshot.card.proposal = record.proposal;

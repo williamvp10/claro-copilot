@@ -76,6 +76,7 @@ jobs:
       DEMO_HOLDER_CODE: '927186'
       TELEGRAM_WEBHOOK_SECRET: ci-only-hook-secret
       DEMO_ASSIGNED_CHAT_ID: '355000007'
+      DEMO_SUPPORT_CHAT_ID: '355000013'
       DEMO_ASESSOR_EMAIL: asesor@example.test
       DEMO_ASESSOR_PASSWORD: CI-only-advisor-password-123
       DEMO_ADMIN_EMAIL: admin@example.test

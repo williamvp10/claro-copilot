@@ -25,7 +25,8 @@ try {
   const scenarios = [
     ['C-1001', process.env.DEMO_BILLING_CHAT_ID, 'Cliente C-1001', null],
     ['C-1004', process.env.DEMO_RETENTION_CHAT_ID, 'Cliente C-1004', null],
-    ['C-1007', process.env.DEMO_ASSIGNED_CHAT_ID, 'Cliente C-1007', advisor]
+    ['C-1007', process.env.DEMO_ASSIGNED_CHAT_ID, 'Cliente C-1007', advisor],
+    ...(process.env.DEMO_SUPPORT_CHAT_ID ? [['C-1013', process.env.DEMO_SUPPORT_CHAT_ID, 'Cliente C-1013', advisor] as const] : [])
   ] as const;
   for (const [ref, chatId, name, owner] of scenarios) {
     await db.query(`INSERT INTO telegram_contact (ref,chat_id,display_name,direct_owner,fixture) VALUES ($1,$2,$3,$4,$1)

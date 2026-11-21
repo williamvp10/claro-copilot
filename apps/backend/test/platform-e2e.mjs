@@ -123,6 +123,23 @@ try {
     const rows = (await db.query('SELECT score FROM case_feedback WHERE case_id=$1', [denied.id])).rows;
     assert.deepEqual(rows, [{score:5}]);
   }
+  if (process.env.DEMO_SUPPORT_CHAT_ID) {
+    await incoming('C-1013','Me quiero retirar porque el internet se cae todo el tiempo.');
+    const support = await until(async ()=>(await get('/cases')).find(c=>c.display_name==='Cliente C-1013'), 'support case');
+    await verify(support.id);
+    const requested = await cards(support.id, x=>x.card?.reason_codes.includes('priority_support_required') && x.card.proposal);
+    assert.equal(await count(support.id,'support_ticket_confirmed'),0);
+    const p = requested.card.proposal;
+    const approval = {decision:'approved',revision:p.revision,idempotency_key:randomUUID()};
+    await Promise.all([post(`/proposals/${p.id}/decision`,approval),post(`/proposals/${p.id}/decision`,approval)]);
+    const ticket = await cards(support.id,x=>x.card?.summary.includes('Ticket registrado'));
+    assert.match(ticket.card.summary,/Franja de visita pendiente/);
+    assert.equal(await count(support.id,'support_ticket_confirmed'),1);
+    assert.equal(await count(support.id,'retention_confirmed'),0);
+    assert.deepEqual((await db.query('SELECT category,priority FROM support_ticket WHERE proposal_id=$1',[p.id])).rows,
+      [{category:'soporte_tecnico',priority:'prioritaria'}]);
+    console.log('CC-E13 verified: one prioritized support ticket after approval, appointment pending.');
+  }
   const dashboard = (await request(api+'/admin/dashboard',{cookie:admin})).json;
   assert.equal(dashboard.metrics.find(m=>m.id==='retention').value,1);
   console.log('C-1001, C-1004, C-1007 verified through HTTP, SSE and PostgreSQL.');

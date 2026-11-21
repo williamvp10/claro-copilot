@@ -110,6 +110,22 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const [customer, billing] = await Promise.all([ports.getCustomerContext(turn.run_id), ports.getBilling(turn.run_id)]);
       return card(intent, 'Consulta de facturación para titular verificado.', [...customer, ...billing], [], [], 'Explicar los importes y vencimientos verificados.', ['verified_account']);
     }
+    if (intent === 'cancelacion' && state.messages.some(message =>
+      message.actor === 'cliente' && has(message.text, /\b(se cae|caidas|fallas recurrentes|intermitencia|falla todo el tiempo)\b/)
+    )) {
+      const [customer, tickets] = await Promise.all([ports.getCustomerContext(turn.run_id), ports.getTickets(turn.run_id)]);
+      const recurrence = tickets.find(fact => fact.id === 'technical-tickets-90d');
+      if (recurrence && Number(recurrence.value) >= 4) {
+        const evidence: Citation = {
+          id:'retention-recurrent-faults', title:'Política de retención y fallas recurrentes',
+          version:'POL-RET-2026 v3.1', excerpt:'Gestionar una visita técnica prioritaria dentro de 24 horas antes de evaluar una oferta cuando se cumple el umbral de recurrencia.'
+        };
+        const proposal = await ports.createProposal(turn.run_id, {option_id:'priority-ticket',citation_ids:[evidence.id]});
+        return card('cancelacion','Fallas técnicas recurrentes. Corresponde gestionar una visita prioritaria dentro de 24 horas.',
+          [...customer,...tickets],[evidence],['Aprobación del asesor'], 'Aprobar el registro del ticket prioritario.',
+          ['priority_support_required'],proposal);
+      }
+    }
     if (intent === 'cancelacion' || intent === 'portabilidad') {
       const [customer, retention] = await Promise.all([ports.getCustomerContext(turn.run_id), ports.evaluateRetention(turn.run_id)]);
       const facts = [...customer, ...retention.facts];
@@ -165,7 +181,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const cached = await get(key); if (cached) return cached;
       const original = await get(`run:${input.run_id}`);
       if (!original || original.type !== 'card' || !original.card.proposal || original.card.proposal.id !== input.effect_id) return {type:'failed', reason:'unknown_proposal', route:'resume'};
-      const action = input.status === 'confirmed' && input.effect_ref ? `Operación confirmada: ${input.effect_ref}.` : input.status === 'confirmed' ? 'La confirmación requiere una referencia de operación.' : input.status === 'pending_verification' ? 'El resultado está pendiente de verificación.' : input.status === 'rejected' ? 'La propuesta fue rechazada.' : 'La propuesta expiró.';
+      const action = input.status === 'confirmed' && input.effect_ref ? (input.effect_ref.startsWith('ticket-') ? `Ticket registrado: ${input.effect_ref}. Franja de visita pendiente de coordinación.` : `Operación confirmada: ${input.effect_ref}.`) : input.status === 'confirmed' ? 'La confirmación requiere una referencia de operación.' : input.status === 'pending_verification' ? 'El resultado está pendiente de verificación.' : input.status === 'rejected' ? 'La propuesta fue rechazada.' : 'La propuesta expiró.';
       const result: RunResult = {type:'card', route:'resume', card:{...original.card, summary:action, next_action:input.status === 'pending_verification' || (input.status === 'confirmed' && !input.effect_ref) ? 'Verificar el resultado antes de informar una ejecución.' : 'Informar el estado al cliente.', pending: input.status === 'pending_verification' ? ['Verificar resultado'] : []}};
       await put(key, result); return result;
     }

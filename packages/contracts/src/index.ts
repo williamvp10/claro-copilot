@@ -21,7 +21,7 @@ export type Message = z.infer<typeof Message>;
 export const Proposal = z.object({
   id: Id, revision: z.number().int().positive(), title: z.string(), detail: z.string(),
   status: z.enum(['pending_approval', 'approved', 'confirmed', 'rejected', 'expired', 'pending_verification']),
-  effect_ref: Id.optional()
+  effect_ref: Id.optional(), kind: z.enum(['retention_offer','support_ticket']).optional()
 });
 export type Proposal = z.infer<typeof Proposal>;
 export const AdvisorCard = z.object({

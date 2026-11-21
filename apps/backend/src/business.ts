@@ -62,7 +62,7 @@ export function businessPorts(db: DataSource): AgentPorts {
       await audit(tx, row.id, 'crm_read');
       return row.contact_ref === 'C-1001' ? [
         fact('home-fibra-500', 'Hogar Fibra 500', '$109.900'), fact('mobile-max-60', 'Claro Max 60 GB', '$59.415')
-      ] : [];
+      ] : row.contact_ref === 'C-1013' ? [fact('tenure','Antigüedad en meses','26')] : [];
     }),
     getBilling: (runId) => scoped(runId, true, async (tx, row) => {
       await audit(tx, row.id, 'billing_read');
@@ -73,23 +73,29 @@ export function businessPorts(db: DataSource): AgentPorts {
     }),
     getTickets: (runId) => scoped(runId, true, async (tx, row) => {
       await audit(tx, row.id, 'tickets_read');
-      return [];
+      return row.contact_ref==='C-1013' ? [fact('technical-tickets-90d','Tickets técnicos en 90 días','4')] : [];
     }),
     evaluateRetention: (runId) => scoped(runId, true, async (tx, row) => {
       await audit(tx, row.id, 'retention_read');
       return retention(tx, row);
     }),
     createProposal: (runId, input) => scoped(runId, true, async (tx, row, turn) => {
-      if (turn.actor !== 'cliente' || !/\b(acepto|aceptamos|de acuerdo|lo acepto|la acepto|quiero esa|quiero ese)\b/i.test(turn.text) ||
-        /\b(no acepto|no quiero|rechazo|aceptar[íi]a|acepto si|acepto cuando)\b/i.test(turn.text)) throw new Error('customer acceptance required');
-      const eligibility = await retention(tx, row);
-      const option = eligibility.options.find((candidate) => candidate.id === input.option_id);
-      if (!eligibility.eligible || !option || !input.citation_ids.includes(policy.id)) throw new Error('ineligible proposal');
+      const urgent = input.option_id === 'priority-ticket';
+      if (urgent && (row.contact_ref !== 'C-1013' || !input.citation_ids.includes('retention-recurrent-faults'))) {
+        throw new Error('unsupported priority ticket');
+      }
+      if (!urgent && (turn.actor !== 'cliente' || !/\b(acepto|aceptamos|de acuerdo|lo acepto|la acepto|quiero esa|quiero ese)\b/i.test(turn.text) ||
+        /\b(no acepto|no quiero|rechazo|aceptar[íi]a|acepto si|acepto cuando)\b/i.test(turn.text))) throw new Error('customer acceptance required');
+      const eligibility = urgent ? null : await retention(tx, row);
+      const option = urgent
+        ? {id:'priority-ticket',title:'Registrar ticket prioritario',detail:'Soporte técnico. Gestionar visita prioritaria dentro de 24 horas.'}
+        : eligibility?.options.find((candidate) => candidate.id === input.option_id);
+      if (!option || (!urgent && (!eligibility?.eligible || !input.citation_ids.includes(policy.id)))) throw new Error('ineligible proposal');
       const [existing]: { proposal: Proposal }[] = await tx.query(
         'SELECT proposal FROM retention_proposal WHERE case_id=$1 AND case_revision=$2 AND option_id=$3',
         [row.id, row.snapshot.revision, option.id]);
       if (existing) return existing.proposal;
-      const proposal: Proposal = { id: randomUUID(), revision: 1, title: option.title, detail: option.detail, status: 'pending_approval' };
+      const proposal: Proposal = { id: randomUUID(), revision: 1, title: option.title, detail: option.detail, status: 'pending_approval', kind: urgent ? 'support_ticket' : 'retention_offer' };
       await tx.query(`INSERT INTO retention_proposal VALUES ($1,$2,$3,$4,$5,$6,now()+interval '30 minutes')`,
         [proposal.id, row.id, runId, row.snapshot.revision, option.id, proposal]);
       await audit(tx, row.id, 'proposal_created');

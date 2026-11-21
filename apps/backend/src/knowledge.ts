@@ -22,8 +22,10 @@ const publicDocuments: z.input<typeof Document>[] = [
 
 const stop = new Set(['que','para','cual','como','donde','este','esta','sobre','los','las','del','con','por','una','uno','hola','quiero','saber','hay','mas','puedo','debo','tengo','dice']);
 function terms(text: string) {
-  const words = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().match(/[a-z0-9]{3,}/g) ?? [];
-  return [...new Set(words.filter(word => !stop.has(word)))].slice(0, 24);
+  const normalized = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const words = normalized.match(/[a-z0-9]{3,}/g) ?? [];
+  const diagnostic = /\be[\s-]?202\b/.test(normalized) ? ['e-202'] : [];
+  return [...new Set([...diagnostic, ...words.filter(word => !stop.has(word))])].slice(0, 24);
 }
 
 function encode(text: string) {

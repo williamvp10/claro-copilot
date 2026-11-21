@@ -44,7 +44,7 @@ class HealthController {
 
   @Get('metrics')
   async metrics(@Res() res: Response) {
-    const events = ['opened','closed','handoff','agent_completed','agent_stale','job_failed','ml_predicted','ml_unavailable','retention_confirmed','telegram_failed'] as const;
+    const events = ['opened','closed','handoff','agent_completed','agent_stale','job_failed','ml_predicted','ml_unavailable','retention_confirmed','support_ticket_confirmed','telegram_failed'] as const;
     const totals: {kind:string; n:string}[] = await this.db.query('SELECT kind,count(*) AS n FROM attention_event WHERE kind=ANY($1) GROUP BY kind', [events]);
     const values = new Map(totals.map(row => [row.kind,row.n]));
     const lines = events.map(kind => `claro_event_total{kind="${kind}"} ${values.get(kind) ?? 0}`);
@@ -132,7 +132,7 @@ class PlatformController {
     let cursor = Number.isSafeInteger(cursorValue) ? Math.min(cursorValue, snapshot.cursor) : 0;
     res.set({
       'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-store',
+      'Cache-Control': 'no-cache, no-store, no-transform',
       'X-Accel-Buffering': 'no',
       Connection: 'keep-alive'
     });

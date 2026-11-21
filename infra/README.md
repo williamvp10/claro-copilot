@@ -13,7 +13,7 @@ docker compose --env-file .env -f infra/compose.yaml ps
 docker compose --env-file .env -f infra/compose.yaml --profile jobs run --rm seed
 ```
 
-Migration runs before API and worker start. Run the seed against the demo database to create the advisor, admin and three synthetic contacts. Customer ingress can be tested with `POST /api/v1/demo/incoming` in demo mode, authenticated with `DEMO_INGRESS_TOKEN`. Keep that token empty in the deployed demo unless a controlled smoke requires it. API readiness uses `/readyz`, liveness uses `/healthz` and worker health checks its current database-backed heartbeat.
+Migration runs before API and worker start. Run the seed against the demo database to create the advisor, admin and three synthetic contacts for the core demo. Customer ingress can be tested with `POST /api/v1/demo/incoming` in demo mode, authenticated with `DEMO_INGRESS_TOKEN`. Keep that token empty in the deployed demo unless a controlled smoke requires it. API readiness uses `/readyz`, liveness uses `/healthz` and worker health checks its current database-backed heartbeat.
 
 Use `DEMO_ASESSOR_EMAIL` and `DEMO_ASESSOR_PASSWORD` for the advisor and the corresponding `DEMO_ADMIN_*` variables for administration. Set `DEMO_HOLDER_CODE` exclusively for the synthetic identity flow. For real Telegram trials, associate three already-enabled private chats through `DEMO_BILLING_CHAT_ID`, `DEMO_RETENTION_CHAT_ID` and `DEMO_ASSIGNED_CHAT_ID`; configure the Bot API webhook at `/api/v1/webhooks/telegram` with the matching secret and allow messages and callback queries. Closing a case sends an optional satisfaction survey in that chat.
 
@@ -43,7 +43,7 @@ The migration seeds two reviewed public passages. The ingester accepts a private
 
 The default agent uses local decisions and returns cited excerpts. To opt into remote selection, set `AGENT_PROVIDERS=live`, the OpenRouter and OpenAI credentials and the OpenAI model IDs for the profiles you want to use. The provider adapters send minimized categorical inputs, and the worker keeps authorization and business decisions local.
 
-The three scene replays, E-202 retrieval and role/feedback checks run in the platform integration job. The release still requires the full golden and complementary suites, calibrated Jev review and real-account verification of Telegram, OpenAI, OpenRouter and Langfuse. Prompt candidates stay blocked when independent evaluation evidence is unavailable.
+The three scene replays, E-202 retrieval, CC-E13 prioritized support, and role/feedback checks run in the platform integration job. The release still requires the full golden and complementary suites, calibrated Jev review and real-account verification of Telegram, OpenAI, OpenRouter and Langfuse. Prompt candidates stay blocked when independent evaluation evidence is unavailable.
 
 Run the preliminary suite probe with `pnpm --filter @claro/backend quality:probe /private/golden_dataset.jsonl /private/evals_atencion.jsonl`. It reports suite hashes, cites observed passages and marks control events for integrated replay. It emits IDs and decisions without raw transcripts. Literal matches are an aid for review. Optional `JEV_ENABLE_EVALS=true` adds the minimized semantic signal when authorized credentials are configured. The probe reports `review_required`; use the acceptance thresholds and evidence in the release criteria to decide promotion.
 
