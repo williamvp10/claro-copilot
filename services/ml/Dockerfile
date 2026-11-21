@@ -1,7 +1,11 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS builder
 WORKDIR /srv/ml
 COPY pyproject.toml uv.lock ./
-RUN pip install --no-cache-dir uv==0.7.12 && uv sync --frozen --no-dev --no-install-project
+RUN pip install --no-cache-dir uv==0.13.4 && uv sync --frozen --no-dev --no-install-project
+
+FROM python:3.12-slim AS runtime
+WORKDIR /srv/ml
+COPY --from=builder /srv/ml/.venv /srv/ml/.venv
 COPY app ./app
 ENV PATH="/srv/ml/.venv/bin:$PATH" PYTHONUNBUFFERED=1
 USER 65532:65532
