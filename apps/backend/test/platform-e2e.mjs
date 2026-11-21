@@ -6,13 +6,14 @@ import { Client } from 'pg';
 const origin = process.env.BETTER_AUTH_URL;
 if (!origin || !process.env.DATABASE_URL || process.env.DEMO_MODE !== 'true') throw new Error('A dedicated seeded demo database and running backend are required');
 const api = '/api/v1';
+const target = process.env.PLATFORM_E2E_TARGET ?? origin;
 const db = new Client({ connectionString: process.env.DATABASE_URL });
 await db.connect();
 
 async function request(path, { cookie, body, method = 'GET', token, status } = {}) {
   const headers = { Origin: origin, ...(cookie ? { Cookie: cookie } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
   if (body) headers['Content-Type'] = 'application/json';
-  const res = await fetch(new URL(path, origin), {method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(5000)});
+  const res = await fetch(new URL(path, target), {method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(5000)});
   const json = await res.json();
   if (status) assert.equal(res.status, status, JSON.stringify(json));
   else assert.ok(res.ok, JSON.stringify(json));
@@ -67,7 +68,7 @@ try {
   await cards(billingId, x => x.card?.reason_codes.includes('verification_required'));
   assert.equal(await count(billingId,'crm_read'), 0);
   assert.equal(await count(billingId,'billing_read'), 0);
-  const stream = await fetch(origin+api+`/cases/${billingId}/events?cursor=${(await get('/cases/'+billingId)).cursor}`, {headers:{Cookie:cookie},signal:AbortSignal.timeout(10000)});
+  const stream = await fetch(target+api+`/cases/${billingId}/events?cursor=${(await get('/cases/'+billingId)).cursor}`, {headers:{Cookie:cookie},signal:AbortSignal.timeout(10000)});
   assert.ok(stream.headers.get('content-type').includes('text/event-stream'));
   const reader = stream.body.getReader();
   await verify(billingId);
@@ -104,6 +105,19 @@ try {
   assert.equal(await count(denied.id,'retention_confirmed'),0);
   assert.equal(blocked.messages.filter(m=>m.actor==='agente').length,0);
   await post(`/cases/${denied.id}/close`,{resolved:false});
+  if (process.env.DEMO_ASSIGNED_CHAT_ID && process.env.TELEGRAM_WEBHOOK_SECRET && !process.env.TELEGRAM_BOT_TOKEN) {
+    const sendScore = (score) => fetch(target+api+'/webhooks/telegram', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-Telegram-Bot-Api-Secret-Token':process.env.TELEGRAM_WEBHOOK_SECRET},
+      body:JSON.stringify({update_id:84001+score,callback_query:{id:`test-score-${score}`,data:`csat:${denied.id}:${score}`,
+        message:{chat:{type:'private',id:Number(process.env.DEMO_ASSIGNED_CHAT_ID)}}}}),
+      signal:AbortSignal.timeout(5000)
+    });
+    assert.ok((await sendScore(5)).ok);
+    assert.ok((await sendScore(1)).ok);
+    const rows = (await db.query('SELECT score FROM case_feedback WHERE case_id=$1', [denied.id])).rows;
+    assert.deepEqual(rows, [{score:5}]);
+  }
   const dashboard = (await request(api+'/admin/dashboard',{cookie:admin})).json;
   assert.equal(dashboard.metrics.find(m=>m.id==='retention').value,1);
   console.log('C-1001, C-1004, C-1007 verified through HTTP, SSE and PostgreSQL.');

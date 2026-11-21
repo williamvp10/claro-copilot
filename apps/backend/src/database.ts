@@ -85,11 +85,20 @@ export class InitialSchema1795260000000 implements MigrationInterface {
   }
 }
 
+export class Feedback1795260000002 implements MigrationInterface {
+  async up(db: QueryRunner) {
+    await db.query(`CREATE TABLE case_feedback(
+      case_id text PRIMARY KEY REFERENCES attention_case(id), score smallint NOT NULL CHECK(score BETWEEN 1 AND 5),
+      created_at timestamptz NOT NULL DEFAULT now());`);
+  }
+  async down(db: QueryRunner) { await db.query('DROP TABLE case_feedback'); }
+}
+
 export function createDatabase() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is required');
   return new DataSource({
-    type: 'postgres', url, migrations: [InitialSchema1795260000000, Knowledge1795260000001],
+    type: 'postgres', url, migrations: [InitialSchema1795260000000, Knowledge1795260000001, Feedback1795260000002],
     migrationsTableName: 'claro_migrations', synchronize: false
   });
 }
@@ -100,7 +109,7 @@ export type ContactRow = { ref: string; chat_id: string | null; display_name: st
 export type JobPayloads = {
   run: AgentTurn;
   resume: RunResume;
-  deliver: { text: string; sender: 'agente' | 'asesor'; revision: number; turn_seq?: number };
+  deliver: { text: string; sender: 'agente' | 'asesor' | 'sistema'; revision: number; turn_seq?: number; feedback_case_id?: string };
   effect: { proposal_id: string };
   ml: AgentTurn;
   eval: { revision: string };

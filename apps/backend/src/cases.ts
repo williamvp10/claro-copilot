@@ -182,6 +182,12 @@ export class Cases {
       row.snapshot.revision += 1;
       await tx.query('UPDATE attention_case SET resolved=$2 WHERE id=$1', [id, resolved]);
       await audit(tx, id, 'closed', { resolved });
+      if (row.snapshot.channel === 'telegram') {
+        await enqueue(tx, `feedback:${id}`, id, 'deliver', {
+          sender:'sistema', revision:row.snapshot.revision, feedback_case_id:id,
+          text:'¿Qué tan satisfecho quedaste con esta atención? Elige del 1 al 5.'
+        });
+      }
     });
   }
 
@@ -214,6 +220,13 @@ export class Cases {
       await saveCase(tx, row);
       return row.snapshot;
     });
+  }
+
+  async recordFeedback(caseId: string, chatId: string, score: number) {
+    await this.db.query(`INSERT INTO case_feedback(case_id,score)
+      SELECT c.id,$3 FROM attention_case c JOIN telegram_contact t ON t.ref=c.contact_ref
+      WHERE c.id=$1 AND t.chat_id=$2 AND t.enabled AND c.snapshot->>'status'='closed'
+      ON CONFLICT(case_id) DO NOTHING`, [caseId,chatId,score]);
   }
 
   async receiveTelegram(input: { update_id: number; chat_id: string; text: string }) {

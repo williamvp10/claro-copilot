@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 FROM node:24-bookworm-slim AS build
 WORKDIR /app
-ENV BACKEND_URL=http://api:3000
+ENV BACKEND_URL=http://api:3000 NEXT_TELEMETRY_DISABLED=1
 RUN corepack enable && corepack prepare pnpm@11.25.0 --activate
 COPY . .
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile

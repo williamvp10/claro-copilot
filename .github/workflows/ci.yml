@@ -57,6 +57,8 @@ jobs:
       ML_API_URL: http://127.0.0.1:39199
       ML_SERVICE_TOKEN: ci-only-shadow-service-token
       DEMO_HOLDER_CODE: '927186'
+      TELEGRAM_WEBHOOK_SECRET: ci-only-hook-secret
+      DEMO_ASSIGNED_CHAT_ID: '355000007'
       DEMO_ASESSOR_EMAIL: asesor@example.test
       DEMO_ASESSOR_PASSWORD: CI-only-advisor-password-123
       DEMO_ADMIN_EMAIL: admin@example.test

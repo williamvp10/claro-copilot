@@ -30,17 +30,16 @@ const routerKey = process.env.OPENROUTER_API_KEY;
 const openaiKey = process.env.OPENAI_API_KEY;
 const mcpUrl = process.env.KNOWLEDGE_MCP_URL;
 const knowledgeToken = process.env.KNOWLEDGE_SERVICE_TOKEN;
+const generationModels = {
+  ...(process.env.OPENAI_MODEL_ECONOMICO ? {economico:process.env.OPENAI_MODEL_ECONOMICO} : {}),
+  ...(process.env.OPENAI_MODEL_INTERMEDIO ? {intermedio:process.env.OPENAI_MODEL_INTERMEDIO} : {}),
+  ...(process.env.OPENAI_MODEL_COMPLEJO ? {complejo:process.env.OPENAI_MODEL_COMPLEJO} : {})
+};
 const runner = createAgent(businessPorts(db), {
   knowledge: mcpUrl && knowledgeToken ? createKnowledgeMcpAdapter({ url: mcpUrl, token: knowledgeToken }) : databaseKnowledge(db),
   decision: live && routerKey ? createJevDecisionAdapter({ apiKey: routerKey, model: process.env.JEV_MODEL || 'typesafe/jev-1.14' }) : undefined,
-  evidenceSelector: live && openaiKey ? createOpenAIEvidenceSelector({
-    apiKey: openaiKey,
-    models: {
-      economico: process.env.OPENAI_MODEL_ECONOMICO,
-      intermedio: process.env.OPENAI_MODEL_INTERMEDIO,
-      complejo: process.env.OPENAI_MODEL_COMPLEJO
-    }
-  }) : undefined,
+  evidenceSelector: live && openaiKey && Object.keys(generationModels).length
+    ? createOpenAIEvidenceSelector({apiKey:openaiKey, models:generationModels}) : undefined,
   checkpoints: {
     async get(key) {
       const [row] = await db.query('SELECT result FROM agent_checkpoint WHERE id=$1', [key]);
@@ -146,7 +145,7 @@ async function deliver(job: Extract<CaseJob, {kind: 'deliver'}>) {
   if (reserved.length === 0) return;
   await db.transaction(async (tx) => {
     const row = await loadCase(tx, job.case_id, true);
-    const { sender, revision, turn_seq, text } = job.payload;
+    const { sender, revision, turn_seq, text, feedback_case_id } = job.payload;
     if (sender === 'agente' && (row.snapshot.attention_mode !== 'autoservicio' ||
       row.snapshot.revision !== revision || latestAnalyzable(row.snapshot)?.turn_seq !== turn_seq || row.snapshot.status !== 'open')) {
       await audit(tx, row.id, 'telegram_stale');
@@ -161,7 +160,11 @@ async function deliver(job: Extract<CaseJob, {kind: 'deliver'}>) {
     try {
       const reply = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: contact.chat_id, text }), signal: AbortSignal.timeout(3500)
+        body: JSON.stringify({
+          chat_id: contact.chat_id, text, ...(feedback_case_id ? {reply_markup:{inline_keyboard:[
+            [1,2,3,4,5].map(score => ({text:String(score),callback_data:`csat:${feedback_case_id}:${score}`}))
+          ]}} : {})
+        }), signal: AbortSignal.timeout(3500)
       });
       const payload = await reply.json() as { ok?: boolean };
       await audit(tx, row.id, reply.ok && payload.ok === true ? 'telegram_delivered' : 'telegram_failed');
@@ -237,7 +240,9 @@ async function poll(ml: boolean) {
     }
   }
 }
-const heartbeat = setInterval(() => void writeFile('/tmp/claro-worker-heartbeat', new Date().toISOString()).catch(() => undefined), 3000);
+const heartbeat = setInterval(() => {
+  void db.query('SELECT 1').then(() => writeFile('/tmp/claro-worker-heartbeat', new Date().toISOString())).catch(() => undefined);
+}, 3000);
 try {
   await Promise.all([poll(false), poll(true)]);
 } finally {

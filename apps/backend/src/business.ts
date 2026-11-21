@@ -81,7 +81,7 @@ export function businessPorts(db: DataSource): AgentPorts {
     }),
     createProposal: (runId, input) => scoped(runId, true, async (tx, row, turn) => {
       if (turn.actor !== 'cliente' || !/\b(acepto|aceptamos|de acuerdo|lo acepto|la acepto|quiero esa|quiero ese)\b/i.test(turn.text) ||
-        /\b(no acepto|no quiero|rechazo|aceptar[íi]a)\b/i.test(turn.text)) throw new Error('customer acceptance required');
+        /\b(no acepto|no quiero|rechazo|aceptar[íi]a|acepto si|acepto cuando)\b/i.test(turn.text)) throw new Error('customer acceptance required');
       const eligibility = await retention(tx, row);
       const option = eligibility.options.find((candidate) => candidate.id === input.option_id);
       if (!eligibility.eligible || !option || !input.citation_ids.includes(policy.id)) throw new Error('ineligible proposal');

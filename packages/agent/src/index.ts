@@ -49,7 +49,7 @@ export function safeDecisionFeatures(text: string): string {
   ] as const) if (pattern.test(value)) features.push(label);
   return features.join(' ') || 'indeterminada';
 }
-function accepted(text: string): boolean { return has(text, /\b(acepto|aceptamos|aceptaria|de acuerdo|si quiero|si acepto|me sirve|lo acepto|la acepto|tomare|quiero esa|quiero ese)\b/) && !has(text, /\b(no acepto|no quiero|no me sirve)\b/); }
+function accepted(text: string): boolean { return has(text, /\b(acepto|aceptamos|aceptaria|de acuerdo|si quiero|si acepto|me sirve|lo acepto|la acepto|tomare|quiero esa|quiero ese)\b/) && !has(text, /\b(no acepto|no quiero|no me sirve|acepto si|acepto cuando)\b/); }
 function selectOption(text: string, options: Retention['options'], messages: Message[]): Retention['options'][number] | undefined {
   const context = norm(text);
   const kind = /descuento|por ciento|%|rebaja/.test(context) ? 'discount' : /mejora|500|upgrade|velocidad/.test(context) ? 'upgrade' : undefined;

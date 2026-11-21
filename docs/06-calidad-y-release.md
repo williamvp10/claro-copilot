@@ -1,6 +1,6 @@
 # Calidad, CI y release del MVP
 
-Promover un candidato con evidencia reproducible. El manifiesto vincula el código, digests de imágenes, revisión de agente, modelo y prompts, corpus, índice, reranker, versión de ML, políticas y suite evaluada. Cada ejecución en staging usa una revisión fija.
+Promover un candidato con evidencia reproducible. El manifiesto vincula el código, digests de imágenes, revisión de agente, modelo y prompts, corpus, índice, reranker, versión de ML, políticas y suite evaluada. Cada ejecución de pruebas en local y CI usa una revisión fija.
 
 [Arquitectura Docker](02-arquitectura-docker.md) · [Insumos y suites](05-insumos.md#evaluaciones) · [Evals con Jev](agente/jev-evals.md) · [Observabilidad](plataforma/observabilidad.md)
 
@@ -9,9 +9,9 @@ Promover un candidato con evidencia reproducible. El manifiesto vincula el códi
 | Etapa | Verificación y resultado esperado |
 | --- | --- |
 | **PR a `develop`** | Lint y tipos, unitarias de dominio, contrato OpenAPI y MCP, permisos, idempotencia, smoke de RAG y replay de casos con stubs. |
-| **Staging desde `develop`** | Construir y escanear imágenes, registrar digests, validar migraciones y desplegar en el ambiente de prueba de Dokploy. Probar sesión, webhook, SSE, disponibilidad del worker, RAG versionado y API de predicción. |
+| **Candidato desde `develop`** | Construir y escanear imágenes, registrar digests, validar migraciones y ejecutar el candidato en un ambiente local o en CI. Probar sesión, webhook, SSE, disponibilidad del worker, RAG versionado y API de predicción. |
 | **PR de `develop` a `main`** | Correr golden y complementarios sobre el candidato exacto. Los fallos de autorización, visibilidad y efectos bloquean. Revisar el reporte semántico, la cobertura, las abstenciones y el manifiesto. |
-| **Promoción a demo** | Promover los digests y la revisión ya evaluados. Ejecutar smoke tras el cambio. Ante fallo, restaurar el manifiesto anterior con migraciones compatibles y comprobar recuperación. |
+| **Primer despliegue en Dokploy** | Promover los digests y la revisión ya evaluados. Ejecutar smoke tras el cambio. Ante fallo, restaurar el manifiesto anterior con migraciones compatibles y comprobar recuperación. |
 
 Mantener separadas las credenciales por ambiente. Un nuevo commit que cambie la composición del candidato requiere otro build y otra evaluación. Registrar en CI el manifiesto, las Evals, el resultado del smoke y el release. [Checks de ramas protegidas](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
 

@@ -17,6 +17,10 @@ const Webhook = z.object({
   message: z.object({
     chat: z.object({ id: z.number().int().safe(), type: z.string() }),
     text: Text.optional()
+  }).optional(),
+  callback_query: z.object({
+    id: Id, data: z.string().max(64).optional(),
+    message: z.object({chat:z.object({id:z.number().int().safe(),type:z.string()})}).optional()
   }).optional()
 });
 const Synthetic = z.object({ contact_ref: Id, text: Text, idempotency_key: Id });
@@ -37,6 +41,15 @@ class HealthController {
 
   @Get('healthz')
   live() { return { status: 'ok' }; }
+
+  @Get('metrics')
+  async metrics(@Res() res: Response) {
+    const events = ['opened','closed','handoff','agent_completed','agent_stale','job_failed','ml_predicted','ml_unavailable','retention_confirmed','telegram_failed'] as const;
+    const totals: {kind:string; n:string}[] = await this.db.query('SELECT kind,count(*) AS n FROM attention_event WHERE kind=ANY($1) GROUP BY kind', [events]);
+    const values = new Map(totals.map(row => [row.kind,row.n]));
+    const lines = events.map(kind => `claro_event_total{kind="${kind}"} ${values.get(kind) ?? 0}`);
+    res.type('text/plain; version=0.0.4').send(['# TYPE claro_event_total counter', ...lines, ''].join('\n'));
+  }
 
   @Get('readyz')
   async ready() {
@@ -152,9 +165,20 @@ class PlatformController {
   async webhook(@Req() req: Request, @Body() body: unknown) {
     const configured = process.env.TELEGRAM_WEBHOOK_SECRET;
     if (!configured || !constantEqual(req.get('X-Telegram-Bot-Api-Secret-Token') ?? '', configured)) throw new UnauthorizedException();
-    const { update_id, message } = parse(Webhook, body);
+    const { update_id, message, callback_query } = parse(Webhook, body);
     if (message?.chat.type === 'private' && message.text && !message.text.startsWith('/')) {
       await this.cases.receiveTelegram({ update_id, chat_id: String(message.chat.id), text: message.text });
+    }
+    const rating = /^csat:([a-f0-9-]{36}):([1-5])$/.exec(callback_query?.data ?? '');
+    if (rating && callback_query?.message?.chat.type === 'private') {
+      await this.cases.recordFeedback(rating[1], String(callback_query.message.chat.id), Number(rating[2]));
+      const token = process.env.TELEGRAM_BOT_TOKEN;
+      if (token) {
+        await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({callback_query_id:callback_query.id}), signal:AbortSignal.timeout(750)
+        }).catch(() => undefined);
+      }
     }
     return { ok: true };
   }
@@ -179,6 +203,9 @@ class PlatformController {
       count(*) FILTER(WHERE resolved)::integer AS resolved,
       avg(extract(epoch FROM ((snapshot->>'updated_at')::timestamptz-created_at))) FILTER(WHERE resolved IS NOT NULL) AS aht
       FROM attention_case WHERE created_at > now() - interval '7 days'`);
+    const [{ surveys, satisfied }] = await this.db.query(`SELECT count(*)::integer AS surveys,
+      count(*) FILTER(WHERE score>=4)::integer AS satisfied
+      FROM case_feedback WHERE created_at > now()-interval '7 days'`);
     const events: { kind: string; count: number }[] = await this.db.query(`SELECT kind,count(*)::integer FROM attention_event
       WHERE created_at > now() - interval '7 days' GROUP BY kind`);
     const counts = new Map(events.map(({ kind, count }) => [kind, count]));
@@ -206,7 +233,7 @@ class PlatformController {
         { id: 'ml_recall', label: 'Recall de cancelación de ML', value: ml?.offline?.metrics.cancelacion_recall ?? null, unit: 'recall' },
         { id: 'ml_labels', label: 'Etiquetas supervisadas', value: ml ? ml.groups.reduce((n, group) => n + group.labels_count, 0) : null, unit: 'casos' },
         { id: 'ml_errors', label: 'Fallos de inferencia en sombra', value: count('ml_unavailable'), unit: 'turnos' },
-        { id: 'csat', label: 'CSAT', value: null, unit: '%' },
+        { id: 'csat', label: 'CSAT (4 o 5)', value: surveys ? satisfied * 100 / surveys : null, unit: '%', denominator: surveys },
         { id: 'groundedness', label: 'Groundedness', value: null, unit: '%' },
         { id: 'recall', label: 'Recall@k', value: null, unit: '%' }
       ]
