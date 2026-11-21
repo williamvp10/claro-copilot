@@ -11,12 +11,13 @@ x-app: &app
     REDIS_URL: ${REDIS_URL:-redis://redis:6379}
     BETTER_AUTH_URL: ${BETTER_AUTH_URL:?Set BETTER_AUTH_URL}
     BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Set BETTER_AUTH_SECRET}
-    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN}
-    TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:?Set TELEGRAM_WEBHOOK_SECRET}
+    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
     DEMO_MODE: ${DEMO_MODE:-true}
     DEMO_HOLDER_CODE: ${DEMO_HOLDER_CODE:-}
-    DEMO_ASSESSOR_EMAIL: ${DEMO_ASSESSOR_EMAIL:-}
-    DEMO_ASSESSOR_PASSWORD: ${DEMO_ASSESSOR_PASSWORD:-}
+    DEMO_ASESSOR_EMAIL: ${DEMO_ASESSOR_EMAIL:-}
+    DEMO_ASESSOR_PASSWORD: ${DEMO_ASESSOR_PASSWORD:-}
+    DEMO_INGRESS_TOKEN: ${DEMO_INGRESS_TOKEN:-}
     DEMO_ADMIN_EMAIL: ${DEMO_ADMIN_EMAIL:-}
     DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:-}
     DEMO_BILLING_CHAT_ID: ${DEMO_BILLING_CHAT_ID:-}
@@ -87,18 +88,50 @@ services:
   worker:
     <<: *app
     command: [node, apps/backend/dist/worker.js]
+    healthcheck:
+      test: [CMD, node, -e, "try{process.exit(Date.now()-require('fs').statSync('/tmp/claro-worker-heartbeat').mtimeMs<15000?0:1)}catch{process.exit(1)}"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     depends_on:
       migrate: {condition: service_completed_successfully}
   web:
     <<: *app
     command: [pnpm, --filter, '@claro/web', start]
     environment:
-      <<: *app-env
+      NODE_ENV: production
       HOSTNAME: 0.0.0.0
       PORT: '3000'
+      BACKEND_URL: http://api:3000
     depends_on:
       api: {condition: service_healthy}
     ports: ['${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3000}:3000']
+  ml-init:
+    profiles: [ml, ml-jobs]
+    image: ${ML_IMAGE:-claro-ml:local}
+    build:
+      context: ../services/ml
+      dockerfile: Dockerfile
+    user: '0:0'
+    entrypoint: [sh, -c]
+    command: ['mkdir -p /models/releases /state /mlflow/db /mlflow/artifacts && chown -R 65532:65532 /models /state /mlflow']
+    volumes:
+      - ml-models:/models
+      - ml-state:/state
+      - mlflow-data:/mlflow
+    restart: 'no'
+  mlflow:
+    profiles: [ml, ml-jobs]
+    image: ${ML_IMAGE:-claro-ml:local}
+    build:
+      context: ../services/ml
+      dockerfile: Dockerfile
+    command: [mlflow, server, --host, 0.0.0.0, --port, '5000', --backend-store-uri, 'sqlite:////mlflow/db/mlflow.db', --artifacts-destination, /mlflow/artifacts, --serve-artifacts]
+    volumes: [mlflow-data:/mlflow]
+    depends_on:
+      ml-init: {condition: service_completed_successfully}
+    restart: unless-stopped
   ml:
     profiles: [ml]
     image: ${ML_IMAGE:-claro-ml:local}
@@ -106,12 +139,34 @@ services:
       context: ../services/ml
       dockerfile: Dockerfile
     restart: unless-stopped
-    environment: &ml-env
+    environment:
       ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-}
-      ML_BUNDLE_DIR: /data/bundles
-      ML_STATE_DB: /data/state/ml.sqlite
-      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-}
-    volumes: [ml-data:/data]
+      ML_BUNDLE_DIR: /models/releases/${ML_RELEASE_VERSION:-candidate}
+      ML_STATE_DB: /state/ml.sqlite
+    volumes:
+      - ml-models:/models:ro
+      - ml-state:/state
+    depends_on:
+      ml-init: {condition: service_completed_successfully}
+  ml-job:
+    profiles: [ml-jobs]
+    image: ${ML_IMAGE:-claro-ml:local}
+    build:
+      context: ../services/ml
+      dockerfile: Dockerfile
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      ML_STATE_DB: /state/ml.sqlite
+      ML_IMAGE_DIGEST: ${ML_IMAGE_DIGEST:-unknown}
+      GIT_SHA: ${GIT_SHA:-unknown}
+    volumes:
+      - ml-models:/models
+      - ml-state:/state
+    depends_on:
+      mlflow: {condition: service_started}
+    restart: 'no'
+    entrypoint: [python, -m]
+    command: [app.drift]
   otel:
     profiles: [observability]
     image: otel/opentelemetry-collector-contrib:0.120.0
@@ -128,5 +183,7 @@ services:
 volumes:
   postgres-data:
   redis-data:
-  ml-data:
+  ml-models:
+  ml-state:
+  mlflow-data:
   prometheus-data:
