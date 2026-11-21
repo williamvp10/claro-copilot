@@ -60,7 +60,7 @@ docker compose --env-file .env -f infra/compose.yaml --profile knowledge --profi
 docker compose --project-name claro-langfuse --env-file .env -f infra/compose.langfuse.yaml up -d
 ```
 
-Use the pinned release digest and pull without rebuilding in Dokploy. Generate independent hexadecimal secrets for the Langfuse database, salt, encryption, auth, ClickHouse, Redis and storage variables declared in the Compose file. Set the generated LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY in both stacks, configure the operator account and use LANGFUSE_BASE_URL=http://langfuse-web:3000 for the worker. The UI binds to localhost for operator access through a tunnel. Keep env files private and pass them explicitly with --env-file.
+Use the pinned release digest and pull without rebuilding in Dokploy. The demo defaults Langfuse ingestion and trace upserts to two concurrent jobs per worker and caps its Node heap at 768 MiB. Set `LANGFUSE_WORKER_HEAP_MIB`, `LANGFUSE_INGESTION_CONCURRENCY`, and `LANGFUSE_TRACE_UPSERT_CONCURRENCY` to match available capacity and traffic. [Langfuse sizing and scaling](https://langfuse.com/self-hosting/configuration/scaling) Generate independent hexadecimal secrets for the Langfuse database, salt, encryption, auth, ClickHouse, Redis and storage variables declared in the Compose file. Set the generated LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY in both stacks, configure the operator account and use LANGFUSE_BASE_URL=http://langfuse-web:3000 for the worker. The UI binds to localhost for operator access through a tunnel. Keep env files private and pass them explicitly with --env-file.
 
 Create a candidate in administration with a public_answer prompt. From a private mounted copy of the evaluation inputs, run:
 

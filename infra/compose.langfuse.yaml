@@ -61,7 +61,11 @@ services:
     depends_on:
       <<: *dependencies
       langfuse-web: {condition: service_healthy}
-    environment: *observability
+    environment:
+      <<: *observability
+      NODE_OPTIONS: --max-old-space-size=${LANGFUSE_WORKER_HEAP_MIB:-768}
+      LANGFUSE_INGESTION_QUEUE_PROCESSING_CONCURRENCY: ${LANGFUSE_INGESTION_CONCURRENCY:-2}
+      LANGFUSE_TRACE_UPSERT_WORKER_CONCURRENCY: ${LANGFUSE_TRACE_UPSERT_CONCURRENCY:-2}
   lf-postgres:
     image: postgres:17-alpine
     restart: unless-stopped
