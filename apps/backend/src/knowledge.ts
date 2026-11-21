@@ -95,3 +95,14 @@ export function databaseKnowledge(db: DataSource): KnowledgeAdapter {
     }
   };
 }
+
+export class BoundBootstrapCatalog1795260000003 implements MigrationInterface {
+  async up(db: QueryRunner) {
+    await db.query(`UPDATE knowledge_document SET document=jsonb_set(document,'{effective_to}',to_jsonb('2026-12-01'::text))
+      WHERE id='catalogo-2026-fibra500' AND version='CAT-2026 v1.0'`);
+  }
+  async down(db: QueryRunner) {
+    await db.query(`UPDATE knowledge_document SET document=document-'effective_to'
+      WHERE id='catalogo-2026-fibra500' AND version='CAT-2026 v1.0'`);
+  }
+}

@@ -106,7 +106,7 @@ services:
       migrate: {condition: service_completed_successfully}
   web:
     <<: *app
-    command: [pnpm, --filter, '@claro/web', start]
+    command: [node, apps/web/node_modules/next/dist/bin/next, start, apps/web]
     environment:
       NODE_ENV: production
       HOSTNAME: 0.0.0.0

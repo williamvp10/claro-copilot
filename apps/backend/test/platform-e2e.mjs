@@ -13,7 +13,7 @@ await db.connect();
 async function request(path, { cookie, body, method = 'GET', token, status } = {}) {
   const headers = { Origin: origin, ...(cookie ? { Cookie: cookie } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
   if (body) headers['Content-Type'] = 'application/json';
-  const res = await fetch(new URL(path, target), {method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(5000)});
+  const res = await fetch(new URL(path, target), {method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(5000)}).catch(cause => { throw new Error(`HTTP ${method} ${path}`, {cause}); });
   const json = await res.json();
   if (status) assert.equal(res.status, status, JSON.stringify(json));
   else assert.ok(res.ok, JSON.stringify(json));
@@ -74,8 +74,13 @@ try {
   await verify(billingId);
   const billing = await cards(billingId, x => x.card?.facts.some(f=>f.value==='$169.315'));
   assert.equal(billing.messages.filter(m=>m.actor==='agente').length, 3);
-  const {value} = await reader.read();
-  assert.match(new TextDecoder().decode(value), /case.updated/);
+  let received = '';
+  do {
+    const {value, done} = await reader.read();
+    if (done) break;
+    received += new TextDecoder().decode(value);
+  } while (!received.includes('event: case.updated'));
+  assert.match(received, /case.updated/);
   await reader.cancel();
   assert.equal(await count(billingId,'billing_read'), 1);
   if (process.env.ML_API_URL) await until(async ()=>(await count(billingId,'ml_unavailable'))>0 || (await count(billingId,'ml_predicted'))>0, 'independent shadow inference');

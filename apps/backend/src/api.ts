@@ -137,6 +137,7 @@ class PlatformController {
       Connection: 'keep-alive'
     });
     res.flushHeaders();
+    res.write(': ready\n\n');
     const write = (next: typeof snapshot) => {
       if (next.cursor <= cursor) return;
       const event: CaseEvent = { type: 'case.updated', cursor: next.cursor, snapshot: next };

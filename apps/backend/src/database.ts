@@ -1,5 +1,5 @@
 import { DataSource, type EntityManager, type MigrationInterface, type QueryRunner } from 'typeorm';
-import { Knowledge1795260000001 } from './knowledge.js';
+import { BoundBootstrapCatalog1795260000003, Knowledge1795260000001 } from './knowledge.js';
 import type { AgentTurn, CaseSnapshot, Intent, RunResume } from '@claro/contracts';
 
 export class InitialSchema1795260000000 implements MigrationInterface {
@@ -98,7 +98,7 @@ export function createDatabase() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is required');
   return new DataSource({
-    type: 'postgres', url, migrations: [InitialSchema1795260000000, Knowledge1795260000001, Feedback1795260000002],
+    type: 'postgres', url, migrations: [InitialSchema1795260000000, Knowledge1795260000001, Feedback1795260000002, BoundBootstrapCatalog1795260000003],
     migrationsTableName: 'claro_migrations', synchronize: false
   });
 }

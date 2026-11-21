@@ -9,10 +9,11 @@ RUN pnpm build
 
 # Keep workspace symlinks and Next runtime dependencies intact.
 FROM node:24-bookworm-slim AS runtime
-ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000
+ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000 COREPACK_HOME=/opt/corepack
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@11.25.0 --activate
 COPY --from=build --chown=node:node /app /app
+ENV COREPACK_ENABLE_NETWORK=0
 USER node
 EXPOSE 3000
-CMD ["pnpm", "--filter", "@claro/web", "start"]
+CMD ["node", "apps/web/node_modules/next/dist/bin/next", "start", "apps/web"]

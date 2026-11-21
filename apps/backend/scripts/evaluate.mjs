@@ -74,7 +74,8 @@ try {
 
   const conversationResults = [];
   for (const item of conversations.rows) {
-    const replay = session(item.input.identity_status==='verified',item.input.channel, item.input.business_date);
+    const channel = item.input.channel === 'consola' ? 'web' : item.input.channel;
+    const replay = session(item.input.identity_status==='verified',channel,item.input.business_date);
     const observations = [];
     for (const [index, step] of item.input.steps.entries()) {
       if (step.type !== 'message') {

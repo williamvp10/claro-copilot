@@ -29,7 +29,7 @@ try {
   ] as const;
   for (const [ref, chatId, name, owner] of scenarios) {
     await db.query(`INSERT INTO telegram_contact (ref,chat_id,display_name,direct_owner,fixture) VALUES ($1,$2,$3,$4,$1)
-      ON CONFLICT(ref) DO UPDATE SET chat_id=EXCLUDED.chat_id, direct_owner=EXCLUDED.direct_owner`, [ref, chatId ?? null, name, owner]);
+      ON CONFLICT(ref) DO UPDATE SET chat_id=EXCLUDED.chat_id, direct_owner=EXCLUDED.direct_owner`, [ref, chatId?.trim() || null, name, owner]);
   }
   console.log('Synthetic demo contacts and operator roles are ready');
 } finally {

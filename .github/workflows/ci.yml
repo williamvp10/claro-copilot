@@ -31,8 +31,25 @@ jobs:
           TELEGRAM_BOT_TOKEN: ci-only-placeholder
           TELEGRAM_WEBHOOK_SECRET: ci-only-placeholder
         run: docker compose -f infra/compose.yaml config --quiet
-      - name: Build container locally
-        run: docker build -f infra/Dockerfile -t claro-copiloto:ci .
+      - name: Build containers locally
+        run: |
+          docker build -f infra/Dockerfile -t claro-copiloto:ci .
+          docker build -t claro-ml:ci services/ml
+      - name: Scan application image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: claro-copiloto:ci
+          severity: CRITICAL
+          scanners: vuln
+          exit-code: '1'
+      - name: Scan ML image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: claro-ml:ci
+          severity: CRITICAL
+          scanners: vuln
+          exit-code: '1'
+          skip-setup-trivy: 'true'
   platform-integration:
     runs-on: ubuntu-latest
     services:
@@ -101,6 +118,15 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [checks, platform-integration, ml-checks]
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: claro-copiloto
+            context: .
+            file: infra/Dockerfile
+          - image: claro-ml
+            context: services/ml
+            file: services/ml/Dockerfile
     permissions:
       contents: read
       packages: write
@@ -114,20 +140,30 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - id: image
         shell: bash
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}/claro-copiloto" >> "$GITHUB_OUTPUT"
-      - uses: docker/build-push-action@v6
-        id: build
-        with:
-          context: .
-          file: infra/Dockerfile
-          push: true
-          tags: ${{ steps.image.outputs.name }}:candidate-${{ github.sha }}
-      - name: Record immutable candidate reference
         env:
-          IMAGE: ${{ steps.image.outputs.name }}
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: printf '%s@%s\n' "$IMAGE" "$DIGEST" | tee candidate-image.txt
+          COMPONENT: ${{ matrix.image }}
+        run: echo "tag=ghcr.io/${GITHUB_REPOSITORY,,}/${COMPONENT}:candidate-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          load: true
+          tags: ${{ steps.image.outputs.tag }}
+      - name: Scan candidate before publication
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.image.outputs.tag }}
+          severity: CRITICAL
+          scanners: vuln
+          exit-code: '1'
+      - name: Publish the scanned image and record its immutable reference
+        env:
+          IMAGE: ${{ steps.image.outputs.tag }}
+        shell: bash
+        run: |
+          docker push "$IMAGE"
+          docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE" | tee candidate-image.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: candidate-image
+          name: candidate-${{ matrix.image }}
           path: candidate-image.txt
