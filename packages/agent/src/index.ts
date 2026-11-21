@@ -1,3 +1,7 @@
+export { createJevDecisionAdapter, createOpenAIEvidenceSelector, createJevSemanticEvaluator } from './providers.js';
+export type { JevOptions, OpenAISelectorOptions, EvidenceSelector, SemanticObservation, SemanticResult } from './providers.js';
+import type { EvidenceSelector } from './providers.js';
+import { Annotation, StateGraph, START, END } from '@langchain/langgraph';
 import { AgentTurn as TurnSchema, RunResult as ResultSchema } from '@claro/contracts';
 import type { AgentPorts, AgentRunner, AgentTurn, RunResult, RunResume, Citation, Fact, Intent, Message, Retention } from '@claro/contracts';
 
@@ -6,7 +10,7 @@ export type Decision = { intent: Intent; complexity: 'economico' | 'intermedio' 
 export interface DecisionAdapter { classify(text: string): Promise<Decision | null> }
 export interface KnowledgeAdapter { search(query: string, context: { business_date: string; audience: 'cliente' | 'asesor'; channel: string }): Promise<KnowledgeDocument[]> }
 export interface CheckpointStore { get(key: string): Promise<RunResult | undefined>; put(key: string, result: RunResult): Promise<void> }
-export type AgentOptions = { documents?: KnowledgeDocument[]; knowledge?: KnowledgeAdapter; decision?: DecisionAdapter; checkpoints?: CheckpointStore; rerank?: (query: string, documents: KnowledgeDocument[]) => Promise<KnowledgeDocument[]>; };
+export type AgentOptions = { documents?: KnowledgeDocument[]; knowledge?: KnowledgeAdapter; decision?: DecisionAdapter; checkpoints?: CheckpointStore; rerank?: (query: string, documents: KnowledgeDocument[]) => Promise<KnowledgeDocument[]>; evidenceSelector?: EvidenceSelector; };
 
 const norm = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const tokens = (s: string) => norm(s).match(/[a-z0-9]+/g)?.filter(x => x.length > 2) ?? [];
@@ -30,6 +34,18 @@ function classify(text: string): Intent {
 function recentPurpose(messages: Message[], turn: AgentTurn): Intent {
   const meaningful = messages.filter(m => m.actor === 'cliente' && m.turn_seq <= turn.turn_seq).reverse().find(m => has(m.text, /cancel|retir|baja|descuento|oferta|factur|saldo|cobr|pagar|portabil|plan|fibra|internet|senal/));
   return classify(meaningful?.text ?? turn.text);
+}
+/** Sends only fixed categorical signals, never customer-authored text. */
+export function safeDecisionFeatures(text: string): string {
+  const value = norm(text);
+  const features: string[] = [];
+  for (const [label, pattern] of [
+    ['cancelacion', /cancel|retir|baja/], ['portabilidad', /portab|portar/],
+    ['facturacion', /factur|saldo|cobr|pagar|pago/], ['planes', /plan|fibra|precio|velocidad/],
+    ['soporte', /soporte|internet|senal|deco|modem|falla|averia|error/], ['descuento', /descuento|oferta/],
+    ['humano', /asesor|supervisor|humano/]
+  ] as const) if (pattern.test(value)) features.push(label);
+  return features.join(' ') || 'indeterminada';
 }
 function accepted(text: string): boolean { return has(text, /\b(acepto|aceptamos|aceptaria|de acuerdo|si quiero|si acepto|me sirve|lo acepto|la acepto|tomare|quiero esa|quiero ese)\b/) && !has(text, /\b(no acepto|no quiero|no me sirve)\b/); }
 function selectOption(text: string, options: Retention['options'], messages: Message[]): Retention['options'][number] | undefined {
@@ -58,7 +74,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
   const inFlight = new Map<string, Promise<RunResult>>();
   const get = async (key: string) => (await options.checkpoints?.get(key)) ?? results.get(key);
   const put = async (key: string, value: RunResult) => { results.set(key, value); await options.checkpoints?.put(key, value); };
-  async function retrieve(turn: AgentTurn): Promise<Citation[]> {
+  async function retrieve(turn: AgentTurn, profile: Decision['complexity']): Promise<Citation[]> {
     let docs = options.knowledge ? await options.knowledge.search(turn.text, { business_date: turn.business_date, audience: turn.audience, channel: turn.channel }) : options.documents ?? defaultDocuments;
     docs = docs.filter(d => allowed(d, turn) && score(turn.text, d) > 0).sort((a,b) => score(turn.text,b) - score(turn.text,a));
     if (options.rerank && docs.length) {
@@ -68,23 +84,17 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
         docs = reordered.filter(d => keys.has(`${d.id}\0${d.version}`)).map(d => candidates.find(c => c.id === d.id && c.version === d.version)!);
       } catch { /* use the filtered lexical ranking */ }
     }
-    return docs.slice(0, 3).map(citation);
+    const citations = docs.slice(0, 3).map(citation);
+    if (options.evidenceSelector && citations.length > 1) {
+      try { const index = await options.evidenceSelector.select(safeDecisionFeatures(turn.text), citations.map(c => ({id:'',title:safeDecisionFeatures(c.title),excerpt:safeDecisionFeatures(c.excerpt),version:''})), profile); if (index !== null && Number.isInteger(index) && index >= 0 && index < citations.length) citations.unshift(...citations.splice(index,1)); } catch { /* preserve filtered lexical order */ }
+    }
+    return citations;
   }
-  async function execute(turn: AgentTurn): Promise<RunResult> {
-    const state = await ports.readCaseForRun(turn.run_id);
-    const config = await ports.getAgentConfig(turn.config_revision);
-    if (config.revision !== turn.config_revision) throw new Error('configuration revision mismatch');
-    const text = norm(turn.text);
-    let intent = recentPurpose(state.messages, turn);
-    if (turn.actor === 'cliente' && !accepted(turn.text) && tokens(turn.text).length > 2) intent = classify(turn.text);
-    if (options.decision && turn.actor === 'cliente' && !accepted(turn.text)) {
-      try { const d = await options.decision.classify(turn.text); if (d && d.confidence >= 0.7 && ['soporte_tecnico','facturacion','consulta_planes','cancelacion','portabilidad'].includes(d.intent)) intent = d.intent; } catch { /* deterministic fallback */ }
-    }
-    if (/supervisor|hablar con (un |una )?(humano|asesor|persona)|amenaza|emergencia/.test(text)) {
-      return turn.audience === 'asesor' ? card(intent, 'Se solicita atención humana.', [], [], ['Derivación'], 'Contactar al responsable de atención.', ['human_requested']) : {type:'handoff', reason:'Te comunicaré con un asesor.', pending:'Atención humana', route:'handoff'};
-    }
+  type CaseState = Awaited<ReturnType<AgentPorts['readCaseForRun']>>;
+  const GraphState = Annotation.Root({ turn: Annotation<AgentTurn>(), caseState: Annotation<CaseState>(), intent: Annotation<Intent>(), profile: Annotation<Decision['complexity']>(), result: Annotation<RunResult>() });
+  async function resolve(turn: AgentTurn, state: CaseState, intent: Intent, profile: Decision['complexity']): Promise<RunResult> {
     if (intent === 'consulta_planes' || (intent === 'soporte_tecnico' && !state.verified)) {
-      const citations = await retrieve(turn);
+      const citations = await retrieve(turn, profile);
       if (!citations.length) return turn.audience === 'asesor' ? card(intent, 'No hay evidencia vigente suficiente.', [], [], ['Consultar fuente autorizada'], 'Solicitar información adicional o derivar.', ['missing_evidence']) : { type:'handoff', reason:'No encontré información vigente suficiente para responder.', pending:'Consultar fuente autorizada', route:intent };
       const answer = citations[0].excerpt;
       return turn.audience === 'asesor' ? card(intent, answer, [], citations, [], 'Compartir la información pertinente.', ['knowledge']) : { type:'answer', answer, citations, route:intent };
@@ -112,15 +122,39 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const advisorPresented = state.messages.some(m => m.actor === 'asesor' && has(m.text, /oferta|descuento|mejora|alternativa/));
       return card(intent, `Resultado de elegibilidad: ${retention.reason}. Alternativas: ${alternatives}`, facts, citations, proposal ? ['Aprobación del asesor'] : ['Decisión del cliente'], proposal ? 'Revisar y aprobar la propuesta en consola.' : advisorPresented ? 'Esperar la decisión del cliente.' : 'Presentar las alternativas y esperar la decisión del cliente.', ['retention_eligible'], proposal);
     }
-    const citations = await retrieve(turn);
+    const citations = await retrieve(turn, profile);
     return card(intent, citations[0]?.excerpt ?? 'No hay evidencia suficiente para resolver la consulta.', [], citations, citations.length ? [] : ['Consultar fuente autorizada'], citations.length ? 'Compartir el procedimiento aplicable.' : 'Solicitar información adicional o derivar.', [citations.length ? 'knowledge' : 'missing_evidence']);
   }
+  const graph = new StateGraph(GraphState)
+    .addNode('load_case', async ({ turn }) => {
+      const caseState = await ports.readCaseForRun(turn.run_id);
+      const config = await ports.getAgentConfig(turn.config_revision);
+      if (config.revision !== turn.config_revision) throw new Error('configuration revision mismatch');
+      return { caseState, intent: recentPurpose(caseState.messages, turn) };
+    })
+    .addNode('classify', async ({ turn, caseState }) => {
+      let intent = recentPurpose(caseState.messages, turn);
+      let profile: Decision['complexity'] = 'economico';
+      if (turn.actor === 'cliente' && !accepted(turn.text) && tokens(turn.text).length > 2) intent = classify(turn.text);
+      if (options.decision && turn.actor === 'cliente' && !accepted(turn.text)) {
+        try { const d = await options.decision.classify(safeDecisionFeatures(turn.text)); if (d && d.confidence >= 0.75 && ['soporte_tecnico','facturacion','consulta_planes','cancelacion','portabilidad'].includes(d.intent)) { intent = d.intent; if (['economico','intermedio','complejo'].includes(d.complexity)) profile = d.complexity; } } catch { /* deterministic fallback */ }
+      }
+      return { intent, profile };
+    })
+    .addNode('priority_handoff', async ({ turn, intent }) => ({ result: turn.audience === 'asesor' ? card(intent, 'Se solicita atención humana.', [], [], ['Derivación'], 'Contactar al responsable de atención.', ['human_requested']) : {type:'handoff', reason:'Te comunicaré con un asesor.', pending:'Atención humana', route:'handoff'} as RunResult }))
+    .addNode('resolve', async ({ turn, caseState, intent, profile }) => ({ result: await resolve(turn, caseState, intent, profile) }))
+    .addEdge(START, 'load_case')
+    .addConditionalEdges('load_case', ({ turn }) => /supervisor|hablar con (un |una )?(humano|asesor|persona)|amenaza|emergencia/.test(norm(turn.text)) ? 'priority_handoff' : 'classify')
+    .addEdge('classify', 'resolve')
+    .addEdge('priority_handoff', END)
+    .addEdge('resolve', END)
+    .compile();
   return {
     async run(input) {
       const turn = TurnSchema.parse(input); const key = `run:${turn.run_id}`;
       const cached = await get(key); if (cached) return cached;
       const existing = inFlight.get(key); if (existing) return existing;
-      const task = (async () => { try { const result = ResultSchema.parse(await execute(turn)); await put(key, result); return result; } catch { return {type:'failed', reason:'agent_unavailable', route:'error'} as RunResult; } })();
+      const task = (async () => { try { const result = ResultSchema.parse((await graph.invoke({turn})).result); await put(key, result); return result; } catch { return {type:'failed', reason:'agent_unavailable', route:'error'} as RunResult; } })();
       inFlight.set(key, task); try { return await task; } finally { inFlight.delete(key); }
     },
     async resume(input: RunResume) {
