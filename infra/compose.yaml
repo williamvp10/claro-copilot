@@ -149,7 +149,7 @@ services:
       dockerfile: Dockerfile
     environment:
       MLFLOW_SERVER_ALLOWED_HOSTS: 'mlflow:5000,localhost:5000,127.0.0.1:5000'
-    command: [mlflow, server, --host, 0.0.0.0, --port, '5000', --backend-store-uri, 'sqlite:////mlflow/db/mlflow.db', --artifacts-destination, /mlflow/artifacts, --serve-artifacts]
+    command: [mlflow, server, --host, 0.0.0.0, --port, '5000', --backend-store-uri, 'sqlite:////mlflow/db/mlflow.db', --artifacts-destination, /mlflow/artifacts, --serve-artifacts, --workers, '1']
     volumes: [mlflow-data:/mlflow]
     depends_on:
       ml-init: {condition: service_completed_successfully}
