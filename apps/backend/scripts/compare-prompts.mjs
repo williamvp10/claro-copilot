@@ -42,7 +42,7 @@ function fixture(revision, verified, channel, businessDate, knowledge) {
     getCustomerContext:read('obtenerCliente'),getBilling:read('listarFacturas'),getTickets:read('listarTickets'),
     evaluateRetention:async()=>({eligible:false,reason:'Requiere replay de plataforma',facts:[],options:[],policy:fallbackPolicy}),
     createProposal:async()=>{ calls.push('proposal'); throw new Error('Requires platform-controlled approval'); }
-  }, {knowledge, ...(writer ? {writer} : {}), ...(decision ? {decision} : {}), observe:(_, item)=>events.push(item)});
+  }, {knowledge, ...(writer ? {writer} : {}), ...(decision && !verified ? {decision} : {}), observe:(_, item)=>events.push(item)});
   return { calls, events, async run(actor,text) {
     calls.length=0;
     events.length=0;
@@ -60,13 +60,14 @@ function fixture(revision, verified, channel, businessDate, knowledge) {
   } };
 }
 
-async function score(id, input, result, session, required, forbidden, authorizesReads, expectedSourceIds) {
+async function score(id, input, result, session, required, forbidden, authorizesReads, expectedSourceIds, judgeEvidence) {
   const answer = contents(result), citations = cited(result);
   const usedPrivateRead = session.calls.length > 0 && !authorizesReads;
   const forbiddenHit = forbidden.some(value=>normalized(answer).includes(normalized(value)));
   const deterministic = !usedPrivateRead && !forbiddenHit && result.type !== 'failed';
   const expectedFacts = required.length > 0 && required.every(value=>normalized(answer).includes(normalized(value)));
-  const semantic = judge && deterministic && citations.length > 0 && required.length > 0
+  const semantic = judge && !authorizesReads && deterministic && citations.length > 0 && required.length > 0
+    && citations.every(citation => judgeEvidence.has(JSON.stringify([citation.id,citation.version])))
     ? await judge.evaluate({question:input,answer,evidence:citations.map(x=>x.excerpt),requiredFacts:required,forbiddenFacts:forbidden,deterministicPassed:true})
     : null;
   const retrieval = session.events.find(item=>item.name==='retrieval');
@@ -107,12 +108,12 @@ async function batch(rows, run) {
   return results;
 }
 
-async function replay(revision, knowledge) {
+async function replay(revision, knowledge, judgeEvidence) {
   const questions=await batch(golden.rows,async row=>{
     const scope = row.herramientas_esperadas.length > 0;
     const session = fixture(revision,scope,'telegram',date,knowledge);
     const result = await session.run('cliente', row.pregunta);
-    const item = await score(row.id,row.pregunta,result,session,row.puntos_clave ?? [],[],scope,scope ? [] : evidencePrefixes(row.fuentes));
+    const item = await score(row.id,row.pregunta,result,session,row.puntos_clave ?? [],[],scope,scope ? [] : evidencePrefixes(row.fuentes),judgeEvidence);
     return scope ? {...item,score:'platform_replay_required'} : item;
   });
   const conversations=await batch(scenarios.rows,async row=>{
@@ -125,7 +126,7 @@ async function replay(revision, knowledge) {
       if (step.type !== 'message') { steps.push({step:index+1,score:'platform_replay_required'}); continue; }
       const result=await session.run(step.actor,step.text);
       const observation=await score(row.id,step.text,result,session,expected?.required_facts ?? [],expected?.forbidden_facts ?? [],verified,
-        evidencePrefixes(expected?.allowed_citation_sources));
+        evidencePrefixes(expected?.allowed_citation_sources),judgeEvidence);
       steps.push({ ...observation, step:index+1, expected_route:expected?.route, expected_writes:expected?.external_writes ?? 0,
         score:observation.score==='failed'?'failed':'review' });
     }
@@ -149,14 +150,15 @@ try {
     const [candidate] = await tx.query('SELECT revision,base_revision,prompts FROM prompt_revision WHERE revision=$1 AND NOT activated',[candidateId]);
     if (!candidate || candidate.base_revision!==base?.revision) throw new Error('Candidate must derive from the active revision');
     const documents = await tx.query('SELECT id,version,document FROM knowledge_document ORDER BY id,version');
-    const searcher = databaseKnowledge({query: (...args) => {
+    const judgeEvidence = new Set(documents.filter(({document}) =>
+      document.scope==='public' && document.provider_approved===true).map(({id,version})=>JSON.stringify([id,version])));
+    let pendingQuery = Promise.resolve();
+    const knowledge = databaseKnowledge({query: (...args) => {
       const started = pendingQuery.then(() => tx.query(...args));
       pendingQuery = started.catch(() => undefined);
       return started;
     }});
-    let pendingQuery = Promise.resolve();
-    const knowledge = searcher;
-    const [baseline,proposed] = await Promise.all([replay(base,knowledge),replay(candidate,knowledge)]);
+    const [baseline,proposed] = await Promise.all([replay(base,knowledge,judgeEvidence),replay(candidate,knowledge,judgeEvidence)]);
     const m = proposed.metrics;
     const passed = Boolean(writer && jev) && m.accuracy>=0.8 && m.groundedness>=0.85 && m.recall_at_5>=0.9 && m.unresolved_critical===0 &&
       proposed.questions.every(x=>!x.usedPrivateRead && !x.forbiddenHit);

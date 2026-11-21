@@ -70,8 +70,10 @@ El probe histórico obtuvo 9 coincidencias literales. El comando quality:compare
 
 La promoción requiere ≥80 % de exactitud, ≥0,85 de groundedness, ≥0,90 de Recall@5 y cero fallos críticos de permisos o efectos. La consola aplica el resultado guardado a la revisión exacta. AHT, FCR, segundo nivel y retención son metas de piloto con línea base y denominador. Un registro de oferta cuenta como operación confirmada.
 
-## Validación local del corte
+## Validación del corte
 
-La suite local recorrió 30 preguntas golden y 19 escenarios complementarios sobre 87 pasajes revisados más los pasajes de arranque. La activa y la candidata obtuvieron 5 de 30 coincidencias exactas y Recall@5 de 0,34. Doce escenarios críticos requieren adjudicación con evidencia. Groundedness queda sin medición semántica. El gate conserva el resultado `review_required`.
+La suite local recorrió 30 preguntas golden y 19 escenarios complementarios sobre 87 pasajes revisados más los pasajes de arranque. La activa y la candidata obtuvieron 5 de 30 coincidencias exactas y Recall@5 de 0,34. Doce escenarios críticos requieren adjudicación con evidencia. Groundedness queda sin medición semántica. La corrida local quedó en `review_required`.
+
+La comparación con OpenAI y Jev repitió las 30 golden y los 19 escenarios bajo la misma instantánea, con una lista de 49 extractos públicos autorizados para procesamiento. Los pasos de cuenta se validaron localmente. Los dos prompts obtuvieron 4 de 30 coincidencias exactas, 0,11 de groundedness y 0,34 de Recall@5. El costo de generación observado fue USD 0,01322 en la activa y USD 0,01106 en la candidata. Cada revisión registró 18 resultados con generación aceptada. La candidata permanece bloqueada con el estado `review_required`.
 
 Las pruebas deterministas pasaron C-1001 en web, C-1004 y C-1007 con Telegram simulado, E-202 y CC-E13. La comparación de prompts y las pruebas de efectos aportan evidencias independientes. La validación con proveedores usó un plan ficticio preparado para ese fin.
