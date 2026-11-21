@@ -1,8 +1,8 @@
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, UnauthorizedException, HttpException, UnprocessableEntityException } from '@nestjs/common';
 import { type z } from 'zod';
 import {
-  AgentTurn, CaseSnapshot, type Actor, type Contact, type DecideProposal, type Intent,
+  AgentTurn, CaseSnapshot, WebChatSnapshot, type Actor, type Contact, type DecideProposal, type Intent,
   type Message, type OpenCase, type Proposal, type SendMessage, type Viewer
 } from '@claro/contracts';
 import { DataSource, type EntityManager } from 'typeorm';
@@ -256,9 +256,83 @@ export class Cases {
     });
   }
 
+  async startWeb(token?: string) {
+    this.requireWebDemo();
+    return this.db.transaction(async (tx) => {
+      const session = await this.webSession(tx, token);
+      if (session) return { token: undefined, snapshot: this.publicWeb(await loadCase(tx, session.case_id)) };
+      await this.consumeWebQuota(tx, 'start', 24);
+      await tx.query('DELETE FROM web_chat_session WHERE expires_at <= now()');
+      const issued = randomBytes(32).toString('base64url');
+      const row = await this.newCase(tx, { ref: `web-c1001:${randomUUID()}`, display_name: 'Cliente C-1001 · Web' }, null, 'web');
+      await tx.query("INSERT INTO web_chat_session VALUES ($1, $2, now() + interval '24 hours')", [this.tokenHash(issued), row.id]);
+      return { token: issued, snapshot: this.publicWeb(row) };
+    });
+  }
+
+  async viewWeb(token: string | undefined) {
+    this.requireWebDemo();
+    const session = await this.webSession(this.db.manager, token);
+    if (!session) throw new UnauthorizedException('Sesión del chat vencida');
+    return this.publicWeb(await loadCase(this.db.manager, session.case_id));
+  }
+
+  async sendWeb(token: string | undefined, input: z.infer<typeof SendMessage>) {
+    this.requireWebDemo();
+    return this.db.transaction(async (tx) => {
+      const session = await this.webSession(tx, token);
+      if (!session) throw new UnauthorizedException('Sesión del chat vencida');
+      const row = await loadCase(tx, session.case_id, true);
+      const scope = `web:${row.id}`;
+      if (await this.replay(tx, scope, input.idempotency_key, input)) return this.publicWeb(row);
+      if (row.snapshot.status !== 'open') throw new UnprocessableEntityException('La conversación está cerrada');
+      await this.consumeWebQuota(tx, 'send', 40);
+      await this.consumeWebQuota(tx, scope, 6);
+      const message = addMessage(row, 'cliente', clearPersonalData(input.text));
+      await this.remember(tx, scope, input.idempotency_key, input, row.id);
+      await audit(tx, row.id, 'customer_turn');
+      await queueRun(tx, row, message, true);
+      await saveCase(tx, row);
+      return this.publicWeb(row);
+    });
+  }
+
+  private requireWebDemo() {
+    if (process.env.DEMO_MODE !== 'true') throw new NotFoundException();
+  }
+
+  private tokenHash(token: string) {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
+  private async webSession(tx: EntityManager, token: string | undefined): Promise<{ case_id: string } | undefined> {
+    if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return;
+    const [session] = await tx.query('SELECT case_id FROM web_chat_session WHERE token_hash=$1 AND expires_at>now()', [this.tokenHash(token)]);
+    return session;
+  }
+
+  private async consumeWebQuota(tx: EntityManager, scope: string, limit: number) {
+    // INSERT/UPDATE returns its row through a CTE on TypeORM's PostgreSQL driver.
+    const [entry] = await tx.query(`WITH counted AS (
+      INSERT INTO web_chat_rate AS previous (scope,bucket,total) VALUES ($1,date_trunc('minute',now()),1)
+      ON CONFLICT (scope) DO UPDATE SET bucket=EXCLUDED.bucket,
+        total=CASE WHEN previous.bucket=EXCLUDED.bucket THEN previous.total+1 ELSE 1 END
+      WHERE previous.bucket<>EXCLUDED.bucket OR previous.total<$2 RETURNING total
+    ) SELECT total FROM counted`, [scope, limit]);
+    if (!entry) throw new HttpException('El chat alcanzó su límite. Intenta en un minuto.', 429);
+  }
+
+  private publicWeb(row: CaseRow): WebChatSnapshot {
+    return WebChatSnapshot.parse({ ...row.snapshot,
+      awaiting_advisor: !!row.handoff_pending && row.snapshot.attention_mode === 'autoservicio'
+    });
+  }
+
   private async assessorMessage(tx: EntityManager, row: CaseRow, text: string) {
     const m = addMessage(row, 'asesor', text);
-    await enqueue(tx, `deliver:${m.id}`, row.id, 'deliver', { text, sender: 'asesor', revision: row.snapshot.revision });
+    if (row.snapshot.channel === 'telegram') {
+      await enqueue(tx, `deliver:${m.id}`, row.id, 'deliver', { text, sender: 'asesor', revision: row.snapshot.revision });
+    }
     await queueRun(tx, row, m);
   }
 
@@ -278,10 +352,10 @@ export class Cases {
     return row;
   }
 
-  private async newCase(tx: EntityManager, contact: ContactRow, owner: string | null): Promise<CaseRow> {
+  private async newCase(tx: EntityManager, contact: Pick<ContactRow, 'ref' | 'display_name'>, owner: string | null, channel: 'telegram' | 'web' = 'telegram'): Promise<CaseRow> {
     const id = randomUUID();
     const snapshot: CaseSnapshot = {
-      id, conversation_id: randomUUID(), display_name: contact.display_name, channel: 'telegram',
+      id, conversation_id: randomUUID(), display_name: contact.display_name, channel,
       owner_id: owner, attention_mode: owner ? 'asistido' : 'autoservicio', status: 'open',
       verified: false, revision: 1, updated_at: new Date().toISOString(), cursor: 0, messages: [], card: null, last_message: null
     };

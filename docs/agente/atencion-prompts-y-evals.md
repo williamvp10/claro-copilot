@@ -1,6 +1,6 @@
 # Playbook de atención, agentes y Evals de Claro Copiloto
 
-**Propuesta.** Un orquestador en **LangGraph** aplica las rutas y los controles de atención. Responde consultas sencillas con un subgrafo de conocimiento. Usa **Deep Agents** para delegar a especialistas de soporte, facturación y retención cuando el caso combina dominios. Las escrituras quedan en un servicio de comandos con aprobación del asesor. El clasificador de intención continúa en modo sombra.
+**Propuesta.** Un orquestador en **LangGraph** aplica las rutas y los controles de atención. Responde consultas sencillas con un subgrafo de conocimiento. El corte ejecuta rutas acotadas en LangGraph. Deep Agents queda como evolución para delegar lecturas a especialistas. Las escrituras quedan en un servicio de comandos con aprobación del asesor. El clasificador de intención continúa en modo sombra.
 
 [Índice de transcripciones](../05-insumos.md#documentos-y-transcripciones) · [Golden dataset original](../05-insumos.md#evaluaciones) · [Suite complementaria JSONL](../05-insumos.md#evaluaciones)
 
@@ -16,7 +16,7 @@ Se revisaron **50 transcripciones sintéticas**. El índice trae 34 de call cent
 | Portabilidad | 5 preguntan si una deuda impide portar, 4 mencionan reclamos ante la SIC o tutela y 1 quiere cambiar de operador conservando su número. |
 | Cancelación | 6 por mudanza sin cobertura, 3 por precio de otro operador y 1 por fallas recurrentes. |
 
-En las 50 se pide documento al inicio y se pregunta al final si el cliente necesita algo más. El flujo suele ser **saludo → validación → motivo → aclaración o consulta → respuesta, acción o derivación → cierre**. En Telegram o WhatsApp, el bot puede dar información pública desde el primer turno. Si el caso requiere una lectura de cuenta, entrega el contexto al asesor y la identidad se verifica en la consola. Las notas y las trazas usan referencias opacas. [Política de escalamiento y datos personales](../05-insumos.md#políticas-y-contratos)
+En las 50 se pide documento al inicio y se pregunta al final si el cliente necesita algo más. El flujo suele ser **saludo → validación → motivo → aclaración o consulta → respuesta, acción o derivación → cierre**. En el chat web o Telegram, el agente puede dar información pública desde el primer turno. Si el caso requiere una lectura de cuenta, entrega el contexto al asesor y la identidad se verifica en la consola. Las notas y las trazas usan referencias opacas. [Política de escalamiento y datos personales](../05-insumos.md#políticas-y-contratos)
 
 ### Ejemplos de atención
 
@@ -61,7 +61,7 @@ Este ejemplo complementario combina soporte de `TRX-0035` y facturación de `TRX
 | **Retención** | Distingue precio, falla, mudanza, portabilidad y solicitud firme de baja. Explica opciones habilitadas y continuación del trámite. | Lecturas de cliente, servicios, tickets y política. Usa `evaluate_retention` para la decisión. Devuelve propuesta o motivo de bloqueo. |
 | **Derivación, escritura y cierre** | Mantiene estados y efectos verificables. | Son nodos de aplicación, con reglas y repositorios. La síntesis del caso puede usar un prompt acotado. |
 
-Para un turno sencillo, LangGraph invoca un subgrafo específico. **Deep Agents se activa en un caso compuesto** que justifica delegación, por ejemplo, una cancelación que mezcla cobros y caídas del servicio. El supervisor de esta rama recibe el ámbito autenticado y delega a especialistas de solo lectura. En el MVP, fijar profundidad de delegación en uno, máximo tres especialistas por turno compuesto y presupuesto por herramienta. Incluir un plazo de ejecución y salida de aclaración o derivación. [Subagentes de Deep Agents](https://docs.langchain.com/oss/python/deepagents/subagents)
+Para un turno sencillo, LangGraph invoca un subgrafo específico. **Deep Agents se evaluará para consultas compuestas** que justifiquen delegación, por ejemplo, una cancelación que mezcla cobros y caídas del servicio. El supervisor de esta rama recibe el ámbito autenticado y delega a especialistas de solo lectura. En el MVP, fijar profundidad de delegación en uno, máximo tres especialistas por turno compuesto y presupuesto por herramienta. Incluir un plazo de ejecución y salida de aclaración o derivación. [Subagentes de Deep Agents](https://docs.langchain.com/oss/python/deepagents/subagents)
 
 ### Orden de decisión por turno
 

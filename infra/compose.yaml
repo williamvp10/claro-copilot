@@ -28,9 +28,6 @@ x-app: &app
     ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-}
     DEMO_BUSINESS_DATE: ${DEMO_BUSINESS_DATE:-2026-11-18}
     AGENT_PROVIDERS: ${AGENT_PROVIDERS:-fixtures}
-    OPENAI_MODEL_ECONOMICO: ${OPENAI_MODEL_ECONOMICO:-}
-    OPENAI_MODEL_INTERMEDIO: ${OPENAI_MODEL_INTERMEDIO:-}
-    OPENAI_MODEL_COMPLEJO: ${OPENAI_MODEL_COMPLEJO:-}
     JEV_MODEL: ${JEV_MODEL:-typesafe/jev-1.14}
     KNOWLEDGE_MCP_URL: ${KNOWLEDGE_MCP_URL:-}
     KNOWLEDGE_SERVICE_TOKEN: ${KNOWLEDGE_SERVICE_TOKEN:-}
@@ -163,7 +160,7 @@ services:
     restart: unless-stopped
     environment:
       ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-}
-      ML_BUNDLE_DIR: /models/releases/${ML_RELEASE_VERSION:-candidate}
+      ML_BUNDLE_DIR: /models/releases/${ML_RELEASE_VERSION:-2}
       ML_STATE_DB: /state/ml.sqlite
     volumes:
       - ml-models:/models:ro

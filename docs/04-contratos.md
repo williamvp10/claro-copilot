@@ -129,3 +129,14 @@ Plataforma publica una revisión inmutable por ambiente. El agente usa identific
 ```
 
 El ejemplo fija los valores iniciales para evaluación. El modo de ML se lee del release aprobado. El panel muestra la revisión activa, carga una candidata y solicita Evals sobre su hash. Para activarla, una operación de plataforma exige el resultado aprobado para el mismo manifiesto y una revisión base vigente. Una restauración sigue el mismo control de permisos y auditoría. [Reglas y umbrales de enrutamiento](agente/enrutamiento-y-reranking.md) · [Datos y operación del panel](plataforma/observabilidad.md)
+
+## Chat de cliente en el MVP
+
+| Ruta | Contrato |
+| --- | --- |
+| POST /api/v1/web-chat/session | Emite o recupera una sesión sintética mediante cookie HttpOnly y SameSite. La sesión dura 24 horas. |
+| POST /api/v1/web-chat/messages | Recibe texto e idempotency_key. La API obtiene canal, rol y expediente de la sesión. Usa la misma persistencia y outbox que Telegram. |
+| GET /api/v1/web-chat/history | Devuelve conversación, mensajes públicos, modo, estado y cursor. La ficha y el propietario se consultan en la API autorizada de asesor. |
+| GET /api/v1/web-chat/events | Envía conversation.updated con la proyección pública. Reanuda con cursor o Last-Event-ID. |
+
+El asesor responde al canal de origen y el modo asistido mantiene el mismo expediente. El vínculo entre cuentas de distintos canales requiere una operación independiente de verificación.

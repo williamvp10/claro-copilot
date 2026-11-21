@@ -13,7 +13,9 @@
     "test:integration": "node test/platform-e2e.mjs",
     "knowledge:ingest": "node dist/knowledge-ingest.js",
     "knowledge:mcp": "node dist/mcp.js",
-    "quality:probe": "node scripts/evaluate.mjs"
+    "quality:probe": "node scripts/evaluate.mjs",
+    "quality:compare": "node scripts/compare-prompts.mjs",
+    "quality:review": "node scripts/review-prompts.mjs"
   },
   "dependencies": {
     "@claro/contracts": "workspace:*",

@@ -1,6 +1,6 @@
 # Claro Copiloto
 
-Claro Copiloto es un asistente de atención al cliente para telecomunicaciones. Combina **autoservicio en Telegram** con una **consola web para asesores**. El cliente puede pasar de una consulta automática a una conversación con un asesor sin repetir lo que ya explicó.
+Claro Copiloto es un asistente de atención al cliente para telecomunicaciones. Combina **autoservicio en chat web y Telegram** con una **consola web para asesores**. El cliente puede pasar de una consulta automática a una conversación con un asesor sin repetir lo que ya explicó.
 
 La misma conversación guardada alimenta ambos modos. Quien tiene a cargo el caso controla la respuesta pública, y la consola muestra en privado el contexto, las fuentes y las acciones disponibles.
 
@@ -17,7 +17,7 @@ Con la titularidad verificada, la consola reúne datos del CRM y la facturación
 
 | Caso | Resultado esperado |
 | --- | --- |
-| **Consulta de facturación** | El cliente consulta un plan en Telegram y luego pregunta por su factura. El asesor recibe el hilo y, tras validar la titularidad, encuentra el plan, el saldo y el vencimiento en la ficha. |
+| **Consulta de facturación** | El cliente consulta un plan en el chat web y luego pregunta por su factura. El asesor recibe el hilo y, tras validar la titularidad, encuentra el plan, el saldo y el vencimiento en la ficha. |
 | **Retención elegible** | El copiloto presenta las opciones respaldadas por la política vigente. Tras la aceptación del cliente y la aprobación del asesor, la plataforma registra una sola oferta en el CRM simulado, incluso si la confirmación se repite. |
 | **Retención sin elegibilidad** | La ficha explica por qué la mora supera el límite de la política y sugiere cómo continuar con la solicitud. El CRM conserva cero ofertas registradas para ese caso. |
 
@@ -26,9 +26,9 @@ Con la titularidad verificada, la consola reúne datos del CRM y la facturación
 ## Arquitectura
 
 - **Plataforma.** Next.js y shadcn/ui para la consola. NestJS, Better Auth, TypeORM y PostgreSQL para sesiones, casos, integraciones y aprobaciones.
-- **Agente.** LangGraph.js en un worker de NestJS. El worker selecciona evidencia vigente y responde con citas. Puede consultar el servicio MCP de conocimiento y usar adaptadores optativos de OpenAI Direct y Jev.
+- **Agente.** LangGraph.js en un worker de NestJS. El worker recupera evidencia vigente y redacta respuestas públicas con citas mediante OpenAI Direct en el perfil conectado. Consulta el índice PostgreSQL o el MCP privado y usa Jev para clasificación tipada en el perfil conectado.
 - **Aprendizaje automático.** FastAPI sirve el clasificador clásico de intención y MLflow registra sus versiones. El modelo opera en sombra para medir su desempeño durante la atención.
-- **Despliegue y operación.** Docker Compose en Dokploy. Prometheus consulta los contadores del backend. El worker puede exportar trazas saneadas por OpenTelemetry a Langfuse. El panel agrega indicadores del dominio y del servicio de ML.
+- **Despliegue y operación.** Docker Compose en Dokploy. Prometheus consulta los contadores del backend. El worker puede exportar trazas saneadas por OpenTelemetry al Compose separado de Langfuse autohospedado. El panel agrega indicadores del dominio y del servicio de ML.
 
 [Arquitectura y despliegue](docs/02-arquitectura-docker.md) · [Diseño de plataforma](docs/plataforma/diseno.md) · [Diseño del agente](docs/agente/diseno.md) · [Diseño de ML](docs/ml/diseno.md) · [Calidad y evaluación](docs/06-calidad-y-release.md)
 

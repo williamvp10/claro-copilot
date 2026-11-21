@@ -42,6 +42,12 @@ export const CaseSnapshot = CaseSummary.extend({
 export type CaseSnapshot = z.infer<typeof CaseSnapshot>;
 export const CaseEvent = z.object({ type: z.literal('case.updated'), cursor: z.number().int().positive(), snapshot: CaseSnapshot });
 export type CaseEvent = z.infer<typeof CaseEvent>;
+export const WebChatSnapshot = CaseSnapshot.pick({
+  conversation_id: true, attention_mode: true, status: true, messages: true, cursor: true
+}).extend({ awaiting_advisor: z.boolean() });
+export type WebChatSnapshot = z.infer<typeof WebChatSnapshot>;
+export const WebChatEvent = z.object({ type: z.literal('conversation.updated'), snapshot: WebChatSnapshot });
+export type WebChatEvent = z.infer<typeof WebChatEvent>;
 export const OpenCase = z.object({ contact_ref: Id, text: Text, idempotency_key: Id });
 export const SendMessage = z.object({ text: Text, idempotency_key: Id });
 export const VerifyHolder = z.object({ verification_code: z.string().min(4).max(32) });

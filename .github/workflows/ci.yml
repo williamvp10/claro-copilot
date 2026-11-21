@@ -30,7 +30,22 @@ jobs:
           BETTER_AUTH_SECRET: ci-only-placeholder
           TELEGRAM_BOT_TOKEN: ci-only-placeholder
           TELEGRAM_WEBHOOK_SECRET: ci-only-placeholder
-        run: docker compose -f infra/compose.yaml config --quiet
+        run: docker compose -f infra/compose.yaml --profile knowledge --profile ml --profile observability config --quiet
+      - name: Validate self-hosted Langfuse Compose
+        env:
+          LANGFUSE_DB_PASSWORD: ci-placeholder
+          LANGFUSE_SALT: ci-placeholder
+          LANGFUSE_ENCRYPTION_KEY: ci-placeholder
+          LANGFUSE_AUTH_SECRET: ci-placeholder
+          LANGFUSE_CLICKHOUSE_PASSWORD: ci-placeholder
+          LANGFUSE_REDIS_PASSWORD: ci-placeholder
+          LANGFUSE_STORAGE_PASSWORD: ci-placeholder
+          LANGFUSE_PUBLIC_KEY: pk-lf-ci-placeholder
+          LANGFUSE_SECRET_KEY: sk-lf-ci-placeholder
+          LANGFUSE_ADMIN_EMAIL: langfuse-ci@example.test
+          LANGFUSE_ADMIN_PASSWORD: ci-placeholder
+          LANGFUSE_SHARED_NETWORK: claro-ci_default
+        run: docker compose -f infra/compose.langfuse.yaml config --quiet
       - name: Build containers locally
         run: |
           docker build -f infra/Dockerfile -t claro-copiloto:ci .

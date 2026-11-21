@@ -1,0 +1,121 @@
+name: claro-langfuse
+x-observability: &observability
+  NEXTAUTH_URL: ${LANGFUSE_UI_URL:-http://localhost:39085}
+  DATABASE_URL: postgresql://langfuse:${LANGFUSE_DB_PASSWORD:?Set LANGFUSE_DB_PASSWORD}@lf-postgres:5432/langfuse
+  SALT: ${LANGFUSE_SALT:?Set LANGFUSE_SALT}
+  ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?Set LANGFUSE_ENCRYPTION_KEY}
+  TELEMETRY_ENABLED: 'false'
+  CLICKHOUSE_URL: http://lf-clickhouse:8123
+  CLICKHOUSE_MIGRATION_URL: clickhouse://lf-clickhouse:9000
+  CLICKHOUSE_USER: langfuse
+  CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?Set LANGFUSE_CLICKHOUSE_PASSWORD}
+  CLICKHOUSE_CLUSTER_ENABLED: 'false'
+  REDIS_HOST: lf-redis
+  REDIS_AUTH: ${LANGFUSE_REDIS_PASSWORD:?Set LANGFUSE_REDIS_PASSWORD}
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_STORAGE_PASSWORD:?Set LANGFUSE_STORAGE_PASSWORD}
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://lf-storage:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: 'true'
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_STORAGE_PASSWORD}
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://lf-storage:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: 'true'
+x-dependencies: &dependencies
+  lf-postgres: {condition: service_healthy}
+  lf-redis: {condition: service_healthy}
+  lf-clickhouse: {condition: service_healthy}
+  lf-storage: {condition: service_healthy}
+services:
+  langfuse-web:
+    image: docker.langfuse.com/langfuse/langfuse:4.83.0
+    restart: unless-stopped
+    depends_on: *dependencies
+    networks: [default, application]
+    ports: ['127.0.0.1:${LANGFUSE_UI_PORT:-39085}:3000']
+    environment:
+      <<: *observability
+      NEXTAUTH_SECRET: ${LANGFUSE_AUTH_SECRET:?Set LANGFUSE_AUTH_SECRET}
+      AUTH_DISABLE_SIGNUP: 'true'
+      LANGFUSE_INIT_ORG_ID: claro
+      LANGFUSE_INIT_ORG_NAME: Claro Copiloto
+      LANGFUSE_INIT_PROJECT_ID: claro-copiloto
+      LANGFUSE_INIT_PROJECT_NAME: Claro Copiloto
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?Set LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?Set LANGFUSE_SECRET_KEY}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_ADMIN_EMAIL:?Set LANGFUSE_ADMIN_EMAIL}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_ADMIN_PASSWORD:?Set LANGFUSE_ADMIN_PASSWORD}
+  langfuse-worker:
+    image: docker.langfuse.com/langfuse/langfuse-worker:4.83.0
+    restart: unless-stopped
+    depends_on: *dependencies
+    environment: *observability
+  lf-postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_DB: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD}
+    volumes: [pg:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD, pg_isready, -U, langfuse]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  lf-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    environment:
+      REDISCLI_AUTH: ${LANGFUSE_REDIS_PASSWORD}
+    command: [redis-server, --requirepass, '${LANGFUSE_REDIS_PASSWORD}', --maxmemory-policy, noeviction]
+    volumes: [redis:/data]
+    healthcheck:
+      test: [CMD-SHELL, 'redis-cli --raw ping | grep -qx PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  lf-clickhouse:
+    image: clickhouse/clickhouse-server:26.3.62.3
+    restart: unless-stopped
+    user: '101:101'
+    environment:
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: '1'
+    volumes: [clickhouse:/var/lib/clickhouse, clickhouse-logs:/var/log/clickhouse-server]
+    healthcheck:
+      test: [CMD-SHELL, 'clickhouse-client --host lf-clickhouse --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --query "SELECT 1" >/dev/null']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  lf-storage:
+    image: cgr.dev/chainguard/minio:latest
+    restart: unless-stopped
+    entrypoint: [sh, -c]
+    command: ['mkdir -p /data/langfuse && exec minio server --address ":9000" /data']
+    environment:
+      MINIO_ROOT_USER: langfuse
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_STORAGE_PASSWORD}
+    volumes: [storage:/data]
+    healthcheck:
+      test: [CMD, mc, ready, local]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+volumes:
+  pg:
+  redis:
+  clickhouse:
+  clickhouse-logs:
+  storage:
+networks:
+  default:
+    ipam:
+      config: [{subnet: '${LANGFUSE_PRIVATE_SUBNET:-10.254.90.0/24}'}]
+  application:
+    external: true
+    name: ${LANGFUSE_SHARED_NETWORK:?Set LANGFUSE_SHARED_NETWORK}

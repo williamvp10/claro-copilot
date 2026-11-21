@@ -8,7 +8,7 @@ El stack aprobado es **Next.js con shadcn/ui**, **NestJS con TypeORM, Better Aut
 
 | Ruta | Responsabilidad y primera entrega |
 | --- | --- |
-| `apps/web` | Next.js App Router, shadcn/ui y cliente de Better Auth. Bandeja, caso, chat por SSE y vista de administración. Primero demostrar acceso, caso y propuesta con fixtures. [SDD de plataforma](plataforma/diseno.md) |
+| `apps/web` | Next.js App Router, shadcn/ui y cliente de Better Auth. Chat público en `/chat`, bandeja con SSE y administración. Primero demostrar acceso, caso y propuesta con fixtures. [SDD de plataforma](plataforma/diseno.md) |
 | `apps/backend` | Proyecto NestJS con Express y ESM. Entradas `backend-api` y `backend-worker` desde la misma imagen. Módulos de Atención, Identidad, Retención, Aprobaciones, Canales, Administración y Operación. Primero demostrar una sesión y un turno persistido que un worker pueda consumir. |
 | `packages/agent` | Grafo, retrieval, adaptadores LLM, Jev, MCP y skills en TypeScript, cargados mediante `AgentModule` del backend. Primero responder E-202 con una cita pública y producir eventos de ejecución. [SDD del agente](agente/diseno.md) |
 | `packages/contracts` | Esquemas y fixtures compartidos para turnos, eventos, ámbito, propuestas, efectos e inferencia. Los puertos TypeScript se usan dentro de NestJS. El OpenAPI de ML versiona la frontera HTTP con Python. [Contrato v1](04-contratos.md) |
@@ -21,19 +21,19 @@ Para el monorepo, usar **pnpm workspaces** para JavaScript y un entorno Python s
 
 | Componente | Arranque local | Staging y demo en Dokploy |
 | --- | --- | --- |
-| Web y API | Next.js y NestJS con usuarios y casos sintéticos. Better Auth bajo `/api/auth`. | Un origen HTTPS en Traefik. Enrutar `/api` al backend y el resto a Next.js. Los consumidores web usan cookie de sesión. |
+| Web y API | Next.js y NestJS con usuarios y casos sintéticos. Better Auth bajo `/api/auth`. | Un origen HTTPS en Traefik. Publicar Next.js y enrutar `/api` a NestJS mediante su proxy. Los consumidores web usan cookie de sesión. |
 | Worker NestJS | Misma imagen que la API y una entrada de proceso dedicada. Consume trabajos persistidos y reporta estado mediante heartbeat. | Servicio privado con sus propios límites de CPU, memoria y concurrencia. API y worker no se llaman por HTTP. La API entrega SSE desde los eventos del run. |
-| Conocimiento | Ingesta y MCP privados. Puede usarse un corpus mínimo mientras se prepara el modelo de re-ranking. | `knowledge-worker`, `knowledge-mcp` y `reranker` con imágenes y health checks separados. Evidencia versionada en PostgreSQL. |
+| Conocimiento | Ingesta y MCP privados. Puede usarse un corpus mínimo mientras se prepara el modelo de re-ranking. | Perfil `knowledge` con `knowledge-mcp` privado y reordenamiento local en el agente. Evidencia versionada en PostgreSQL. |
 | PostgreSQL y Redis | PostgreSQL con pgvector, esquemas separados y Redis para memoria. | Volúmenes persistentes, credenciales por función y backups comprobados. PostgreSQL respalda casos, outbox, índice y checkpoints. |
-| CRM, facturación y ML | Mocks con los fixtures OpenAPI. La API ML puede sustituirse por un stub hasta tener un modelo registrado. | Mocks y FastAPI en red privada. MLflow privado para tracking y registro. El modelo sirve una versión fijada en modo sombra. |
-| Proveedores y observabilidad | Adaptadores deterministas para OpenAI, Jev y Langfuse. | Inyectar credenciales separadas para OpenAI Direct, OpenRouter Decisions, Telegram y Langfuse. Collector y Prometheus en red privada, con trazas a Langfuse Cloud. Ejecutar smoke con el corpus sintético y la revisión versionada. |
+| CRM, facturación y ML | Mocks con los fixtures OpenAPI. La API ML puede sustituirse por un stub hasta tener un modelo registrado. | Mocks y FastAPI en red privada. Perfil `ml` con MLflow privado. FastAPI sirve el artefacto fijado de la versión 2 en sombra. |
+| Proveedores y observabilidad | Adaptadores deterministas para OpenAI, Jev y Langfuse. | Inyectar credenciales separadas para OpenAI Direct, OpenRouter Decisions, Telegram y Langfuse. Collector y Prometheus en red privada, con trazas OTLP a Langfuse autohospedado en Compose separado. Ejecutar smoke con el corpus sintético y la revisión versionada y pasajes sintéticos aprobados para el proveedor. |
 
 El primer flujo local se debe poder probar con datos sintéticos y adaptadores de prueba. Las claves reales se inyectan en el servicio que hace cada llamada. El navegador recibe sesión y datos autorizados de la API.
 
 ## Persistencia y orden de arranque
 
-1. **Preparar PostgreSQL y Redis.** Crear los roles y esquemas de plataforma, autenticación, conocimiento y checkpoints. Crear la base lógica de MLflow. Habilitar pgvector en la base PostgreSQL que aloja el esquema de conocimiento.
-2. **Aplicar una vez cada migración.** TypeORM aplica las migraciones de negocio y conocimiento con `synchronize: false`. Better Auth usa su adaptador PostgreSQL y su migración en `auth`. LangGraph.js prepara su esquema de checkpoint mediante PostgresSaver. MLflow administra su propia base. El release ejecuta estos pasos antes de iniciar API y worker.
+1. **Preparar PostgreSQL y Redis.** Preparar la base de plataforma y sus credenciales. MLflow usa SQLite y volúmenes propios. Habilitar pgvector en la base PostgreSQL que aloja el esquema de conocimiento.
+2. **Aplicar una vez cada migración.** TypeORM aplica las migraciones de negocio y conocimiento con `synchronize: false`. TypeORM administra las tablas requeridas por Better Auth. El worker guarda los checkpoints del agente en PostgreSQL. MLflow administra su propia base. El release ejecuta estos pasos antes de iniciar API y worker.
 3. **Cargar fixtures y arrancar.** Inicializar usuarios de demo por un flujo controlado, CRM y facturación, fuentes autorizadas y una revisión del agente. Levantar la API, el worker y la web. Para ML, registrar un candidato y cargar la versión aprobada en FastAPI.
 4. **Comprobar readiness.** La API debe aceptar una sesión y persistir un turno. Verificar que el worker consuma el trabajo y publique un evento. Comprobar que el grafo pueda pausar y reanudar. Confirmar que el predictor está listo o que la ruta funciona con el adaptador degradado.
 
@@ -43,7 +43,7 @@ La configuración documentada incluye una URL de PostgreSQL por ámbito, Redis, 
 
 | Frente | Primer corte verificable |
 | --- | --- |
-| **Aplicación** | Persistir turnos de cliente y asesor. Probar ingreso por bot, ingreso directo a un asesor y apertura desde consola con un chat sintético previamente habilitado. Un stub emite ficha privada por SSE. Verificar historial y destinatario tras reconectar. |
+| **Aplicación** | Persistir turnos de cliente y asesor. Probar ingreso por chat web, ingreso por Telegram, ingreso directo a un asesor y apertura desde consola con un chat sintético previamente habilitado. Un stub emite ficha privada por SSE. Verificar historial y destinatario tras reconectar. |
 | **Agente** | Partir de una respuesta pública con cita. Ante mensajes de ambos actores actualizar motivo, hechos y pendientes. Reanudar la lectura de cuenta al verificarse la titularidad y presentar elegibilidad o denegación en privado. Probar interrupción, aprobación y reanudación. |
 | **ML de predicción** | Entrenar intención con particiones agrupadas, registrar en MLflow y servir una versión fija en sombra sobre mensajes del cliente en ambos modos. Un timeout del predictor deja continuar el caso. |
 

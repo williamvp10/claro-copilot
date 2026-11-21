@@ -1,3 +1,7 @@
+export { createOpenAIPublicWriter, validateDraft } from './generation.js';
+export type { AgentObservation, PublicWriter } from './generation.js';
+import type { AgentObservation, PublicWriter } from './generation.js';
+import { safeKnowledgeQuery } from './mcp.js';
 export { createKnowledgeMcpAdapter, safeKnowledgeQuery } from './mcp.js';
 export type { KnowledgeMcpOptions } from './mcp.js';
 export { createJevDecisionAdapter, createOpenAIEvidenceSelector, createJevSemanticEvaluator } from './providers.js';
@@ -7,12 +11,12 @@ import { Annotation, StateGraph, START, END } from '@langchain/langgraph';
 import { AgentTurn as TurnSchema, RunResult as ResultSchema } from '@claro/contracts';
 import type { AgentPorts, AgentRunner, AgentTurn, RunResult, RunResume, Citation, Fact, Intent, Message, Retention } from '@claro/contracts';
 
-export type KnowledgeDocument = Citation & { scope: 'public' | 'advisor'; effective_from: string; effective_to?: string; status?: 'ready' | 'draft'; channels?: string[]; products?: string[]; type?: string };
+export type KnowledgeDocument = Citation & { scope: 'public' | 'advisor'; effective_from: string; effective_to?: string; status?: 'ready' | 'draft'; channels?: string[]; products?: string[]; type?: string; provider_approved?: true };
 export type Decision = { intent: Intent; complexity: 'economico' | 'intermedio' | 'complejo'; confidence: number };
 export interface DecisionAdapter { classify(text: string): Promise<Decision | null> }
 export interface KnowledgeAdapter { search(query: string, context: { business_date: string; audience: 'cliente' | 'asesor'; channel: string }): Promise<KnowledgeDocument[]> }
 export interface CheckpointStore { get(key: string): Promise<RunResult | undefined>; put(key: string, result: RunResult): Promise<void> }
-export type AgentOptions = { documents?: KnowledgeDocument[]; knowledge?: KnowledgeAdapter; decision?: DecisionAdapter; checkpoints?: CheckpointStore; rerank?: (query: string, documents: KnowledgeDocument[]) => Promise<KnowledgeDocument[]>; evidenceSelector?: EvidenceSelector; };
+export type AgentOptions = { documents?: KnowledgeDocument[]; knowledge?: KnowledgeAdapter; decision?: DecisionAdapter; checkpoints?: CheckpointStore; rerank?: (query: string, documents: KnowledgeDocument[]) => Promise<KnowledgeDocument[]>; evidenceSelector?: EvidenceSelector; writer?: PublicWriter; observe?: (runId: string, observation: AgentObservation) => void; };
 
 const norm = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const tokens = (s: string) => norm(s).match(/[a-z0-9]+/g)?.filter(x => x.length > 2) ?? [];
@@ -76,7 +80,8 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
   const inFlight = new Map<string, Promise<RunResult>>();
   const get = async (key: string) => (await options.checkpoints?.get(key)) ?? results.get(key);
   const put = async (key: string, value: RunResult) => { results.set(key, value); await options.checkpoints?.put(key, value); };
-  async function retrieve(turn: AgentTurn, profile: Decision['complexity']): Promise<Citation[]> {
+  async function retrieve(turn: AgentTurn, profile: Decision['complexity']): Promise<KnowledgeDocument[]> {
+    const started = Date.now();
     let docs: KnowledgeDocument[];
     try { docs = options.knowledge ? await options.knowledge.search(turn.text, { business_date: turn.business_date, audience: turn.audience, channel: turn.channel }) : options.documents ?? defaultDocuments; } catch { return []; }
     docs = docs.filter(d => allowed(d, turn) && score(turn.text, d) > 0).sort((a,b) => score(turn.text,b) - score(turn.text,a));
@@ -87,18 +92,27 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
         docs = reordered.filter(d => keys.has(`${d.id}\0${d.version}`)).map(d => candidates.find(c => c.id === d.id && c.version === d.version)!);
       } catch { /* use the filtered lexical ranking */ }
     }
-    const citations = docs.slice(0, 3).map(citation);
-    if (options.evidenceSelector && citations.length > 1) {
-      try { const index = await options.evidenceSelector.select(safeDecisionFeatures(turn.text), citations.map(c => ({id:'',title:safeDecisionFeatures(c.title),excerpt:safeDecisionFeatures(c.excerpt),version:''})), profile); if (index !== null && Number.isInteger(index) && index >= 0 && index < citations.length) citations.unshift(...citations.splice(index,1)); } catch { /* preserve filtered lexical order */ }
+    options.observe?.(turn.run_id, { name:'retrieval', started, ended:Date.now(),
+      metadata:{ count:docs.length, top_5:docs.slice(0,5).map(x=>x.id).join(',') } });
+    const candidates = docs.slice(0, 3);
+    if (options.evidenceSelector && candidates.length > 1) {
+      try { const index = await options.evidenceSelector.select(safeDecisionFeatures(turn.text), candidates.map(c => ({id:'',title:safeDecisionFeatures(c.title),excerpt:safeDecisionFeatures(c.excerpt),version:''})), profile); if (index !== null && Number.isInteger(index) && index >= 0 && index < candidates.length) candidates.unshift(...candidates.splice(index,1)); } catch { /* preserve filtered lexical order */ }
     }
-    return citations;
+    return candidates;
   }
   type CaseState = Awaited<ReturnType<AgentPorts['readCaseForRun']>>;
-  const GraphState = Annotation.Root({ turn: Annotation<AgentTurn>(), caseState: Annotation<CaseState>(), intent: Annotation<Intent>(), profile: Annotation<Decision['complexity']>(), result: Annotation<RunResult>() });
-  async function resolve(turn: AgentTurn, state: CaseState, intent: Intent, profile: Decision['complexity']): Promise<RunResult> {
+  const GraphState = Annotation.Root({ turn: Annotation<AgentTurn>(), caseState: Annotation<CaseState>(), intent: Annotation<Intent>(), profile: Annotation<Decision['complexity']>(), publicPrompt: Annotation<string>(), result: Annotation<RunResult>() });
+  async function resolve(turn: AgentTurn, state: CaseState, intent: Intent, profile: Decision['complexity'], publicPrompt: string): Promise<RunResult> {
     if (intent === 'consulta_planes' || (intent === 'soporte_tecnico' && !state.verified)) {
-      const citations = await retrieve(turn, profile);
+      const documents = await retrieve(turn, profile);
+      const citations = documents.map(citation);
       if (!citations.length) return turn.audience === 'asesor' ? card(intent, 'No hay evidencia vigente suficiente.', [], [], ['Consultar fuente autorizada'], 'Solicitar información adicional o derivar.', ['missing_evidence']) : { type:'handoff', reason:'No encontré información vigente suficiente para responder.', pending:'Consultar fuente autorizada', route:intent };
+      const approvedEvidence = documents.filter(document => document.scope === 'public' && document.provider_approved === true).map(citation);
+      if (turn.audience === 'cliente' && options.writer && approvedEvidence.length) {
+        const draft = await options.writer.write(safeKnowledgeQuery(turn.text), approvedEvidence, profile, publicPrompt,
+          observation => options.observe?.(turn.run_id, observation));
+        if (draft) return { type:'answer', answer:draft.answer, citations:draft.citations, route:intent };
+      }
       const answer = citations[0].excerpt;
       return turn.audience === 'asesor' ? card(intent, answer, [], citations, [], 'Compartir la información pertinente.', ['knowledge']) : { type:'answer', answer, citations, route:intent };
     }
@@ -141,7 +155,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const advisorPresented = state.messages.some(m => m.actor === 'asesor' && has(m.text, /oferta|descuento|mejora|alternativa/));
       return card(intent, `Resultado de elegibilidad: ${retention.reason}. Alternativas: ${alternatives}`, facts, citations, proposal ? ['Aprobación del asesor'] : ['Decisión del cliente'], proposal ? 'Revisar y aprobar la propuesta en consola.' : advisorPresented ? 'Esperar la decisión del cliente.' : 'Presentar las alternativas y esperar la decisión del cliente.', ['retention_eligible'], proposal);
     }
-    const citations = await retrieve(turn, profile);
+    const citations = (await retrieve(turn, profile)).map(citation);
     return card(intent, citations[0]?.excerpt ?? 'No hay evidencia suficiente para resolver la consulta.', [], citations, citations.length ? [] : ['Consultar fuente autorizada'], citations.length ? 'Compartir el procedimiento aplicable.' : 'Solicitar información adicional o derivar.', [citations.length ? 'knowledge' : 'missing_evidence']);
   }
   const graph = new StateGraph(GraphState)
@@ -149,19 +163,29 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const caseState = await ports.readCaseForRun(turn.run_id);
       const config = await ports.getAgentConfig(turn.config_revision);
       if (config.revision !== turn.config_revision) throw new Error('configuration revision mismatch');
-      return { caseState, intent: recentPurpose(caseState.messages, turn) };
+      return { caseState, publicPrompt: config.prompts.public_answer ?? '', intent: recentPurpose(caseState.messages, turn) };
     })
     .addNode('classify', async ({ turn, caseState }) => {
       let intent = recentPurpose(caseState.messages, turn);
       let profile: Decision['complexity'] = 'economico';
       if (turn.actor === 'cliente' && !accepted(turn.text) && tokens(turn.text).length > 2) intent = classify(turn.text);
       if (options.decision && turn.actor === 'cliente' && !accepted(turn.text)) {
-        try { const d = await options.decision.classify(safeDecisionFeatures(turn.text)); if (d && d.confidence >= 0.75 && ['soporte_tecnico','facturacion','consulta_planes','cancelacion','portabilidad'].includes(d.intent)) { intent = d.intent; if (['economico','intermedio','complejo'].includes(d.complexity)) profile = d.complexity; } } catch { /* deterministic fallback */ }
+        const started = Date.now();
+        let status = 'fallback';
+        try {
+          const decision = await options.decision.classify(safeDecisionFeatures(turn.text));
+          if (decision && decision.confidence >= 0.75) {
+            intent = decision.intent;
+            profile = decision.complexity;
+            status = 'accepted';
+          }
+        } catch { /* Keep the local rules when Jev is unavailable. */ }
+        options.observe?.(turn.run_id, { name:'decision.jev', started, ended:Date.now(), metadata:{status,intent,profile} });
       }
       return { intent, profile };
     })
     .addNode('priority_handoff', async ({ turn, intent }) => ({ result: turn.audience === 'asesor' ? card(intent, 'Se solicita atención humana.', [], [], ['Derivación'], 'Contactar al responsable de atención.', ['human_requested']) : {type:'handoff', reason:'Te comunicaré con un asesor.', pending:'Atención humana', route:'handoff'} as RunResult }))
-    .addNode('resolve', async ({ turn, caseState, intent, profile }) => ({ result: await resolve(turn, caseState, intent, profile) }))
+    .addNode('resolve', async ({ turn, caseState, intent, profile, publicPrompt }) => ({ result: await resolve(turn, caseState, intent, profile, publicPrompt) }))
     .addEdge(START, 'load_case')
     .addConditionalEdges('load_case', ({ turn }) => /supervisor|hablar con (un |una )?(humano|asesor|persona)|amenaza|emergencia/.test(norm(turn.text)) ? 'priority_handoff' : 'classify')
     .addEdge('classify', 'resolve')

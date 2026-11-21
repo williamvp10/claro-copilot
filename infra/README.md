@@ -25,7 +25,7 @@ For evidence, save the workflow run URL, commit, image digest, Compose configura
 
 ## Optional ML and telemetry
 
-With the integrated `services/ml/Dockerfile`, `--profile ml` starts the private ML API and MLflow 2.22. MLflow uses its own persistent SQLite backend and artifact volume and has no published port. It is intended for a single host; protect the internal network because this MLflow server has no authentication. The serving API mounts the model volume read-only and keeps its SQLite state on a separate writable volume. Set `ML_RELEASE_VERSION` to the exact published numeric version before enabling ML; readiness fails until the bundle exists.
+With the integrated `services/ml/Dockerfile`, `--profile ml` starts the private ML API and MLflow 2.22. MLflow uses its own persistent SQLite backend and artifact volume and has no published port. It is intended for a single host; protect the internal network because this MLflow server has no authentication. The serving API mounts the model volume read-only and keeps its SQLite state on a separate writable volume. The demo pins `ML_RELEASE_VERSION=2`. Publish the verified bundle to the model volume before starting the ML profile. Readiness reports the loaded version.
 
 Use `--profile ml-jobs` for explicit jobs on the same image and model volume. For example, mount a local CSV read-only using `docker compose --env-file .env -f infra/compose.yaml --profile ml-jobs run --rm -v "$PWD/tickets.csv:/input/tickets.csv:ro" ml-job app.train /input/tickets.csv`; publish a registry version with `... ml-job app.release <VERSION> /models/releases/<VERSION>` and run drift with `... ml-job app.drift`. Set `ML_IMAGE_DIGEST` and `GIT_SHA` for release provenance. Wait for MLflow startup before invoking jobs, restrict access to CSV and artifacts, and back up the three ML volumes together. The initial volume setup changes ownership to the ML image user. MLflow is not needed by the serving API once a release exists.
 
@@ -41,10 +41,25 @@ The base Compose stack uses PostgreSQL knowledge retrieval. To exercise private 
 
 The migration seeds two reviewed public passages. The ingester accepts a private JSON array with `id`, `title`, `version`, `excerpt`, `scope` and `effective_from`. Add an exclusive `effective_to` to the previous version when publishing a replacement. Set `DEMO_BUSINESS_DATE` to replay an effective date. Invoke `pnpm --filter @claro/backend knowledge:ingest /path/to/reviewed-passages.json` with `DATABASE_URL` configured and the database migrated. Prepare the private exercise sources with the [corpus utility](../packages/agent/scripts/README.md), then ingest the resulting JSON.
 
-The default agent uses local decisions and returns cited excerpts. To opt into remote selection, set `AGENT_PROVIDERS=live`, the OpenRouter and OpenAI credentials and the OpenAI model IDs for the profiles you want to use. The provider adapters send minimized categorical inputs, and the worker keeps authorization and business decisions local.
+The default agent uses local decisions and returns cited excerpts. Set `AGENT_PROVIDERS=live` and both provider keys to enable OpenAI Responses and Jev. OpenAI receives a minimized topic and current public excerpts explicitly approved for provider processing with `provider_approved: true`. For other sources the worker uses the cited excerpt locally. Jev receives fixed categorical features for routing. Account data, authorization and business decisions stay on the platform.
 
 The three scene replays, E-202 retrieval, CC-E13 prioritized support, and role/feedback checks run in the platform integration job. The release still requires the full golden and complementary suites, calibrated Jev review and real-account verification of Telegram, OpenAI, OpenRouter and Langfuse. Prompt candidates stay blocked when independent evaluation evidence is unavailable.
 
 Run the preliminary suite probe with `pnpm --filter @claro/backend quality:probe /private/golden_dataset.jsonl /private/evals_atencion.jsonl`. It reports suite hashes, cites observed passages and marks control events for integrated replay. It emits IDs and decisions without raw transcripts. Literal matches are an aid for review. Optional `JEV_ENABLE_EVALS=true` adds the minimized semantic signal when authorized credentials are configured. The probe reports `review_required`; use the acceptance thresholds and evidence in the release criteria to decide promotion.
 
 [Terraform for an existing Dokploy installation](terraform/README.md) declares the project, environment and Compose source.
+
+## Integrated chat and observability
+
+The customer UI is at /chat. The advisor UI remains at /. The web demo uses separate synthetic sessions. For Telegram delivery, provision the bot token and configure the authorized chats before enabling the HTTPS webhook.
+
+Deploy compose.langfuse.yaml separately. Set LANGFUSE_SHARED_NETWORK to the application Compose network. Generate independent hexadecimal secrets for the Langfuse database, salt, encryption, auth, ClickHouse, Redis and storage variables declared in the Compose file. Set the generated LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY in both stacks, configure the operator account and use LANGFUSE_BASE_URL=http://langfuse-web:3000 for the worker. The UI binds to localhost for operator access through a tunnel. Keep env files private and pass them explicitly with --env-file.
+
+Create a candidate in administration with a public_answer prompt. From a private mounted copy of the evaluation inputs, run:
+
+```sh
+pnpm --filter @claro/backend quality:compare GOLDEN.jsonl SCENARIOS.jsonl CANDIDATE_ID REPORT.json
+pnpm --filter @claro/backend quality:review CANDIDATE_ID REVIEW.json
+```
+
+The comparison runs locally by default. Set `PROMPT_EVAL_PROVIDERS=live` only for suites and evidence authorized for processing by the configured providers. Record the authorization with the release evidence. The review JSON includes the three comparison hashes under evidence. Golden entries use correct, grounded and artifact. Critical scenario entries use passed and artifact. Reference the controlled platform replay or reviewed case evidence by artifact ID. The administrator can activate a candidate with a passing report against the current baseline.

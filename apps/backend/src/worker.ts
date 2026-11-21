@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { setTimeout as wait } from 'node:timers/promises';
 import { Logger, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { createAgent, createJevDecisionAdapter, createOpenAIEvidenceSelector, createKnowledgeMcpAdapter } from '@claro/agent';
+import { createAgent, createJevDecisionAdapter, createOpenAIPublicWriter, createKnowledgeMcpAdapter, type AgentObservation } from '@claro/agent';
 import { Prediction, RunResult, type AgentTurn, type Proposal, type RunResume } from '@claro/contracts';
 import { createClient } from 'redis';
 import type { DataSource } from 'typeorm';
@@ -30,16 +30,15 @@ const routerKey = process.env.OPENROUTER_API_KEY;
 const openaiKey = process.env.OPENAI_API_KEY;
 const mcpUrl = process.env.KNOWLEDGE_MCP_URL;
 const knowledgeToken = process.env.KNOWLEDGE_SERVICE_TOKEN;
-const generationModels = {
-  ...(process.env.OPENAI_MODEL_ECONOMICO ? {economico:process.env.OPENAI_MODEL_ECONOMICO} : {}),
-  ...(process.env.OPENAI_MODEL_INTERMEDIO ? {intermedio:process.env.OPENAI_MODEL_INTERMEDIO} : {}),
-  ...(process.env.OPENAI_MODEL_COMPLEJO ? {complejo:process.env.OPENAI_MODEL_COMPLEJO} : {})
-};
+const observations = new Map<string, AgentObservation[]>();
 const runner = createAgent(businessPorts(db), {
   knowledge: mcpUrl && knowledgeToken ? createKnowledgeMcpAdapter({ url: mcpUrl, token: knowledgeToken }) : databaseKnowledge(db),
   decision: live && routerKey ? createJevDecisionAdapter({ apiKey: routerKey, model: process.env.JEV_MODEL || 'typesafe/jev-1.14' }) : undefined,
-  evidenceSelector: live && openaiKey && Object.keys(generationModels).length
-    ? createOpenAIEvidenceSelector({apiKey:openaiKey, models:generationModels}) : undefined,
+  writer: live && openaiKey ? createOpenAIPublicWriter({apiKey:openaiKey}) : undefined,
+  observe: (runId, item) => {
+    const list = observations.get(runId);
+    if (list) list.push(item);
+  },
   checkpoints: {
     async get(key) {
       const [row] = await db.query('SELECT result FROM agent_checkpoint WHERE id=$1', [key]);
@@ -79,10 +78,14 @@ async function project(turn: AgentTurn, result: RunResult) {
         await audit(tx, row.id, 'handoff');
       }
       const text = result.type === 'answer'
-        ? [result.answer, ...result.citations.map(cite => `Fuente: ${cite.title} · ${cite.version}${cite.url ? ` · ${cite.url}` : ''}`)].join('\n')
+        ? row.snapshot.channel === 'telegram'
+          ? [result.answer, ...result.citations.map(cite => `Fuente: ${cite.title} · ${cite.version}${cite.url ? ` · ${cite.url}` : ''}`)].join('\n')
+          : result.answer
         : result.reason;
       const msg = addMessage(row, 'agente', text.slice(0, 4096), result.type === 'answer' ? result.citations : []);
-      await enqueue(tx, `deliver:${msg.id}`, row.id, 'deliver', { text: msg.text, sender: 'agente', revision: turn.case_revision, turn_seq: turn.turn_seq });
+      if (row.snapshot.channel === 'telegram') {
+        await enqueue(tx, `deliver:${msg.id}`, row.id, 'deliver', { text: msg.text, sender: 'agente', revision: turn.case_revision, turn_seq: turn.turn_seq });
+      }
     }
     if (turn.audience === 'asesor' && result.type === 'card') {
       if (result.card.proposal) {
@@ -208,10 +211,17 @@ async function handle(job: CaseJob) {
       const { row } = await runContext(db.manager, job.payload.run_id, false);
       if (!stillCurrent(row, job.payload)) return audit(db.manager, job.case_id, 'agent_stale');
       const started = Date.now();
-      const result = await runner.run(job.payload);
+      const spans: AgentObservation[] = [];
+      observations.set(job.payload.run_id, spans);
+      const result = await runner.run(job.payload).finally(() => observations.delete(job.payload.run_id));
       await project(job.payload, result);
       await audit(db.manager, job.case_id, 'agent_latency', { ms: Date.now() - started });
-      if (await exportAgentSpan(job.payload, started, result.route, result.type)) {
+      for (const item of spans) {
+        if (item.name === 'generation.openai' || item.name === 'decision.jev') {
+          await audit(db.manager, job.case_id, item.name, { ...item.metadata, run_id:job.payload.run_id, ms: item.ended - item.started });
+        }
+      }
+      if (await exportAgentSpan(job.payload, started, result.route, result.type, spans)) {
         await audit(db.manager, job.case_id, 'langfuse_exported');
       }
       if (redis?.isReady) {
@@ -220,7 +230,15 @@ async function handle(job: CaseJob) {
       break;
     }
     case 'resume': await resume(job.payload); break;
-    case 'effect': await executeEffect(job); break;
+    case 'effect': {
+      const started = Date.now();
+      await executeEffect(job);
+      const [record] = await db.query('SELECT r.turn,p.proposal FROM retention_proposal p JOIN agent_run r ON r.id=p.run_id WHERE p.id=$1', [job.payload.proposal_id]);
+      if (record) await exportAgentSpan(record.turn, started, 'effect', record.proposal.status, [{
+        name:'effect', started, ended:Date.now(), metadata:{ status:record.proposal.status, kind:record.proposal.kind ?? 'retention_offer' }
+      }]);
+      break;
+    }
     case 'deliver': await deliver(job); break;
     case 'ml': await predict(job.payload); break;
   }

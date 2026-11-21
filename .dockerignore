@@ -11,3 +11,7 @@
 !.env.example
 coverage
 **/*.pyc
+**/*.env
+**/acceso-*.txt
+.corepack
+output

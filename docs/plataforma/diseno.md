@@ -1,6 +1,6 @@
 # SDD de plataforma web y backend
 
-**Responsabilidad.** Dar al cliente acceso por Telegram y al asesor y al administrador acceso por consola. La plataforma posee casos, identidad, integraciones con CRM y facturación, aprobaciones, revisiones activas del agente y vistas del tablero. Puede implementarse con stubs de agente y ML.
+**Responsabilidad.** Dar al cliente acceso por chat web y Telegram y al asesor y al administrador acceso por consola. La plataforma posee casos, identidad, integraciones con CRM y facturación, aprobaciones, revisiones activas del agente y vistas del tablero. Puede implementarse con stubs de agente y ML.
 
 [Arquitectura Docker](../02-arquitectura-docker.md) · [Guía de arranque](../01-arranque.md) · [Inicio](../../README.md) · [DDD compartido](../03-dominio.md) · [Contratos](../04-contratos.md) · [Diseño de interfaz](#sistema-de-diseño-para-la-consola)
 
@@ -60,7 +60,7 @@ Separar permisos de soporte, operación, edición y publicación. Una configurac
 - **Calidad y agentes.** Exactitud, groundedness, Recall@k, citas, éxito por ruta, herramientas, errores, bloqueos y bucles. La fuente son Evals, trazas de Langfuse y auditoría de efectos.
 - **Operación, ML y DevOps.** p95, disponibilidad, costos, tokens y frescura del índice. Reportar F1, recall, modo y drift del modelo. CI aporta cobertura, lead time, tamaños de imagen y hallazgos de escaneo. Usar filtros por ambiente, fecha, canal y versión.
 
-OpenTelemetry une solicitudes, workers y dependencias. El Collector envía trazas saneadas a Langfuse Cloud y expone métricas para Prometheus. El tablero permite abrir una traza autorizada y muestra datos sintéticos y piloto como procedencias distintas. Presenta OpenAI Direct y Jev por OpenRouter como etapas y costos separados. [Diseño de observabilidad](observabilidad.md) [Definiciones de KPIs y metas](../06-calidad-y-release.md#métricas-de-aceptación) · [Enunciado](../06-calidad-y-release.md#métricas-de-aceptación)
+OpenTelemetry une solicitudes, workers y dependencias. El worker envía trazas OTLP saneadas a Langfuse autohospedado. Prometheus recoge las métricas técnicas. El tablero permite abrir una traza autorizada y muestra datos sintéticos y piloto como procedencias distintas. Presenta OpenAI Direct y Jev por OpenRouter como etapas y costos separados. [Diseño de observabilidad](observabilidad.md) [Definiciones de KPIs y metas](../06-calidad-y-release.md#métricas-de-aceptación) · [Enunciado](../06-calidad-y-release.md#métricas-de-aceptación)
 
 ## Sistema de diseño para la consola
 
@@ -73,7 +73,7 @@ Identidad de demo inspirada en Claro, con superficies claras, rojo para la acci�
 | Componentes | Chat y ficha con `ScrollArea`, `Tabs`, `Sheet`, `Badge`, `Skeleton` y `Alert`. Derivación y registro de oferta con `AlertDialog` que muestra acción, cliente enmascarado, consecuencias y confirmación. Tablero con `Card`, tabla, filtros y `Chart`. |
 | Interacción | Escritorio con bandeja, conversación y panel lateral. En móvil hacer accesible el panel con `Sheet`. Usar foco visible, teclado, etiquetas para estados y anuncios accesibles para cambios significativos del stream. Transiciones CSS cortas y discretas con `prefers-reduced-motion`. Motion se reserva para una transición que mejore orientación tras probar la interfaz. |
 
-Rutas de la consola: conversación y bandeja, detalle y citas del caso, fuentes y versiones, tablero. El cliente permanece en Telegram con mensajes breves y botones para continuar o pedir un asesor. [Theming de shadcn/ui](https://ui.shadcn.com/docs/theming)
+Rutas de la consola: conversación y bandeja, detalle y citas del caso, fuentes y versiones, tablero. El cliente continúa por el chat web o Telegram y conserva el hilo al pedir un asesor. [Theming de shadcn/ui](https://ui.shadcn.com/docs/theming)
 
 ## Inicio en paralelo y aceptación
 

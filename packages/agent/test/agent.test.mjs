@@ -50,3 +50,26 @@ test('MCP read-only adapter sends a minimized query and accepts structured docum
  assert.equal(result[0].id,'faq');const call=requests.find(r=>r?.method==='tools/call');assert.equal(call.params.name,'search_knowledge');assert.match(call.params.arguments.query,/E-202/);assert.doesNotMatch(JSON.stringify(call),/María|3101234567/);
 });
 test('knowledge adapter failures produce safe handoff',async()=>{const f=fixture();const a=createAgent(f.ports,{knowledge:{search:async()=>{throw Error('offline')}}});const result=await a.run(turn({audience:'cliente',text:'precio Fibra 500'}));assert.equal(result.type,'handoff');});
+
+test('public generation receives only current sources approved for the provider', async () => {
+  const { ports } = fixture({ verified:false });
+  const base = { title:'Fibra 500', excerpt:'Descripción del plan Fibra 500', version:'v1',
+    scope:'public', effective_from:'2026-01-01' };
+  const received = [];
+  const agent = createAgent(ports, {
+    documents: [
+      { ...base, id:'local-only' },
+      { ...base, id:'approved', provider_approved:true },
+      { ...base, id:'internal', scope:'advisor', provider_approved:true },
+      { ...base, id:'future', effective_from:'2026-12-01', provider_approved:true }
+    ],
+    writer: { write: async (topic, sources) => {
+      received.push([topic, sources.map(source => source.id)]);
+      return { answer:sources[0].excerpt, citations:sources };
+    } }
+  });
+  const result = await agent.run(turn({ audience:'cliente', attention_mode:'autoservicio',
+    text:'¿Qué incluye el plan fibra de María 3101234567?' }));
+  assert.equal(result.type, 'answer');
+  assert.deepEqual(received, [['plan fibra', ['approved']]]);
+});

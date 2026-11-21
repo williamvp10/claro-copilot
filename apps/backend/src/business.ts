@@ -60,13 +60,13 @@ export function businessPorts(db: DataSource): AgentPorts {
     },
     getCustomerContext: (runId) => scoped(runId, true, async (tx, row) => {
       await audit(tx, row.id, 'crm_read');
-      return row.contact_ref === 'C-1001' ? [
+      return (row.contact_ref === 'C-1001' || row.snapshot.channel === 'web') ? [
         fact('home-fibra-500', 'Hogar Fibra 500', '$109.900'), fact('mobile-max-60', 'Claro Max 60 GB', '$59.415')
       ] : row.contact_ref === 'C-1013' ? [fact('tenure','Antigüedad en meses','26')] : [];
     }),
     getBilling: (runId) => scoped(runId, true, async (tx, row) => {
       await audit(tx, row.id, 'billing_read');
-      return row.contact_ref === 'C-1001' ? [
+      return (row.contact_ref === 'C-1001' || row.snapshot.channel === 'web') ? [
         fact('invoice-nov-status', 'Factura de noviembre', 'Pendiente'), fact('invoice-nov-amount', 'Saldo', '$169.315'),
         fact('invoice-nov-due', 'Vencimiento', '25 de noviembre de 2026')
       ] : [];

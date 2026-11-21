@@ -110,11 +110,30 @@ export class SupportPriority1795260000004 implements MigrationInterface {
   }
 }
 
+export class WebChat1795260000005 implements MigrationInterface {
+  async up(db: QueryRunner) {
+    await db.query(`CREATE TABLE web_chat_session (
+      token_hash text PRIMARY KEY, case_id text NOT NULL UNIQUE REFERENCES attention_case(id),
+      expires_at timestamptz NOT NULL
+    );
+    CREATE INDEX web_chat_expiry ON web_chat_session(expires_at);
+    CREATE TABLE prompt_evaluation (
+      candidate_revision text PRIMARY KEY REFERENCES prompt_revision(revision),
+      base_revision text NOT NULL REFERENCES prompt_revision(revision),
+      report jsonb NOT NULL, completed_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE web_chat_rate (
+      scope text PRIMARY KEY, bucket timestamptz NOT NULL, total integer NOT NULL
+    );`);
+  }
+  async down(db: QueryRunner) { await db.query('DROP TABLE web_chat_rate, web_chat_session, prompt_evaluation'); }
+}
+
 export function createDatabase() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is required');
   return new DataSource({
-    type: 'postgres', url, migrations: [InitialSchema1795260000000, Knowledge1795260000001, Feedback1795260000002, BoundBootstrapCatalog1795260000003, SupportPriority1795260000004],
+    type: 'postgres', url, migrations: [InitialSchema1795260000000, Knowledge1795260000001, Feedback1795260000002, BoundBootstrapCatalog1795260000003, SupportPriority1795260000004, WebChat1795260000005],
     migrationsTableName: 'claro_migrations', synchronize: false
   });
 }

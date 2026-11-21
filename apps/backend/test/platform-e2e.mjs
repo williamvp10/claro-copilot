@@ -54,6 +54,48 @@ try {
   assert.ok(['failed','passed'].includes(gated.status));
   if (gated.status === 'failed') await request(api+`/admin/prompts/${candidate.revision}/activate`, {cookie:admin,method:'POST',status:403});
 
+  const startWeb = () => request(api+'/web-chat/session', {method:'POST',body:{}});
+  const [firstBrowser, otherBrowser] = await Promise.all([startWeb(), startWeb()]);
+  assert.notEqual(firstBrowser.json.conversation_id, otherBrowser.json.conversation_id);
+  await request(api+'/web-chat/history', {status:401});
+  const readWeb = async (session=firstBrowser) => (await request(api+'/web-chat/history',{cookie:session.cookie})).json;
+  const sendWeb = (text, idempotency_key=randomUUID()) => request(api+'/web-chat/messages',{
+    cookie:firstBrowser.cookie,method:'POST',body:{text,idempotency_key}
+  });
+  const webKey=randomUUID();
+  await Promise.all([sendWeb('¿Qué incluye el plan Fibra 500?',webKey),sendWeb('¿Qué incluye el plan Fibra 500?',webKey)]);
+  const publicAnswer=await until(async()=>{const history=await readWeb();return history.messages.some(m=>m.citations?.length)?history:null;}, 'public web citation');
+  assert.equal(publicAnswer.messages.filter(m=>m.actor==='cliente').length,1);
+  assert.equal((await readWeb(otherBrowser)).messages.length,0);
+  const events=await fetch(target+api+'/web-chat/events',{
+    headers:{ Cookie:firstBrowser.cookie, 'Last-Event-ID':String(publicAnswer.cursor) },signal:AbortSignal.timeout(10000)
+  });
+  assert.ok(events.headers.get('content-type')?.includes('text/event-stream'));
+  const readerWeb=events.body.getReader();
+  await sendWeb('¿Cuánto debo de mi factura de noviembre?');
+  let eventText='';
+  while (!eventText.includes('event: conversation.updated')) {
+    const {value,done}=await readerWeb.read();
+    if(done) break;
+    eventText+=new TextDecoder().decode(value);
+  }
+  await readerWeb.cancel();
+  assert.match(eventText,/conversation.updated/);
+  const webCase=await until(async()=> (await get('/cases')).find(c=>c.conversation_id===publicAnswer.conversation_id),'web handoff to advisor');
+  await post(`/cases/${webCase.id}/take`);
+  await verify(webCase.id);
+  await cards(webCase.id,x=>x.card?.facts.some(f=>f.value==='$169.315'));
+  const webHistory=await readWeb();
+  assert.equal(webHistory.conversation_id,webCase.conversation_id);
+  assert.equal(webHistory.attention_mode,'asistido');
+  assert.equal(Object.hasOwn(webHistory,'card'),false);
+  assert.equal(Object.hasOwn(webHistory,'owner_id'),false);
+  assert.doesNotMatch(JSON.stringify(webHistory),/169\.315/);
+  await post(`/cases/${webCase.id}/messages`,{text:'Te confirmo que tu factura está pendiente.',idempotency_key:randomUUID()});
+  assert.equal((await readWeb()).messages.at(-1).actor,'asesor');
+  assert.equal((await db.query("SELECT count(*)::integer AS n FROM outbox WHERE case_id=$1 AND kind='deliver'",[webCase.id])).rows[0].n,0);
+  console.log('Web chat verified: independent sessions, reconnected SSE, private card and same-thread response.');
+
   await incoming('C-1001','Sale E-202 y no se ve ningún canal.');
   await until(async () => (await db.query("SELECT snapshot FROM attention_case WHERE contact_ref='C-1001'")).rows[0]?.snapshot.messages.some(m=>m.actor==='agente' && m.citations?.some(c=>c.id==='faq-decodificador-e202')), 'E-202 with correct retrieval');
 

@@ -8,7 +8,7 @@ export const Document = Citation.extend({
   url: z.url({protocol:/^https$/}).optional(), excerpt:z.string().trim().min(1).max(8000),
   scope: z.enum(['public', 'advisor']), effective_from: z.iso.date(), effective_to: z.iso.date().optional(),
   status: z.enum(['ready', 'draft']).default('ready'), channels: z.array(z.string()).optional(),
-  products: z.array(z.string()).optional(), type: z.string().optional()
+  products: z.array(z.string()).optional(), type: z.string().optional(), provider_approved: z.literal(true).optional()
 }).refine(doc => !doc.effective_to || doc.effective_to > doc.effective_from, { message: 'Invalid validity interval' });
 
 const publicDocuments: z.input<typeof Document>[] = [
@@ -67,7 +67,7 @@ export class Knowledge1795260000001 implements MigrationInterface {
 
 type SearchContext = Parameters<KnowledgeAdapter['search']>[1];
 type SearchRow = { id: string; version: string; document: KnowledgeDocument };
-export function databaseKnowledge(db: DataSource): KnowledgeAdapter {
+export function databaseKnowledge(db: Pick<DataSource, 'query'>): KnowledgeAdapter {
   return {
     async search(query: string, context: SearchContext) {
       const words = terms(query);

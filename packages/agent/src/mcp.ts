@@ -23,6 +23,7 @@ function documents(value:unknown):KnowledgeDocument[] {
   if (x.effective_to !== undefined && (typeof x.effective_to!=='string' || !/^\d{4}-\d{2}-\d{2}$/.test(x.effective_to))) throw new Error('Invalid knowledge date');
   if (x.status !== undefined && !['ready','draft'].includes(x.status as string)) throw new Error('Invalid knowledge status');
   if (x.channels !== undefined && (!Array.isArray(x.channels) || x.channels.some(a=>typeof a!=='string'))) throw new Error('Invalid knowledge channels');
+  if (x.provider_approved !== undefined && x.provider_approved !== true) throw new Error('Invalid provider approval');
   if (x.url !== undefined && typeof x.url!=='string') throw new Error('Invalid knowledge URL');
   return x as unknown as KnowledgeDocument;
  });
