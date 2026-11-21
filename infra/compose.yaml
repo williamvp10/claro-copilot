@@ -25,6 +25,14 @@ x-app: &app
     DEMO_ASSIGNED_CHAT_ID: ${DEMO_ASSIGNED_CHAT_ID:-}
     ML_API_URL: ${ML_API_URL:-}
     ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-}
+    DEMO_BUSINESS_DATE: ${DEMO_BUSINESS_DATE:-2026-11-18}
+    AGENT_PROVIDERS: ${AGENT_PROVIDERS:-fixtures}
+    OPENAI_MODEL_ECONOMICO: ${OPENAI_MODEL_ECONOMICO:-}
+    OPENAI_MODEL_INTERMEDIO: ${OPENAI_MODEL_INTERMEDIO:-}
+    OPENAI_MODEL_COMPLEJO: ${OPENAI_MODEL_COMPLEJO:-}
+    JEV_MODEL: ${JEV_MODEL:-typesafe/jev-1.14}
+    KNOWLEDGE_MCP_URL: ${KNOWLEDGE_MCP_URL:-}
+    KNOWLEDGE_SERVICE_TOKEN: ${KNOWLEDGE_SERVICE_TOKEN:-}
     OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
@@ -107,6 +115,17 @@ services:
     depends_on:
       api: {condition: service_healthy}
     ports: ['${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3000}:3000']
+  knowledge:
+    <<: *app
+    profiles: [knowledge]
+    command: [node, apps/backend/dist/mcp.js]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      KNOWLEDGE_SERVICE_TOKEN: ${KNOWLEDGE_SERVICE_TOKEN:-}
+      HOST: 0.0.0.0
+      MCP_PORT: '3030'
+    depends_on:
+      migrate: {condition: service_completed_successfully}
   ml-init:
     profiles: [ml, ml-jobs]
     image: ${ML_IMAGE:-claro-ml:local}

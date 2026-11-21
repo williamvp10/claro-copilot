@@ -2,7 +2,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [develop, main]
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,9 +19,9 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm test
-      - run: pnpm build
       - name: Validate Compose
         env:
           DATABASE_URL: postgresql://claro:ci@postgres:5432/claro_demo
@@ -54,6 +54,8 @@ jobs:
       PORT: '39081'
       DEMO_MODE: 'true'
       DEMO_INGRESS_TOKEN: ci-only-demo-ingress-token
+      ML_API_URL: http://127.0.0.1:39199
+      ML_SERVICE_TOKEN: ci-only-shadow-service-token
       DEMO_HOLDER_CODE: '927186'
       DEMO_ASESSOR_EMAIL: asesor@example.test
       DEMO_ASESSOR_PASSWORD: CI-only-advisor-password-123
@@ -83,9 +85,19 @@ jobs:
           trap 'kill "$api_pid" "$worker_pid" 2>/dev/null || true; cat api-e2e.log worker-e2e.log' EXIT
           node --input-type=module -e 'for(let i=0;i<60;i++){try{if((await fetch(process.env.BETTER_AUTH_URL+"/readyz")).ok)process.exit(0)}catch{} await new Promise(r=>setTimeout(r,500))}process.exit(1)'
           pnpm --filter @claro/backend test:integration
+  ml-checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - run: uv run --frozen pytest -q
   candidate:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [checks, platform-integration]
+    needs: [checks, platform-integration, ml-checks]
     runs-on: ubuntu-latest
     permissions:
       contents: read
