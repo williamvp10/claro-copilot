@@ -2,13 +2,25 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { KnowledgeAdapter, KnowledgeDocument } from './index.js';
 
-export type KnowledgeMcpOptions = {url:string; token?:string; timeoutMs?:number; fetch?:typeof globalThis.fetch};
+export type KnowledgeMcpOptions = {url:string; token?:string; trustedLocal?:boolean; timeoutMs?:number; fetch?:typeof globalThis.fetch};
 // Closed vocabulary prevents arbitrary names, addresses and account numbers being transmitted.
-const vocabulary = new Set('internet fibra hogar plan precio tarifa velocidad promocion descuento factura pago soporte modem wifi decodificador television televisor tv senal error refrescar reiniciar pantalla canal canales azul negro rojo rojo luz luces intermitente parpadea sin con no funciona instalacion repetidor ilimitado datos minutos mensajes red cobertura portabilidad cancelar mora visita ticket'.split(' '));
+const vocabulary = new Set((
+  'internet fibra hogar plan planes triple play max movil moviles pospago precio cuanto cuanta incluye bono ' +
+  'instalacion reconecta reconexion permanencia penalidad clausula regulacion prorrateo costo cargo compensacion ' +
+  'ajuste tarifa pqr plazo pin nip deuda deudas requisitos usuario clave contrasena recargo suspender restablezco ' +
+  'restablecer reinicio fabrica control parental antiguedad nuevo actuales cambiar cobertura velocidad promocion ' +
+  'descuento factura pago soporte modem wifi decodificador television televisor tv senal error refrescar reiniciar ' +
+  'pantalla canal canales azul negro rojo luz luces intermitente parpadea sin con no funciona repetidor ilimitado ' +
+  'datos minutos mensajes red portabilidad cancelar mora visita ticket'
+).split(' '));
 export function safeKnowledgeQuery(query:string):string {
  const normalized=query.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
  const terms=(normalized.match(/[a-z]+/g) ?? []).filter(word=>vocabulary.has(word)).slice(0,32);
  if (/\be[\s-]?202\b/i.test(normalized)) terms.push('E-202');
+ if (/\bztx[\s-]?f680\b/i.test(normalized)) terms.push('ZTX-F680');
+ if (/\bdecobox\s*4k\b/i.test(normalized)) terms.push('DecoBox 4K');
+ if (/\bluz\s+los\b/i.test(normalized)) terms.push('luz LOS');
+ for (const identifier of normalized.matchAll(/\b(?:fibra|triple play|max)\s+(100|150|200|250|300|400|500|600|900|1000|60|80)(?=\b)/g)) terms.push(identifier[0]);
  return [...new Set(terms)].join(' ') || 'informacion';
 }
 function documents(value:unknown):KnowledgeDocument[] {
@@ -33,13 +45,14 @@ export function createKnowledgeMcpAdapter(options:KnowledgeMcpOptions):Knowledge
  const url=new URL(options.url);
  if (!['http:','https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid knowledge MCP URL');
  if (options.token && url.protocol!=='https:' && !['localhost','127.0.0.1','[::1]','knowledge-mcp'].includes(url.hostname)) throw new Error('Bearer credentials require HTTPS or the private knowledge service');
+ const internal = options.trustedLocal === true && url.origin === 'http://knowledge-mcp:3030' && url.pathname === '/mcp' && Boolean(options.token);
  return {async search(query,context) {
   const timeout=options.timeoutMs ?? 3000;
   const transport=new StreamableHTTPClientTransport(url,{requestInit:{headers:options.token?{Authorization:`Bearer ${options.token}`}:{},signal:AbortSignal.timeout(timeout)},...(options.fetch?{fetch:options.fetch}:{})});
   const client=new Client({name:'claro-knowledge-reader',version:'1.0.0'});
   try {
    await client.connect(transport);
-   const result=await client.callTool({name:'search_knowledge',arguments:{query:safeKnowledgeQuery(query),business_date:context.business_date,audience:context.audience,channel:context.channel}},undefined,{timeout});
+   const result=await client.callTool({name:'search_knowledge',arguments:{query:internal ? query.slice(0,1024) : safeKnowledgeQuery(query),business_date:context.business_date,audience:context.audience,channel:context.channel}},undefined,{timeout});
    if (result.isError) throw new Error('Knowledge search failed');
    return documents(result.structuredContent);
   } finally { await client.close().catch(()=>undefined); }

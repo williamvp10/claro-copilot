@@ -32,7 +32,7 @@ const mcpUrl = process.env.KNOWLEDGE_MCP_URL;
 const knowledgeToken = process.env.KNOWLEDGE_SERVICE_TOKEN;
 const observations = new Map<string, AgentObservation[]>();
 const runner = createAgent(businessPorts(db), {
-  knowledge: mcpUrl && knowledgeToken ? createKnowledgeMcpAdapter({ url: mcpUrl, token: knowledgeToken }) : databaseKnowledge(db),
+  knowledge: mcpUrl && knowledgeToken ? createKnowledgeMcpAdapter({ url: mcpUrl, token: knowledgeToken, trustedLocal: true }) : databaseKnowledge(db),
   decision: live && routerKey ? createJevDecisionAdapter({ apiKey: routerKey, model: process.env.JEV_MODEL || 'typesafe/jev-1.14' }) : undefined,
   writer: live && openaiKey ? createOpenAIPublicWriter({apiKey:openaiKey}) : undefined,
   observe: (runId, item) => {

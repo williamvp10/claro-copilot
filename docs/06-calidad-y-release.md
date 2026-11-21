@@ -77,3 +77,16 @@ La suite local recorrió 30 preguntas golden y 19 escenarios complementarios sob
 La comparación con OpenAI y Jev repitió las 30 golden y los 19 escenarios bajo la misma instantánea, con una lista de 49 extractos públicos autorizados para procesamiento. Los pasos de cuenta se validaron localmente. Los dos prompts obtuvieron 4 de 30 coincidencias exactas, 0,11 de groundedness y 0,34 de Recall@5. El costo de generación observado fue USD 0,01322 en la activa y USD 0,01106 en la candidata. Cada revisión registró 18 resultados con generación aceptada. La candidata permanece bloqueada con el estado `review_required`.
 
 Las pruebas deterministas pasaron C-1001 en web, C-1004 y C-1007 con Telegram simulado, E-202 y CC-E13. La comparación de prompts y las pruebas de efectos aportan evidencias independientes. La validación con proveedores usó un plan ficticio preparado para ese fin.
+
+### Repetición tras el ajuste de RAG
+
+El análisis detectó preguntas con fuentes internas reproducidas en ámbito de cliente, tres boletines de referencia ausentes del índice y recuperaciones dominadas por términos comunes o por un solo documento. La rúbrica v2 fija el ámbito de asesor para las referencias internas, conserva la verificación de titularidad para las herramientas de cuenta y separa cobertura y evidencia de la coincidencia exacta. Los boletines se procesan localmente en el ámbito de asesor. El informe registra el top 5, la cobertura de hechos y si el respaldo se comprobó por extracto o con Jev. Las respuestas ambiguas conservan revisión.
+
+| Corrida de 30 preguntas golden y 19 escenarios | Exactitud golden | Recall@5 | Groundedness |
+| --- | ---: | ---: | ---: |
+| Control local con la recuperación anterior, el corpus actual y la rúbrica v2 | 8/30 | 0,487 | — |
+| Local con el RAG actualizado, el mismo corpus y la rúbrica v2 | 14/30 | 0,920 | — |
+| Remota con el RAG actualizado, prompt activo | 14/30 | 0,920 | 0,783 |
+| Remota con el RAG actualizado, prompt candidato | 14/30 | 0,920 | 0,739 |
+
+La comparación remota conserva 12 escenarios críticos por adjudicar con replays de plataforma. El candidato queda en `review_required`. Entre los fallos restantes hay respuestas que recuperan la fuente esperada y solo cubren una parte de los hechos, casos que requieren cálculo o decisión de una herramienta y casos sin cobertura completa en el juez semántico. Los umbrales de promoción se conservan. El resultado histórico de la rúbrica v1 sigue documentado arriba.

@@ -32,9 +32,9 @@ flowchart LR
 | Perfil | Procesos y almacenamiento |
 | --- | --- |
 | Base | Next.js sirve el chat en /chat y la consola en /. API, worker y migración usan la misma imagen. PostgreSQL conserva casos, sesiones web, acciones, ejecuciones y outbox. Redis conserva el identificador de la última ejecución con TTL. Los efectos de CRM y facturación usan fixtures y persistencia local. |
-| knowledge | MCP privado de solo lectura. El corpus aprobado se prepara fuera del repositorio y se carga con el comando de ingesta. Filtros de audiencia y vigencia, búsqueda de texto y vectores de hashing en pgvector, fusión RRF y orden léxico en el agente. |
+| knowledge | MCP privado de solo lectura. El corpus aprobado se prepara fuera del repositorio y se carga con el comando de ingesta. Filtros de audiencia y vigencia, búsqueda de texto y vectores de hashing en pgvector, fusión RRF y reordenamiento en el agente con términos de dominio, coincidencia ponderada y diversidad de fuentes. |
 | ml y ml-jobs | MLflow OSS registra modelos con SQLite y persistencia en mlflow-data. La publicación verifica el modelo y su firma. FastAPI carga el bundle fijado desde ml-models en solo lectura y guarda señales en ml-state. Los fallos del predictor se auditan y la atención continúa. |
-| observability | Prometheus obtiene métricas del backend. El agente exporta trazas OTLP saneadas a Langfuse. El Compose separado de Langfuse contiene web, worker, PostgreSQL, ClickHouse, Redis y almacenamiento compatible con S3. |
+| observability | Prometheus obtiene métricas del backend. El agente exporta trazas OTLP saneadas a Langfuse. El Compose separado de Langfuse contiene web, worker, PostgreSQL, ClickHouse, Redis y almacenamiento compatible con S3. ClickHouse escucha en la red privada IPv4 y el worker espera el arranque verificado del servicio web. |
 
 ## Atención y acción aprobada
 

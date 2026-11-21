@@ -2,6 +2,8 @@ export { createOpenAIPublicWriter, validateDraft } from './generation.js';
 export type { AgentObservation, PublicWriter } from './generation.js';
 import type { AgentObservation, PublicWriter } from './generation.js';
 import { safeKnowledgeQuery } from './mcp.js';
+import { rankKnowledge } from './retrieval.js';
+export { retrievalTerms } from './retrieval.js';
 export { createKnowledgeMcpAdapter, safeKnowledgeQuery } from './mcp.js';
 export type { KnowledgeMcpOptions } from './mcp.js';
 export { createJevDecisionAdapter, createOpenAIEvidenceSelector, createJevSemanticEvaluator } from './providers.js';
@@ -24,10 +26,6 @@ const has = (s: string, re: RegExp) => re.test(norm(s));
 const defaultDocuments: KnowledgeDocument[] = [{ id: 'catalogo-2026-fibra500', title: 'Catálogo de Planes y Tarifas 2026, pág. 1', version: 'CAT-2026 v1.0', excerpt: 'Hogar Fibra 500: 500 Mbps, $109.900 mensuales, módem WiFi 6 y 1 repetidor WiFi. Los precios incluyen IVA.', scope: 'public', effective_from: '2026-11-01', status: 'ready' }];
 function allowed(doc: KnowledgeDocument, turn: AgentTurn): boolean {
   return doc.status !== 'draft' && doc.effective_from <= turn.business_date && (!doc.effective_to || turn.business_date < doc.effective_to) && (turn.audience === 'asesor' || doc.scope === 'public') && (!doc.channels || doc.channels.includes(turn.channel));
-}
-function score(query: string, d: KnowledgeDocument): number {
-  const q = new Set(tokens(query)), words = new Set(tokens(`${d.title} ${d.excerpt}`));
-  return [...q].reduce((n, word) => n + (words.has(word) ? 1 : 0), 0);
 }
 function citation(doc: KnowledgeDocument): Citation { const { id, title, excerpt, version, url } = doc; return { id, title, excerpt, version, ...(url ? { url } : {}) }; }
 function classify(text: string): Intent {
@@ -84,7 +82,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     const started = Date.now();
     let docs: KnowledgeDocument[];
     try { docs = options.knowledge ? await options.knowledge.search(turn.text, { business_date: turn.business_date, audience: turn.audience, channel: turn.channel }) : options.documents ?? defaultDocuments; } catch { return []; }
-    docs = docs.filter(d => allowed(d, turn) && score(turn.text, d) > 0).sort((a,b) => score(turn.text,b) - score(turn.text,a));
+    docs = rankKnowledge(turn.text, docs.filter(d => allowed(d, turn)));
     if (options.rerank && docs.length) {
       try {
         const candidates = docs; const reordered = await options.rerank(turn.text, candidates);
@@ -103,7 +101,14 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
   type CaseState = Awaited<ReturnType<AgentPorts['readCaseForRun']>>;
   const GraphState = Annotation.Root({ turn: Annotation<AgentTurn>(), caseState: Annotation<CaseState>(), intent: Annotation<Intent>(), profile: Annotation<Decision['complexity']>(), publicPrompt: Annotation<string>(), result: Annotation<RunResult>() });
   async function resolve(turn: AgentTurn, state: CaseState, intent: Intent, profile: Decision['complexity'], publicPrompt: string): Promise<RunResult> {
-    if (intent === 'consulta_planes' || (intent === 'soporte_tecnico' && !state.verified)) {
+    if (has(turn.text,/\b(cotizacion bursatil|bolsa de valores|precio de (la accion|las acciones)|criptomoneda|pronostico bursatil)\b/)) {
+      return {type:'handoff',reason:'Puedo ayudarte con planes, facturas y soporte de Claro.',pending:'Consulta fuera del alcance',route:'fuera_de_alcance'};
+    }
+    const policyQuestion = has(turn.text,/\b(cual|cuales|cuanto|cuanta|como|que|plazo|politica|contrato|clausula|penalidad|nip|pqr|requisitos)\b/)
+      && !has(turn.text,/\b(mi (factura|saldo|cuenta)|mi (plan|linea) actual|mi (vencimiento|deuda)|quiero cancelar|c-\d{4})\b/);
+    const advisorKnowledge = turn.audience === 'asesor' && !state.verified;
+    const generalPortability = intent === 'portabilidad' && policyQuestion && !state.verified;
+    if (intent === 'consulta_planes' || (intent === 'soporte_tecnico' && !state.verified) || generalPortability || (advisorKnowledge && policyQuestion)) {
       const documents = await retrieve(turn, profile);
       const citations = documents.map(citation);
       if (!citations.length) return turn.audience === 'asesor' ? card(intent, 'No hay evidencia vigente suficiente.', [], [], ['Consultar fuente autorizada'], 'Solicitar información adicional o derivar.', ['missing_evidence']) : { type:'handoff', reason:'No encontré información vigente suficiente para responder.', pending:'Consultar fuente autorizada', route:intent };

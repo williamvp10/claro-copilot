@@ -36,8 +36,15 @@ services:
     depends_on: *dependencies
     networks: [default, application]
     ports: ['127.0.0.1:${LANGFUSE_UI_PORT:-39085}:3000']
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/api/public/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 45s
     environment:
       <<: *observability
+      HOSTNAME: 0.0.0.0
       NEXTAUTH_SECRET: ${LANGFUSE_AUTH_SECRET:?Set LANGFUSE_AUTH_SECRET}
       AUTH_DISABLE_SIGNUP: 'true'
       LANGFUSE_INIT_ORG_ID: claro
@@ -51,7 +58,9 @@ services:
   langfuse-worker:
     image: docker.langfuse.com/langfuse/langfuse-worker:4.83.0
     restart: unless-stopped
-    depends_on: *dependencies
+    depends_on:
+      <<: *dependencies
+      langfuse-web: {condition: service_healthy}
     environment: *observability
   lf-postgres:
     image: postgres:17-alpine
@@ -86,12 +95,16 @@ services:
       CLICKHOUSE_USER: langfuse
       CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: '1'
-    volumes: [clickhouse:/var/lib/clickhouse, clickhouse-logs:/var/log/clickhouse-server]
+    volumes:
+      - clickhouse:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+      - ./langfuse/clickhouse.xml:/etc/clickhouse-server/config.d/99-claro-ipv4.xml:ro
     healthcheck:
       test: [CMD-SHELL, 'clickhouse-client --host lf-clickhouse --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --query "SELECT 1" >/dev/null']
       interval: 5s
-      timeout: 3s
+      timeout: 8s
       retries: 20
+      start_period: 30s
   lf-storage:
     image: cgr.dev/chainguard/minio:latest
     restart: unless-stopped

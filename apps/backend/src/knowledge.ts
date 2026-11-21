@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { MigrationInterface, QueryRunner, DataSource, EntityManager } from 'typeorm';
 import { Citation } from '@claro/contracts';
-import type { KnowledgeAdapter, KnowledgeDocument } from '@claro/agent';
+import { retrievalTerms, type KnowledgeAdapter, type KnowledgeDocument } from '@claro/agent';
 
 export const Document = Citation.extend({
   url: z.url({protocol:/^https$/}).optional(), excerpt:z.string().trim().min(1).max(8000),
@@ -70,7 +70,7 @@ type SearchRow = { id: string; version: string; document: KnowledgeDocument };
 export function databaseKnowledge(db: Pick<DataSource, 'query'>): KnowledgeAdapter {
   return {
     async search(query: string, context: SearchContext) {
-      const words = terms(query);
+      const words = retrievalTerms(query);
       if (!words.length) return [];
       const filter = `document->>'status'='ready' AND (document->>'scope'='public' OR $2='asesor')
         AND document->>'effective_from'<=$3 AND (document->>'effective_to' IS NULL OR document->>'effective_to'>$3)
@@ -81,11 +81,11 @@ export function databaseKnowledge(db: Pick<DataSource, 'query'>): KnowledgeAdapt
           AND table_name='knowledge_document' AND column_name='embedding') AS dense`),
         db.query(`SELECT id,version,document FROM knowledge_document WHERE ${filter}
           AND lexical @@ to_tsquery('spanish',$1)
-          ORDER BY ts_rank_cd(lexical,to_tsquery('spanish',$1)) DESC,id,version LIMIT 12`, params) as Promise<SearchRow[]>
+          ORDER BY ts_rank_cd(lexical,to_tsquery('spanish',$1), 32) DESC,id,version LIMIT 36`, params) as Promise<SearchRow[]>
       ]);
       const semantic: SearchRow[] = dense ? await db.query(`SELECT id,version,document FROM knowledge_document WHERE ${filter}
         AND $1<>'' AND embedding IS NOT NULL AND (embedding <=> $5::vector)<0.70
-        ORDER BY embedding <=> $5::vector,id,version LIMIT 12`, [...params, encode(query)]) : [];
+        ORDER BY embedding <=> $5::vector,id,version LIMIT 16`, [...params, encode(query)]) : [];
       const ranking = new Map<string,{ score:number; document:KnowledgeDocument }>();
       for (const list of [lexical, semantic]) {
         list.forEach(({ id, version, document }, index) => {
@@ -93,7 +93,7 @@ export function databaseKnowledge(db: Pick<DataSource, 'query'>): KnowledgeAdapt
           ranking.set(key, {document, score:(ranking.get(key)?.score ?? 0) + 1 / (60 + index + 1)});
         });
       }
-      return [...ranking.values()].sort((a,b)=>b.score-a.score).slice(0,12).map(result=>result.document);
+      return [...ranking.values()].sort((a,b)=>b.score-a.score).slice(0,40).map(result=>result.document);
     }
   };
 }

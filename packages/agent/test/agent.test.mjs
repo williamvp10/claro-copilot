@@ -71,5 +71,28 @@ test('public generation receives only current sources approved for the provider'
   const result = await agent.run(turn({ audience:'cliente', attention_mode:'autoservicio',
     text:'¿Qué incluye el plan fibra de María 3101234567?' }));
   assert.equal(result.type, 'answer');
-  assert.deepEqual(received, [['plan fibra', ['approved']]]);
+  assert.deepEqual(received, [['incluye plan fibra', ['approved']]]);
+});
+
+test('an advisor can retrieve general policy without unlocking an account or publishing it to the customer', async () => {
+  const f = fixture({verified:false});
+  const document = {id:'policy-billing-001', title:'Reglas de facturación', excerpt:'El ajuste general requiere autorización del supervisor.',
+    version:'1', scope:'advisor', effective_from:'2026-01-01'};
+  const a = createAgent(f.ports,{documents:[document]});
+  const question = '¿Cuál es la política de ajuste de facturación?';
+  const advisor = await a.run(turn({text:question}));
+  assert.deepEqual(advisor.card.citations.map(item=>item.id),[document.id]);
+  assert.deepEqual(f.calls,[]);
+  const customer = await a.run(turn({run_id:'public',audience:'cliente',attention_mode:'autoservicio',text:question}));
+  assert.equal(customer.type,'handoff');
+  assert.deepEqual(f.calls,[]);
+});
+
+test('a stock forecast never receives a catalog answer', async () => {
+  const {ports} = fixture();
+  const agent = createAgent(ports);
+  const result = await agent.run(turn({audience:'cliente',attention_mode:'autoservicio',
+    text:'¿Cuál será el precio de las acciones de una compañía?'}));
+  assert.equal(result.type,'handoff');
+  assert.equal(result.route,'fuera_de_alcance');
 });

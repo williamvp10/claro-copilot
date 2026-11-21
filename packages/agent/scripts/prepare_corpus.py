@@ -12,13 +12,15 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
+from email import policy
+from email.parser import BytesParser
 from pathlib import Path
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
 from pypdf import PdfReader
 
-# No directories are globbed: correspondence, transcripts and customer records are excluded.
+# No directories are globbed. Three reviewed operational bulletins are advisor-only; transcripts and customer records are excluded.
 # Documents without an explicit effective date use the exercise snapshot date, not a claimed publication date.
 @dataclass(frozen=True)
 class Source:
@@ -42,6 +44,9 @@ SOURCES = (
     Source('01_documentos/contratos_politicas/Politica_Facturacion_y_Pagos.docx','facturacion','Política de facturación','demo-2026-11-18','advisor','politica'),
     Source('01_documentos/contratos_politicas/Contrato_Servicios_Hogar.docx','contrato-hogar','Contrato de servicios hogar','demo-2026-11-18','advisor','contrato'),
     Source('01_documentos/contratos_politicas/Contrato_Servicios_Movil_Pospago.docx','contrato-movil','Contrato de servicios móviles pospago','demo-2026-11-18','advisor','contrato'),
+    Source('01_documentos/correos/01_recordatorio_promo_fibra500.eml','boletin-promo','Alcance de la Promoción Fibra 500','boletin-2026-11-09','advisor','boletin','2026-11-09'),
+    Source('01_documentos/correos/02_incidente_masivo_chapinero.eml','boletin-incidente','Incidente de fibra en Chapinero y compensación','boletin-2026-11-13','advisor','boletin','2026-11-13'),
+    Source('01_documentos/correos/03_nuevo_refresco_senal_app.eml','boletin-refresco','Refrescar señal de TV desde Mi Claro','boletin-2026-11-03','advisor','boletin','2026-11-03'),
 )
 MAX_CHUNK = 1800
 WORD = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
@@ -157,6 +162,13 @@ def prepare(root: Path) -> list[dict[str,str]]:
             blocks = docx_blocks(path)
         elif path.suffix == '.md':
             blocks = markdown_blocks(path)
+        elif path.suffix == '.eml' and source.scope == 'advisor':
+            message = BytesParser(policy=policy.default).parsebytes(path.read_bytes())
+            body = message.get_body(preferencelist=('plain',))
+            if body is None:
+                raise ValueError(f'Missing plain text bulletin: {path.name}')
+            content = re.sub(r'[\w.+-]+@[\w.-]+\.[a-z]{2,}', '[correo]', body.get_content(), flags=re.I)
+            blocks = [('Boletín interno', content)]
         else:
             raise ValueError(f'Unsupported source: {source.path}')
         count = 0
