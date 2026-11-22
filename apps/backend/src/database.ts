@@ -1,5 +1,6 @@
 import { DataSource, type EntityManager, type MigrationInterface, type QueryRunner } from 'typeorm';
 import { BoundBootstrapCatalog1795260000003, Knowledge1795260000001 } from './knowledge.js';
+import type { AccountInquiry } from './demo-accounts.js';
 import type { AgentTurn, CaseSnapshot, Intent, RunResume } from '@claro/contracts';
 
 export class InitialSchema1795260000000 implements MigrationInterface {
@@ -129,17 +130,40 @@ export class WebChat1795260000005 implements MigrationInterface {
   async down(db: QueryRunner) { await db.query('DROP TABLE web_chat_rate, web_chat_session, prompt_evaluation'); }
 }
 
+export class WebDemoAccount1795260000006 implements MigrationInterface {
+  async up(db: QueryRunner) {
+    await db.query(`CREATE TABLE demo_customer (
+      ref text PRIMARY KEY, email text NOT NULL UNIQUE, phone text NOT NULL UNIQUE, profile jsonb NOT NULL
+    );
+    ALTER TABLE attention_case
+      ADD COLUMN account_ref text REFERENCES demo_customer(ref),
+      ADD COLUMN account_inquiry text CHECK (account_inquiry IN ('invoice','balance','plans','tickets')),
+      ADD COLUMN account_challenge_ref text REFERENCES demo_customer(ref),
+      ADD COLUMN account_challenge_id uuid,
+      ADD COLUMN account_challenge_expires_at timestamptz;`);
+  }
+  async down(db: QueryRunner) {
+    await db.query(`ALTER TABLE attention_case DROP COLUMN account_challenge_expires_at,
+      DROP COLUMN account_challenge_id, DROP COLUMN account_challenge_ref, DROP COLUMN account_inquiry, DROP COLUMN account_ref;
+      DROP TABLE demo_customer;`);
+  }
+}
+
 export function createDatabase() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is required');
   return new DataSource({
-    type: 'postgres', url, migrations: [InitialSchema1795260000000, Knowledge1795260000001, Feedback1795260000002, BoundBootstrapCatalog1795260000003, SupportPriority1795260000004, WebChat1795260000005],
+    type: 'postgres', url, migrations: [InitialSchema1795260000000, Knowledge1795260000001, Feedback1795260000002, BoundBootstrapCatalog1795260000003, SupportPriority1795260000004, WebChat1795260000005, WebDemoAccount1795260000006],
     migrationsTableName: 'claro_migrations', synchronize: false
   });
 }
 
 export const DATABASE = Symbol('DATABASE');
-export type CaseRow = { id: string; contact_ref: string; snapshot: CaseSnapshot; handoff_pending: string | null; intent_hint: Intent | null };
+export type CaseRow = {
+  id: string; contact_ref: string; snapshot: CaseSnapshot; handoff_pending: string | null; intent_hint: Intent | null;
+  account_ref?: string | null; account_inquiry?: AccountInquiry | null;
+  account_challenge_ref?: string | null; account_challenge_id?: string | null; account_challenge_expires_at?: Date | null;
+};
 export type ContactRow = { ref: string; chat_id: string | null; display_name: string; direct_owner: string | null; enabled: boolean; fixture: string };
 export type JobPayloads = {
   run: AgentTurn;

@@ -136,7 +136,9 @@ El ejemplo fija los valores iniciales para evaluación. El modo de ML se lee del
 | --- | --- |
 | POST /api/v1/web-chat/session | Emite o recupera una sesión sintética mediante cookie HttpOnly y SameSite. La sesión dura 24 horas. |
 | POST /api/v1/web-chat/messages | Recibe texto e idempotency_key. La API obtiene canal, rol y expediente de la sesión. Usa la misma persistencia y outbox que Telegram. |
-| GET /api/v1/web-chat/history | Devuelve conversación, mensajes públicos, modo, estado y cursor. La ficha y el propietario se consultan en la API autorizada de asesor. |
+| POST /api/v1/web-chat/verification/start | Busca el alias `identifier` en el mock y crea un desafío de cinco minutos para el mismo expediente. |
+| POST /api/v1/web-chat/verification/confirm | Recibe `challenge_id` y `code`. El modo demo acepta seis dígitos, vincula la cuenta al caso y retoma la consulta. |
+| GET /api/v1/web-chat/history | Devuelve conversación, mensajes visibles para la sesión, modo, estado, cursor y etapa de verificación. La ficha y el propietario se consultan en la API autorizada de asesor. |
 | GET /api/v1/web-chat/events | Envía conversation.updated con la proyección pública. Reanuda con cursor o Last-Event-ID. |
 
-El asesor responde al canal de origen y el modo asistido mantiene el mismo expediente. El vínculo entre cuentas de distintos canales requiere una operación independiente de verificación.
+El navegador consulta periódicamente el historial para recuperar mensajes persistidos si se interrumpe SSE. El asesor responde al canal de origen y el modo asistido mantiene el mismo expediente. Los alias y códigos se capturan en formularios del chat y quedan fuera del historial y de los proveedores de IA. El vínculo entre cuentas de distintos canales requiere una operación independiente de verificación.

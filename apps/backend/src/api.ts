@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { Request, Response } from 'express';
 import { type DataSource } from 'typeorm';
 import { randomUUID } from 'node:crypto';
-import { CloseCase, DecideProposal, OpenCase, SendMessage, Text, VerifyHolder, Id, type CaseEvent, type WebChatEvent, type Dashboard, type Viewer } from '@claro/contracts';
+import { CloseCase, DecideProposal, OpenCase, SendMessage, Text, VerifyHolder, WebVerificationStart, WebVerificationConfirm, Id, type CaseEvent, type WebChatEvent, type Dashboard, type Viewer } from '@claro/contracts';
 import { AUTH, getViewer, type createAuth } from './auth.js';
 import { Cases, constantEqual } from './cases.js';
 import { createDatabase, DATABASE } from './database.js';
@@ -110,6 +110,22 @@ class WebChatController {
     this.origin(req);
     res.setHeader('Cache-Control', 'no-store');
     return this.cases.sendWeb(chatToken(req), parse(SendMessage, data));
+  }
+
+  @Post('verification/start')
+  startVerification(@Req() req: Request, @Res({ passthrough: true }) res: Response, @Body() data: unknown) {
+    this.origin(req);
+    res.setHeader('Cache-Control', 'no-store');
+    return this.cases.startWebVerification(chatToken(req), parse(WebVerificationStart, data).identifier);
+  }
+
+  @Post('verification/confirm')
+  confirmVerification(@Req() req: Request, @Res({ passthrough: true }) res: Response, @Body() data: unknown) {
+    this.origin(req);
+    res.setHeader('Cache-Control', 'no-store');
+    const { challenge_id } = parse(WebVerificationConfirm, data);
+    // The six-digit shape is the only code check in the synthetic demo.
+    return this.cases.confirmWebVerification(chatToken(req), challenge_id);
   }
 
   @Get('events')

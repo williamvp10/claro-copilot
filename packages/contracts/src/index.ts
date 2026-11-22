@@ -44,13 +44,23 @@ export const CaseEvent = z.object({ type: z.literal('case.updated'), cursor: z.n
 export type CaseEvent = z.infer<typeof CaseEvent>;
 export const WebChatSnapshot = CaseSnapshot.pick({
   conversation_id: true, attention_mode: true, status: true, messages: true, cursor: true
-}).extend({ awaiting_advisor: z.boolean() });
+}).extend({
+  awaiting_advisor: z.boolean(),
+  verification: z.discriminatedUnion('stage', [
+    z.object({ stage: z.literal('idle') }),
+    z.object({ stage: z.literal('required') }),
+    z.object({ stage: z.literal('code_sent'), challenge_id: z.uuid() }),
+    z.object({ stage: z.literal('verified') })
+  ])
+});
 export type WebChatSnapshot = z.infer<typeof WebChatSnapshot>;
 export const WebChatEvent = z.object({ type: z.literal('conversation.updated'), snapshot: WebChatSnapshot });
 export type WebChatEvent = z.infer<typeof WebChatEvent>;
 export const OpenCase = z.object({ contact_ref: Id, text: Text, idempotency_key: Id });
 export const SendMessage = z.object({ text: Text, idempotency_key: Id });
 export const VerifyHolder = z.object({ verification_code: z.string().min(4).max(32) });
+export const WebVerificationStart = z.object({ identifier: z.string().trim().min(5).max(128) });
+export const WebVerificationConfirm = z.object({ challenge_id: z.uuid(), code: z.string().regex(/^\d{6}$/) });
 export const DecideProposal = z.object({ decision: z.enum(['approved', 'rejected']), revision: z.number().int().positive(), idempotency_key: Id });
 export const CloseCase = z.object({ resolved: z.boolean() });
 export const AgentTurn = z.object({

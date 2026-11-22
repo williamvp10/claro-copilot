@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { createAuth } from './auth.js';
 import { createDatabase } from './database.js';
+import { seedDemoAccounts } from './demo-accounts.js';
 
 if (process.env.DEMO_MODE !== 'true') throw new Error('Set DEMO_MODE=true to seed synthetic cases');
 const db = await createDatabase().initialize();
@@ -32,7 +33,8 @@ try {
     await db.query(`INSERT INTO telegram_contact (ref,chat_id,display_name,direct_owner,fixture) VALUES ($1,$2,$3,$4,$1)
       ON CONFLICT(ref) DO UPDATE SET chat_id=EXCLUDED.chat_id, direct_owner=EXCLUDED.direct_owner`, [ref, chatId?.trim() || null, name, owner]);
   }
-  console.log('Synthetic demo contacts and operator roles are ready');
+  await db.transaction(seedDemoAccounts);
+  console.log('Synthetic demo contacts, web accounts and operator roles are ready');
 } finally {
   await Promise.all([db.destroy(), database.end()]);
 }

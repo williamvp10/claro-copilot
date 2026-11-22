@@ -53,13 +53,22 @@ sequenceDiagram
   Agent->>DB: Guarda respuesta validada y citas
   DB-->>Client: SSE web o entrega por Telegram
   Client->>API: Solicita información de cuenta
-  Agent->>DB: Registra derivación
-  DB-->>Advisor: Presenta caso con historial
-  Advisor->>API: Toma el caso y valida titularidad
-  Agent->>DB: Actualiza ficha privada de cuenta
-  DB-->>Advisor: SSE de consola
-  Advisor->>API: Responde en la misma conversación
-  API-->>Client: Envía respuesta al canal de origen
+  alt Chat web de demo
+    API-->>Client: Pide un correo o número de prueba
+    Client->>API: Selecciona el contacto y confirma el código simulado
+    API->>DB: Vincula la cuenta a la conversación
+    API->>CRM: Lee la información solicitada
+    API-->>Client: Responde en el mismo chat
+  else Telegram
+    Agent->>DB: Registra derivación con el historial
+  end
+  opt Atención con asesor
+    Advisor->>API: Toma el caso y comprueba el estado de titularidad
+    Agent->>DB: Actualiza ficha privada de cuenta
+    DB-->>Advisor: SSE de consola
+    Advisor->>API: Responde en la misma conversación
+    API-->>Client: Envía respuesta al canal de origen
+  end
   opt Retención elegible y alternativa aceptada
     Client->>API: Acepta alternativa por el canal de origen
     Agent->>DB: Guarda propuesta pendiente
@@ -71,7 +80,7 @@ sequenceDiagram
   end
 ```
 
-El navegador recibe un identificador opaco por cookie HttpOnly. El servidor proyecta el historial público y deriva el caso desde esa sesión. Telegram vincula el chat desde el webhook autenticado. Vincular identidades de distintos canales requiere verificación explícita. El asesor toma el caso y la plataforma revalida rol y titularidad antes de acceder a hechos privados. Una aprobación habilita un efecto idempotente.
+El navegador recibe un identificador opaco por cookie HttpOnly. El servidor proyecta el historial visible para esa sesión y mantiene la ficha privada en consola. La verificación simulada del chat web vincula una cuenta del mock en PostgreSQL. El asesor recibe la titularidad verificada cuando el cliente pide ayuda desde ese hilo. Telegram vincula el chat desde el webhook autenticado. La plataforma revalida rol y titularidad antes de acceder a hechos privados y requiere aprobación para los efectos.
 
 OpenAI recibe el tema saneado y pasajes públicos vigentes y con aprobación de procesamiento `provider_approved: true`. La aplicación valida referencias y cifras antes de persistir. Ante una falla puede volver al extracto citado o derivar. Las fuentes quedan ligadas a versión y vigencia. OCR automatizado y reranker ONNX son mejoras del diseño documental.
 

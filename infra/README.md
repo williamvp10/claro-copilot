@@ -53,6 +53,8 @@ Run the preliminary suite probe with `pnpm --filter @claro/backend quality:probe
 
 The customer UI is at /chat. The advisor UI remains at /. The web demo uses separate synthetic sessions. For Telegram delivery, provision the bot token and configure the authorized chats before enabling the HTTPS webhook.
 
+Apply migrations and run the demo seed to load the web accounts. Use `11111` or `cliente1@example.test` for C-1001, `22222` or `cliente2@example.test` for C-1004, and `33333` or `cliente3@example.test` for C-1007. Ask for an invoice, balance, current plan, or open tickets. The demo simulates code delivery and accepts any six digits on a current challenge. Use a separate browser session to try a different account. CRM and billing reads use a curated projection of the supplied fixtures stored in PostgreSQL. Account verification and responses are available only in demo mode.
+
 Deploy `compose.langfuse.yaml` under its own project name. Set `LANGFUSE_SHARED_NETWORK` to the application Compose network. Start the application first so that network exists.
 
 ```sh

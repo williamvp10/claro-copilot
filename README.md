@@ -11,13 +11,13 @@ La misma conversación guardada alimenta ambos modos. Quien tiene a cargo el cas
 | **Autoservicio** | El copiloto responde preguntas públicas sobre planes, soporte y servicios con citas a fuentes vigentes. Cuando el caso requiere atención humana o datos de cuenta, entrega al asesor el hilo, el motivo y los pendientes. |
 | **Atención asistida** | El asesor conversa directamente con el cliente. El copiloto interpreta los mensajes de ambos y prepara en privado la ficha, la evidencia y el siguiente paso, sin que el asesor tenga que escribirle por separado. |
 
-Con la titularidad verificada, la consola reúne datos del CRM y la facturación simulados con información documental relevante. Las propuestas comerciales muestran sus condiciones y requieren confirmación explícita del asesor antes de ejecutarse. Administración consulta métricas agregadas y registra revisiones candidatas de configuración.
+El chat web verifica una cuenta de prueba con un código simulado de seis dígitos y consulta el CRM y la facturación simulados. La titularidad se conserva si el cliente pide un asesor. Las propuestas comerciales muestran sus condiciones y requieren confirmación explícita del asesor antes de ejecutarse. Administración consulta métricas agregadas y registra revisiones candidatas de configuración.
 
 ## Casos de uso
 
 | Caso | Resultado esperado |
 | --- | --- |
-| **Consulta de facturación** | El cliente consulta un plan en el chat web y luego pregunta por su factura. El asesor recibe el hilo y, tras validar la titularidad, encuentra el plan, el saldo y el vencimiento en la ficha. |
+| **Consulta de facturación** | El cliente consulta un plan y luego pide su factura. Verifica su cuenta en el chat con el alias `11111` y cualquier código de seis dígitos. Si pide un asesor, la consola recibe el mismo hilo con la cuenta ya verificada. |
 | **Retención elegible** | El copiloto presenta las opciones respaldadas por la política vigente. Tras la aceptación del cliente y la aprobación del asesor, la plataforma registra una sola oferta en el CRM simulado, incluso si la confirmación se repite. |
 | **Retención sin elegibilidad** | La ficha explica por qué la mora supera el límite de la política y sugiere cómo continuar con la solicitud. El CRM conserva cero ofertas registradas para ese caso. |
 

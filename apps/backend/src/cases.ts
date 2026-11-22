@@ -7,6 +7,7 @@ import {
 } from '@claro/contracts';
 import { DataSource, type EntityManager } from 'typeorm';
 import { audit, type CaseRow, type ContactRow, DATABASE, enqueue } from './database.js';
+import { accountInquiry, demoAccount, demoAccountReply, findDemoAccount, requestedAdvisor } from './demo-accounts.js';
 
 type Assessor = Viewer;
 type Mutation = (tx: EntityManager, row: CaseRow) => Promise<void>;
@@ -45,8 +46,10 @@ export async function saveCase(tx: EntityManager, row: CaseRow) {
   row.snapshot.cursor += 1;
   row.snapshot.updated_at = new Date().toISOString();
   CaseSnapshot.parse(row.snapshot);
-  await tx.query('UPDATE attention_case SET snapshot=$2,handoff_pending=$3,intent_hint=$4 WHERE id=$1',
-    [row.id, row.snapshot, row.handoff_pending, row.intent_hint]);
+  await tx.query(`UPDATE attention_case SET snapshot=$2,handoff_pending=$3,intent_hint=$4,
+    account_ref=$5,account_inquiry=$6,account_challenge_ref=$7,account_challenge_id=$8,account_challenge_expires_at=$9 WHERE id=$1`,
+    [row.id, row.snapshot, row.handoff_pending, row.intent_hint, row.account_ref ?? null, row.account_inquiry ?? null,
+      row.account_challenge_ref ?? null, row.account_challenge_id ?? null, row.account_challenge_expires_at ?? null]);
 }
 
 function assessor(viewer: Viewer) {
@@ -128,6 +131,9 @@ export class Cases {
     const expected = process.env.DEMO_HOLDER_CODE;
     if (process.env.DEMO_MODE !== 'true' || !expected) throw new ForbiddenException('La verificación de demo no está configurada');
     return this.change(viewer, id, true, async (tx, row) => {
+      if (row.snapshot.channel === 'web' && !row.account_ref && !row.contact_ref.startsWith('web-c1001:')) {
+        throw new ConflictException('La titularidad se verifica en el chat web.');
+      }
       await tx.query("SELECT pg_advisory_xact_lock(hashtext('holder-verification'),hashtext($1))", [id]);
       const [{ failures }] = await tx.query(`SELECT count(*)::integer AS failures FROM attention_event
         WHERE case_id=$1 AND kind='holder_failed' AND created_at>now()-interval '15 minutes'`, [id]);
@@ -264,7 +270,7 @@ export class Cases {
       await this.consumeWebQuota(tx, 'start', 24);
       await tx.query('DELETE FROM web_chat_session WHERE expires_at <= now()');
       const issued = randomBytes(32).toString('base64url');
-      const row = await this.newCase(tx, { ref: `web-c1001:${randomUUID()}`, display_name: 'Cliente C-1001 · Web' }, null, 'web');
+      const row = await this.newCase(tx, { ref: `web:${randomUUID()}`, display_name: 'Cliente web' }, null, 'web');
       await tx.query("INSERT INTO web_chat_session VALUES ($1, $2, now() + interval '24 hours')", [this.tokenHash(issued), row.id]);
       return { token: issued, snapshot: this.publicWeb(row) };
     });
@@ -291,10 +297,98 @@ export class Cases {
       const message = addMessage(row, 'cliente', clearPersonalData(input.text));
       await this.remember(tx, scope, input.idempotency_key, input, row.id);
       await audit(tx, row.id, 'customer_turn');
-      await queueRun(tx, row, message, true);
+      const inquiry = accountInquiry(message.text);
+      if (row.snapshot.attention_mode === 'autoservicio' && requestedAdvisor(message.text)) {
+        row.snapshot.revision += 1;
+        row.handoff_pending = 'Atención humana';
+        row.account_inquiry = null;
+        row.account_challenge_ref = row.account_challenge_id = row.account_challenge_expires_at = null;
+        addMessage(row, 'agente', 'Te comunicaré con un asesor en esta misma conversación.');
+        await audit(tx, row.id, 'handoff_requested');
+      } else if (inquiry && !row.account_ref) {
+        if (!row.account_inquiry) {
+          addMessage(row, 'agente', 'Para consultar tu cuenta, verifica un correo o un número de teléfono de prueba.');
+        }
+        row.account_inquiry = inquiry;
+        row.intent_hint = inquiry === 'plans' ? 'consulta_planes' : inquiry === 'tickets' ? 'soporte_tecnico' : 'facturacion';
+      } else if (inquiry && row.snapshot.attention_mode === 'autoservicio') {
+        await this.answerWebAccount(tx, row, inquiry);
+      } else {
+        await queueRun(tx, row, message, true);
+      }
       await saveCase(tx, row);
       return this.publicWeb(row);
     });
+  }
+
+  async startWebVerification(token: string | undefined, identifier: string) {
+    this.requireWebDemo();
+    const snapshot = await this.db.transaction(async (tx) => {
+      const row = await this.lockWebCase(tx, token);
+      if (row.account_ref) throw new ConflictException('La cuenta de esta conversación ya está verificada.');
+      const inquiry = this.pendingWebInquiry(row);
+      if (!inquiry) throw new ConflictException('Primero solicita una consulta de cuenta en el chat.');
+      await this.consumeWebQuota(tx, 'verification-start', 36);
+      await this.consumeWebQuota(tx, `verification-start:${row.id}`, 6);
+      const ref = await findDemoAccount(tx, identifier);
+      if (!ref) return null;
+      row.account_inquiry = inquiry;
+      row.account_challenge_ref = ref;
+      row.account_challenge_id = randomUUID();
+      row.account_challenge_expires_at = new Date(Date.now() + 5 * 60 * 1000);
+      await audit(tx, row.id, 'web_demo_challenge_started');
+      await saveCase(tx, row);
+      return this.publicWeb(row);
+    });
+    if (!snapshot) throw new NotFoundException('No encontramos esa cuenta de prueba. Usa uno de los números o correos indicados.');
+    return snapshot;
+  }
+
+  async confirmWebVerification(token: string | undefined, challengeId: string) {
+    this.requireWebDemo();
+    return this.db.transaction(async (tx) => {
+      const row = await this.lockWebCase(tx, token);
+      if (row.account_ref) return this.publicWeb(row);
+      if (row.account_challenge_id !== challengeId || !row.account_challenge_ref ||
+        !row.account_challenge_expires_at || Number(row.account_challenge_expires_at) <= Date.now() || !row.account_inquiry) {
+        throw new ConflictException('El código de prueba venció o cambió. Solicita otro.');
+      }
+      await this.consumeWebQuota(tx, `verification-confirm:${row.id}`, 6);
+      const inquiry = row.account_inquiry;
+      row.account_ref = row.account_challenge_ref;
+      row.account_challenge_ref = row.account_challenge_id = row.account_challenge_expires_at = null;
+      row.account_inquiry = null;
+      row.snapshot.verified = true;
+      row.snapshot.display_name = `Cliente ${row.account_ref} · Web`;
+      row.snapshot.revision += 1;
+      row.snapshot.card = null;
+      if (row.snapshot.attention_mode === 'autoservicio' && row.handoff_pending !== 'Atención humana') row.handoff_pending = null;
+      await audit(tx, row.id, 'holder_verified', {method:'web_demo'});
+      if (row.snapshot.attention_mode === 'autoservicio') {
+        await this.answerWebAccount(tx, row, inquiry, 'Cuenta de prueba verificada. ');
+      } else {
+        addMessage(row, 'agente', 'Cuenta de prueba verificada. Tu asesor ya puede continuar con la consulta.');
+        await queueRun(tx, row);
+      }
+      await saveCase(tx, row);
+      return this.publicWeb(row);
+    });
+  }
+
+  private async lockWebCase(tx: EntityManager, token: string | undefined) {
+    const session = await this.webSession(tx, token);
+    if (!session) throw new UnauthorizedException('Sesión del chat vencida');
+    const row = await loadCase(tx, session.case_id, true);
+    if (row.snapshot.status !== 'open') throw new UnprocessableEntityException('La conversación está cerrada');
+    return row;
+  }
+
+  private async answerWebAccount(tx: EntityManager, row: CaseRow, inquiry: NonNullable<CaseRow['account_inquiry']>, prefix = '') {
+    if (!row.account_ref || !row.snapshot.verified) throw new ForbiddenException('Verifica tu cuenta para consultar los datos.');
+    const profile = await demoAccount(tx, row.account_ref);
+    if (!profile) throw new NotFoundException('La cuenta de prueba no está disponible.');
+    await audit(tx, row.id, inquiry === 'plans' ? 'crm_read' : inquiry === 'tickets' ? 'tickets_read' : 'billing_read', {scope:'web_demo_account'});
+    addMessage(row, 'agente', prefix + demoAccountReply(profile, inquiry));
   }
 
   private requireWebDemo() {
@@ -323,9 +417,22 @@ export class Cases {
   }
 
   private publicWeb(row: CaseRow): WebChatSnapshot {
+    let verification: WebChatSnapshot['verification'] = {stage:'idle'};
+    if (row.account_ref) verification = {stage:'verified'};
+    else if (row.account_challenge_id && row.account_challenge_expires_at && Number(row.account_challenge_expires_at) > Date.now()) {
+      verification = {stage:'code_sent', challenge_id:row.account_challenge_id};
+    } else if (this.pendingWebInquiry(row)) verification = {stage:'required'};
     return WebChatSnapshot.parse({ ...row.snapshot,
-      awaiting_advisor: !!row.handoff_pending && row.snapshot.attention_mode === 'autoservicio'
+      awaiting_advisor: !!row.handoff_pending && row.snapshot.attention_mode === 'autoservicio' &&
+        (row.handoff_pending === 'Atención humana' || verification.stage === 'idle' || verification.stage === 'verified'),
+      verification
     });
+  }
+
+  private pendingWebInquiry(row: CaseRow) {
+    if (row.account_inquiry) return row.account_inquiry;
+    if (!row.contact_ref.startsWith('web-c1001:') || !row.handoff_pending || row.handoff_pending === 'Atención humana') return null;
+    return accountInquiry(row.snapshot.messages.findLast(message => message.actor === 'cliente')?.text ?? '');
   }
 
   private async assessorMessage(tx: EntityManager, row: CaseRow, text: string) {

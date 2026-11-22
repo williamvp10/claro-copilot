@@ -3,6 +3,7 @@ import { type DataSource, type EntityManager } from 'typeorm';
 import { type AgentPorts, type AgentTurn, type Fact, type Proposal, type Retention } from '@claro/contracts';
 import { clearPersonalData, loadCase, stillCurrent } from './cases.js';
 import { audit, type CaseRow } from './database.js';
+import { demoAccount, demoBillingFacts, demoPlanFacts } from './demo-accounts.js';
 
 const policy = {
   id: 'retention-policy-2026', title: 'Política de retención y descuentos', version: 'RET 2026',
@@ -13,6 +14,11 @@ const options = [
   { id: 'upgrade', title: 'Mejora a Fibra 500', detail: 'Sin costo adicional durante seis meses.' }
 ];
 const fact = (id: string, label: string, value: string): Fact => ({ id, label, value });
+
+function customerRef(row: CaseRow) {
+  if (row.snapshot.channel !== 'web') return row.contact_ref;
+  return row.account_ref ?? (row.contact_ref.startsWith('web-c1001:') ? 'C-1001' : null);
+}
 
 export async function retention(tx: EntityManager, row: CaseRow, exceptProposal?: string): Promise<Retention> {
   if (row.contact_ref === 'C-1007') return {
@@ -59,17 +65,19 @@ export function businessPorts(db: DataSource): AgentPorts {
       return row;
     },
     getCustomerContext: (runId) => scoped(runId, true, async (tx, row) => {
+      const ref = customerRef(row);
+      if (!ref) return [];
       await audit(tx, row.id, 'crm_read');
-      return (row.contact_ref === 'C-1001' || row.snapshot.channel === 'web') ? [
-        fact('home-fibra-500', 'Hogar Fibra 500', '$109.900'), fact('mobile-max-60', 'Claro Max 60 GB', '$59.415')
-      ] : row.contact_ref === 'C-1013' ? [fact('tenure','Antigüedad en meses','26')] : [];
+      const account = await demoAccount(tx, ref);
+      if (account) return demoPlanFacts(account);
+      return ref === 'C-1013' ? [fact('tenure','Antigüedad en meses','26')] : [];
     }),
     getBilling: (runId) => scoped(runId, true, async (tx, row) => {
+      const ref = customerRef(row);
+      if (!ref) return [];
       await audit(tx, row.id, 'billing_read');
-      return (row.contact_ref === 'C-1001' || row.snapshot.channel === 'web') ? [
-        fact('invoice-nov-status', 'Factura de noviembre', 'Pendiente'), fact('invoice-nov-amount', 'Saldo', '$169.315'),
-        fact('invoice-nov-due', 'Vencimiento', '25 de noviembre de 2026')
-      ] : [];
+      const account = await demoAccount(tx, ref);
+      return account ? demoBillingFacts(account) : [];
     }),
     getTickets: (runId) => scoped(runId, true, async (tx, row) => {
       await audit(tx, row.id, 'tickets_read');
