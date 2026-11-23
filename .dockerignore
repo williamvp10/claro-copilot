@@ -3,6 +3,7 @@
 **/node_modules
 **/.next
 **/dist
+**/*.tsbuildinfo
 **/__pycache__
 **/.pytest_cache
 **/.venv

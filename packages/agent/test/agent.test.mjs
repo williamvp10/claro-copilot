@@ -96,3 +96,208 @@ test('a stock forecast never receives a catalog answer', async () => {
   assert.equal(result.type,'handoff');
   assert.equal(result.route,'fuera_de_alcance');
 });
+
+test('Jev question templates require exactly the fixed choice keys', async () => {
+  const { parseJevQuestion } = await import('../dist/index.js');
+  assert.equal(parseJevQuestion(JSON.stringify({instructions:'Choose',criteria:{a:'A',b:'B',extra:'X'}}),['a','b']),null);
+  assert.deepEqual(parseJevQuestion(JSON.stringify({instructions:'Check {{rubric_statement}}',criteria:{a:'A',b:'B'}}),['a','b'],{rubric_statement:'safe'}),{instructions:'Check safe',criteria:{a:'A',b:'B'}});
+});
+
+test('billing subgraph reads billing only and a composed case activates the billing subgraph once', async () => {
+ const billing=fixture();
+ const invoice=await createAgent(billing.ports).run(turn({text:'Muéstrame mi factura'}));
+ assert.equal(invoice.type,'card');
+ assert.deepEqual(billing.calls,['billing']);
+ const composed=fixture();
+ const result=await createAgent(composed.ports).run(turn({text:'Quiero cancelar y revisar mi factura'}));
+ assert.equal(result.type,'card');
+ assert.equal(composed.calls.filter(x=>x==='billing').length,1);
+ assert.ok(result.card.facts.some(f=>f.id==='amount'));
+});
+
+test('account billing selects balance, invoice list or a specific detail without arbitrary extra reads', async () => {
+ const f=fixture();
+ f.ports.listInvoices=async()=>{f.calls.push('invoices');return [{id:'F-1001',label:'Factura',value:'pendiente'}]};
+ f.ports.getInvoiceDetail=async(_run,id)=>{f.calls.push(`detail:${id}`);return [{id:'detail',label:'Cargo',value:'100'}]};
+ await createAgent(f.ports).run(turn({text:'Quiero saber mi saldo'}));
+ assert.deepEqual(f.calls,['billing']); f.calls.length=0;
+ await createAgent(f.ports).run(turn({text:'Muéstrame mi factura'}));
+ assert.deepEqual(f.calls,['invoices']); f.calls.length=0;
+ await createAgent(f.ports).run(turn({text:'Detalle de mi factura F-1001'}));
+ assert.deepEqual(f.calls,['detail:F-1001']); f.calls.length=0;
+ await createAgent(f.ports).run(turn({text:'Detalle de mi factura F-1001 y cuánto debo'}));
+ assert.deepEqual(f.calls,['detail:F-1001','billing']);
+});
+
+test('a question about a billed plan reads the owned invoice first and compares the current service', async () => {
+ const f=fixture(); const spans=[];
+ f.ports.getInvoiceDetail=async(_run,id)=>{
+  f.calls.push(`detail:${id}`);
+  return id==='F-1001' ? [{id:'item',label:'Internet',value:'100'}] : [{id:'billing-unavailable',label:'Facturación',value:'No autorizado'}];
+ };
+ f.ports.listServices=async()=>{f.calls.push('services');return [{id:'service',label:'Fibra',value:'120'}];};
+ const agent=createAgent(f.ports,{observe:(_run,item)=>spans.push(item)});
+ const ask = id=>`¿Por qué subió mi factura ${id} con el cambio de mi plan?`;
+ const answer=await agent.run(turn({text:ask('F-1001')}));
+ assert.deepEqual(f.calls,['detail:F-1001','services']);
+ assert.deepEqual(answer.card.facts.map(fact=>fact.id),['item','service']);
+ assert.match(answer.card.next_action,/solo si los conceptos/);
+ assert.deepEqual(spans.filter(item=>item.name.startsWith('tool.')).map(item=>[item.name,item.metadata.purpose]),[
+  ['tool.billing.get_invoice_detail','inspect_invoice'],['tool.crm.list_services','compare_billed_service']]);
+ assert.doesNotMatch(JSON.stringify(spans),/F-1001/);
+ f.calls.length=0;
+ await agent.run(turn({run_id:'foreign',text:ask('F-1002')}));
+ assert.deepEqual(f.calls,['detail:F-1002']);
+});
+
+test('a compound cancellation checks support recurrence before any offer and reads billing once', async () => {
+ const f=fixture(); const spans=[];
+ f.ports.getTickets=async()=>{f.calls.push('tickets');return [{id:'technical-tickets-90d',label:'Tickets',value:'4'}];};
+ f.ports.listInvoices=async()=>{f.calls.push('invoices');return [{id:'F-1001',label:'Factura',value:'pendiente'}];};
+ const result=await createAgent(f.ports,{observe:(_run,item)=>spans.push(item),decision:{classify:async()=>({intent:'facturacion',confidence:0.95,complexity:'complejo'})}})
+  .run(turn({text:'Quiero cancelar. Se cae el internet todos los días y también quiero saber por qué subió mi factura.'}));
+ assert.equal(result.route,'cancelacion');
+ assert.equal(result.card.proposal?.detail,'priority-ticket');
+ assert.deepEqual(f.calls.slice(0,2).sort(),['customer','tickets']);
+ assert.equal(f.calls.filter(call=>call==='invoices').length,1);
+ assert.ok(!f.calls.includes('retention'));
+ assert.equal(spans.find(item=>item.name==='tool.crm.list_recent_tickets')?.metadata.agent_id,'soporte');
+});
+
+test('advisor draft keeps authorized amounts and filters unsupported claims even in a local template', async () => {
+ const f=fixture();
+ f.ports.getAgentConfig=async()=>({revision:'v1',prompts:{
+  advisor_empathy:'Entiendo lo incómodo que es {{reported_issue}}.',
+  billing_reply:'Ya quedó confirmado el ajuste de 5.000. {{billing_fact_sentence}}'
+ }});
+ const draft=await createAgent(f.ports).run(turn({text:'Mi saldo subió y no entiendo el cargo'}));
+ assert.match(draft.card.advisor_draft,/Entiendo lo incómodo/);
+ assert.match(draft.card.advisor_draft,/169315/);
+ assert.doesNotMatch(draft.card.advisor_draft,/confirmado|5\.000/);
+ const neutral=await createAgent(f.ports).run(turn({text:'¿Cuál es mi saldo?'}));
+ assert.doesNotMatch(neutral.card.advisor_draft,/incómodo/);
+});
+test('live mode does not call providers when approved templates are missing',async()=>{
+ const f=fixture({verified:false});let calls=0;
+ const agent=createAgent(f.ports,{requireApprovedPrompts:true,decision:{classify:async()=>{calls++;return null}},writer:{write:async()=>{calls++;return null}},evidenceSelector:{select:async()=>{calls++;return null}},documents:[{id:'p1',title:'Fibra',excerpt:'Fibra 500',version:'1',scope:'public',effective_from:'2026-01-01',provider_approved:true},{id:'p2',title:'Fibra',excerpt:'Fibra 500',version:'1',scope:'public',effective_from:'2026-01-01',provider_approved:true}]});
+ const out=await agent.run(turn({attention_mode:'autoservicio',audience:'cliente',text:'Cuánto cuesta fibra 500'}));
+ assert.equal(out.type,'answer');assert.equal(calls,0);
+});
+
+test('mandatory escalation is suggested before any model, tool or effect', async () => {
+ const cases=[
+  ['La luz LOS está roja hace 11 minutos','soporte_tecnico','los_rojo_mas_de_10_minutos'],
+  ['LOS rojo hace más de diez minutos','soporte_tecnico','los_rojo_mas_de_10_minutos'],
+  ['Ya reinicié el módem 4 veces','soporte_tecnico','mas_de_tres_reinicios'],
+  ['La fibra está cortada','soporte_tecnico','dano_fisico'],
+  ['Sospecho fraude y la luz LOS roja lleva 15 minutos','supervision','riesgo_de_fraude'],
+  ['Presentaré una tutela por portabilidad','supervision','requerimiento_legal_o_regulatorio'],
+  ['La cuenta es a nombre de mi madre','supervision','solicitud_de_tercero'],
+  ['Soy una persona vulnerable','supervision','riesgo_o_vulnerabilidad']
+ ];
+ for (const [text,destination,reason] of cases) {
+  const f=fixture();let classified=0;
+  const agent=createAgent(f.ports,{decision:{classify:async()=>{classified++;return null}}});
+  const out=await agent.run(turn({text}));
+  assert.equal(out.type,'card',text);assert.deepEqual(out.card.suggested_escalation,{destination,reason_code:reason},text);
+  assert.equal(classified,0,text);assert.deepEqual(f.calls,[],text);
+ }
+});
+test('LOS at ten minutes or without a duration does not assert the >10 minute policy', async () => {
+ const {mandatoryPolicyRoute}=await import('../dist/index.js');
+ assert.equal(mandatoryPolicyRoute('La luz LOS está roja desde hace 10 minutos'),undefined);
+ assert.equal(mandatoryPolicyRoute('La luz LOS está roja'),undefined);
+ assert.equal(mandatoryPolicyRoute('Reinicié el módem tres veces'),undefined);
+});
+
+test('duration supplied in the next turn completes the LOS escalation condition',async()=>{
+ const f=fixture({messages:[msg('La luz LOS está roja','cliente',1),msg('¿Cuántos minutos lleva roja?','asesor',2),msg('Hace 15 minutos','cliente',3)]});
+ let modelCalls=0;
+ const out=await createAgent(f.ports,{decision:{classify:async()=>{modelCalls++;return null}}}).run(turn({turn_seq:3,text:'Hace 15 minutos'}));
+ assert.equal(out.type,'card');assert.equal(out.card.suggested_escalation?.reason_code,'los_rojo_mas_de_10_minutos');assert.equal(modelCalls,0);assert.deepEqual(f.calls,[]);
+});
+
+test('WiFi change uses the three contiguous manual steps with their original citations',async()=>{
+ const f=fixture({verified:false});
+ const base={title:'Manual de módem ZTX-F680 · pág. 1',version:'MAN-ZTX-F680 Rev. B',scope:'public',effective_from:'2026-11-18',status:'ready'};
+ const documents=[
+  {...base,id:'modem-006',excerpt:'2. Restablecimiento de fábrica: presione RESET; se borran la contraseña WiFi personalizada.'},
+  {...base,id:'modem-007',excerpt:'4. Cambiar el nombre y la contraseña de la red WiFi'},
+  {...base,id:'modem-008',excerpt:'1. Conéctese a la red del módem por cable o WiFi.'},
+  {...base,id:'modem-009',excerpt:'2. Abra un navegador e ingrese a http://192.168.1.1.'},
+  {...base,id:'modem-010',excerpt:'3. Usuario: admin. Contraseña: la indicada en la etiqueta inferior del equipo.'},
+  {...base,id:'modem-011',excerpt:'4. Vaya a Red > WLAN > SSID, cambie el nombre de red y la contraseña (mínimo 8 caracteres) y guarde.'}
+ ];
+ const agent=createAgent(f.ports,{documents});
+ const result=await agent.run(turn({audience:'cliente',attention_mode:'autoservicio',text:'¿Cómo cambio la contraseña de mi WiFi?'}));
+ assert.equal(result.type,'answer');
+ assert.deepEqual(result.citations.map(c=>c.id),['modem-009','modem-010','modem-011']);
+ assert.equal(result.answer,result.citations.map(c=>c.excerpt).join('\n'));
+ assert.match(result.answer,/192\.168\.1\.1/);assert.match(result.answer,/admin/);assert.match(result.answer,/WLAN/);
+ assert.doesNotMatch(result.answer,/RESET|fábrica|restablecimiento/i);
+ assert.deepEqual(f.calls,[]);
+});
+test('WiFi procedure is not assembled across missing, expired or different-version steps',async()=>{
+ const f=fixture({verified:false});
+ const base={title:'Manual de módem',version:'v1',scope:'public',effective_from:'2026-01-01',status:'ready'};
+ const first={...base,id:'modem-009',excerpt:'2. Abra un navegador e ingrese a http://192.168.1.1.'};
+ const middle={...base,id:'modem-010',excerpt:'3. Usuario: admin. Contraseña: la indicada en la etiqueta inferior del equipo.'};
+ const last={...base,id:'modem-011',excerpt:'4. Vaya a Red > WLAN > SSID, cambie la contraseña y guarde.'};
+ for(const documents of [[first,last],[first,{...middle,version:'v2'},last],[first,{...middle,effective_to:'2026-11-18'},last]]) {
+  const out=await createAgent(f.ports,{documents}).run(turn({audience:'cliente',attention_mode:'autoservicio',text:'¿Cómo cambio la contraseña de mi WiFi?'}));
+  assert.equal(out.type,'answer');
+  assert.equal(out.answer.includes('192.168.1.1') && out.answer.includes('admin') && out.answer.includes('WLAN'),false);
+ }
+});
+
+test('complete WiFi procedure keeps all steps local and skips the writer',async()=>{
+ const f=fixture({verified:false});const base={title:'Manual de módem',version:'v1',scope:'public',effective_from:'2026-01-01',status:'ready'};
+ const docs=[
+  {...base,id:'modem-009',excerpt:'2. Abra un navegador e ingrese a http://192.168.1.1.',provider_approved:true},
+  {...base,id:'modem-010',excerpt:'3. Usuario: admin. Contraseña: la indicada en la etiqueta inferior del equipo.'},
+  {...base,id:'modem-011',excerpt:'4. Vaya a Red > WLAN > SSID, cambie la contraseña y guarde.',provider_approved:true}
+ ];
+ let submitted=[];const writer={write:async(_topic,sources)=>{submitted=sources.map(source=>source.id);return null;}};
+ const out=await createAgent(f.ports,{documents:docs,writer}).run(turn({audience:'cliente',attention_mode:'autoservicio',text:'¿Cómo cambio la contraseña de mi WiFi?'}));
+ assert.deepEqual(submitted,[]);
+ assert.equal(out.type,'answer');assert.match(out.answer,/admin/);assert.deepEqual(out.citations.map(c=>c.id),['modem-009','modem-010','modem-011']);
+});
+
+test('GQ-25 reads current services and balance only after verification',async()=>{
+ const text='¿Cuál es el plan actual y el saldo pendiente del cliente C-1001?';
+ const f=fixture();const spans=[];
+ f.ports.listServices=async()=>{f.calls.push('services');return [{id:'home',label:'Hogar Fibra 500',value:'$109.900'},{id:'mobile',label:'Claro Max 60 GB',value:'$59.415'}]};
+ f.ports.getBilling=async()=>{f.calls.push('billing');return [{id:'balance',label:'Saldo',value:'$169.315'},{id:'due',label:'Vencimiento',value:'2026-11-25'}]};
+ const agent=createAgent(f.ports,{decision:{classify:async()=>({intent:'consulta_planes',confidence:0.95,complexity:'economico'})},observe:(_,item)=>spans.push(item)});
+ const out=await agent.run(turn({actor:'asesor',text}));
+ assert.equal(out.type,'card');assert.equal(out.route,'facturacion');assert.deepEqual(f.calls,['billing','services']);
+ assert.deepEqual(out.card.facts.map(x=>x.id),['balance','due','home','mobile']);
+ assert.equal(spans.find(x=>x.name==='tool.crm.list_services')?.metadata.purpose,'review_current_plan');
+ const denied=fixture({verified:false});
+ const deniedOut=await createAgent(denied.ports).run(turn({actor:'asesor',text}));
+ assert.equal(deniedOut.type,'card');assert.ok(deniedOut.card.reason_codes.includes('verification_required'));assert.deepEqual(denied.calls,[]);
+ const publicCase=fixture({verified:false});
+ const publicOut=await createAgent(publicCase.ports,{decision:{classify:async()=>({intent:'consulta_planes',confidence:0.99,complexity:'economico'})}}).run(turn({actor:'cliente',audience:'cliente',attention_mode:'autoservicio',text:'¿Cuál es mi plan actual y el saldo pendiente?'}));
+ assert.equal(publicOut.type,'handoff');assert.equal(publicOut.verification_required,true);assert.deepEqual(publicCase.calls,[]);
+});
+
+test('GQ-28 inspects confirmed recurrence and leaves scheduling pending after ticket registration',async()=>{
+ const text='El cliente C-1013 llama a cancelar por fallas. ¿Cuál es el siguiente paso?';
+ const f=fixture();
+ f.ports.getCustomerContext=async()=>{f.calls.push('customer');return [{id:'tenure',label:'Antigüedad',value:'26 meses'}]};
+ f.ports.getTickets=async()=>{f.calls.push('tickets');return [{id:'technical-tickets-90d',label:'Tickets técnicos en 90 días',value:'4'}]};
+ f.ports.createProposal=async(_id,input)=>{f.calls.push(input);return {id:'ticket-proposal',revision:1,title:'Ticket prioritario',detail:'Visita técnica prioritaria dentro de 24 horas',kind:'support_ticket',status:'pending_approval'}};
+ const agent=createAgent(f.ports,{decision:{classify:async()=>({intent:'soporte_tecnico',confidence:0.99,complexity:'intermedio'})}});
+ const out=await agent.run(turn({actor:'asesor',text}));
+ assert.equal(out.type,'card');assert.equal(out.route,'cancelacion');assert.deepEqual(f.calls.slice(0,2).sort(),['customer','tickets']);
+ assert.deepEqual(f.calls[2],{option_id:'priority-ticket',citation_ids:['retention-recurrent-faults']});assert.ok(!f.calls.includes('retention'));
+ assert.match(out.card.summary,/visita (?:técnica )?prioritaria.*24 horas/i);assert.equal(out.card.proposal.status,'pending_approval');
+ const resumed=await agent.resume({run_id:'run1',effect_id:'ticket-proposal',status:'confirmed',effect_ref:'ticket-123'});
+ assert.equal(resumed.type,'card');assert.match(resumed.card.summary,/ticket registrado.*pendiente de coordinación/i);assert.doesNotMatch(resumed.card.summary,/agendad[ao]|visita confirmada/i);
+});
+
+test('a cancellation attributed to faults without confirmed recurrence does not create a ticket',async()=>{
+ const f=fixture();f.ports.getTickets=async()=>{f.calls.push('tickets');return [{id:'technical-tickets-90d',label:'Tickets',value:'2'}]};
+ const out=await createAgent(f.ports).run(turn({actor:'asesor',text:'El cliente C-1013 llama a cancelar por fallas. ¿Cuál es el siguiente paso?'}));
+ assert.equal(out.type,'card');assert.ok(f.calls.includes('tickets'));assert.equal(f.calls.some(x=>typeof x==='object'),false);
+});

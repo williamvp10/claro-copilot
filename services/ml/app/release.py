@@ -32,7 +32,7 @@ def release(name: str, version: str, output: str):
         shutil.copyfile(files[0], bundle / "model.skops")
         evaluation = Path(mlflow.artifacts.download_artifacts(run_id=registered.run_id, artifact_path="evaluation/evaluation.json", dst_path=str(root)))
         shutil.copyfile(evaluation, bundle / "evaluation.json")
-        manifest = {"model_name":name, "model_version":str(version), "run_id":registered.run_id, "sha256":digest((bundle/"model.skops").read_bytes()), "evaluation_sha256":digest((bundle/"evaluation.json").read_bytes()), "labels":sorted(LABELS), "signature":metadata.signature.to_dict(), "mode":"shadow", "image_digest":os.getenv("ML_IMAGE_DIGEST", "unknown")}
+        manifest = {"model_name":name, "model_version":str(version), "run_id":registered.run_id, "experiment_id":client.get_run(registered.run_id).info.experiment_id, "sha256":digest((bundle/"model.skops").read_bytes()), "evaluation_sha256":digest((bundle/"evaluation.json").read_bytes()), "labels":sorted(LABELS), "signature":metadata.signature.to_dict(), "mode":"shadow", "image_digest":os.getenv("ML_IMAGE_DIGEST", "unknown")}
         (bundle / "manifest.json").write_bytes(canonical(manifest))
         load_bundle(bundle)
         os.rename(bundle, output)

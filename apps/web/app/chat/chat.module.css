@@ -32,15 +32,6 @@
 .synthetic { margin-top: 7px; }
 .error { color: #951d32; margin-bottom: 8px; }
 .error button { text-decoration: underline; }
-.verification { display: grid; gap: 8px; }
-.verification h2 { font-size: 16px; font-weight: 650; }
-.verification p { font-size: 13px; color: #565a65; overflow-wrap: anywhere; }
-.verification form { align-items: end; }
-.verification .error { margin: 0; color: #951d32; }
-.verificationActions { display: flex; flex-wrap: wrap; gap: 6px 16px; }
-.verificationActions:empty { display: none; }
-.field { flex: 1; min-width: 0; display: grid; gap: 4px; }
-.field label { font-size: 13px; font-weight: 600; }
 .textAction { justify-self: start; color: #962138; font-size: 13px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
 .textAction:disabled { opacity: .6; }
 .textAction:focus-visible, .composer input:focus-visible { outline: 2px solid #a0253f; outline-offset: 2px; }

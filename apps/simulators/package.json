@@ -1,0 +1,25 @@
+{
+  "name": "@claro/simulators",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
+    "test:contract": "node --test test/contracts.mjs"
+  },
+  "dependencies": {
+    "@claro/contracts": "workspace:*",
+    "express": "^5.1.0",
+    "pg": "^8.22.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "jest": "30.2.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "yaml": "^2.8.0"
+  },
+  "jest": {
+    "testMatch": ["**/*.jest.mjs"],
+    "transform": {}
+  }
+}

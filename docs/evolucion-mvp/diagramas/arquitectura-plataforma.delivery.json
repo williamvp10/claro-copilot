@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "1ecc236d-a497-4653-a583-9c732a3412fb",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/Users/williamvasquez/Library/CloudStorage/OneDrive-Personal/Desarrollo/Pruebas tecnicas/Líder Técnico AI Senior Hitss/claro-copilot/docs/evolucion-mvp/diagramas/plataforma.candidate.json",
+  "output": "/Users/williamvasquez/Library/CloudStorage/OneDrive-Personal/Desarrollo/Pruebas tecnicas/Líder Técnico AI Senior Hitss/claro-copilot/docs/evolucion-mvp/diagramas/arquitectura-plataforma.html",
+  "specification": {
+    "sha256": "86d29adbca808acb2380c4abb2ff51eb5db69003cb0a3a93d2ec17930053dc57",
+    "bytes": 5556
+  },
+  "artifact": {
+    "sha256": "71ad742fe06249797af6b98754c1a4c9a636fa88954688682dc660098f9304b0",
+    "bytes": 853879
+  }
+}

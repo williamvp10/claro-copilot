@@ -3,9 +3,15 @@ FROM node:24-trixie-slim AS build
 WORKDIR /app
 ENV BACKEND_URL=http://api:3000 NEXT_TELEMETRY_DISABLED=1
 RUN corepack enable && corepack prepare pnpm@11.25.0 --activate
-COPY . .
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/backend/package.json apps/backend/
+COPY apps/web/package.json apps/web/
+COPY apps/simulators/package.json apps/simulators/
+COPY packages/agent/package.json packages/agent/
+COPY packages/contracts/package.json packages/contracts/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile
-RUN pnpm build
+COPY . .
+RUN pnpm build && rm -rf apps/web/.next/cache
 
 # Keep workspace symlinks and Next runtime dependencies intact.
 FROM node:24-trixie-slim AS runtime

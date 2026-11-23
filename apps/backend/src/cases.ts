@@ -1,17 +1,25 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, UnauthorizedException, HttpException, UnprocessableEntityException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, ServiceUnavailableException, Inject, Injectable, NotFoundException, UnauthorizedException, HttpException, UnprocessableEntityException } from '@nestjs/common';
 import { type z } from 'zod';
 import {
   AgentTurn, CaseSnapshot, WebChatSnapshot, type Actor, type Contact, type DecideProposal, type Intent,
-  type Message, type OpenCase, type Proposal, type SendMessage, type Viewer
+  type CloseCase, type Message, type OpenCase, type Proposal, type SendMessage, type Viewer
 } from '@claro/contracts';
 import { DataSource, type EntityManager } from 'typeorm';
-import { audit, type CaseRow, type ContactRow, DATABASE, enqueue } from './database.js';
-import { accountInquiry, demoAccount, demoAccountReply, findDemoAccount, requestedAdvisor } from './demo-accounts.js';
+import { audit, type CaseRow, type ContactRow, type DraftPublication, DATABASE, enqueue } from './database.js';
+import { accountInquiry, accountReply, accountVerificationPrompt, codeCandidates, contactCandidates, requestedAdvisor, type AccountInquiry } from './demo-accounts.js';
+import { privateSignals, queueChurn } from './ml-advisory.js';
+import { readRunPromptConfig } from './prompt-catalog.js';
+import { SimulatorFailure, simulators } from './simulator-client.js';
 
 type Assessor = Viewer;
 type Mutation = (tx: EntityManager, row: CaseRow) => Promise<void>;
 type ProposalRow = { id: string; case_id: string; proposal: Proposal; option_id: string; case_revision: number; run_id: string; expires_at: Date };
+const knowledgePublication: Partial<Record<Intent, DraftPublication['terminal']>> = {
+  soporte_tecnico: 'guidance_published',
+  consulta_planes: 'catalog_answer_published',
+  portabilidad: 'portability_guidance_published'
+};
 
 export function constantEqual(input: string, expected: string) {
   const inputHash = createHash('sha256').update(input).digest();
@@ -20,12 +28,29 @@ export function constantEqual(input: string, expected: string) {
 }
 
 export function clearPersonalData(text: string) {
-  return text.replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, '[correo]')
-    .replace(/\+?\d(?:[ .()-]*\d){6,}/g, '[número]');
+  // Invoice selectors are opaque, validated identifiers; retain them for ownership checks.
+  const invoices:string[]=[];
+  const protectedText=text.replace(/\bF-\d{4,10}\b/gi,id=>{invoices.push(id.toUpperCase());return `[factura_${invoices.length.toString(36).replace(/[0-9]/g,'x')}]`;});
+  let index=0;
+  return protectedText.replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, '[correo]')
+    .replace(/\+?\d(?:[ .()-]*\d){6,}/g, '[número]')
+    .replace(/\[factura_[a-z]+\]/g,()=>invoices[index++] ?? '');
 }
 
 export function latestAnalyzable(snapshot: CaseSnapshot) {
-  return snapshot.messages.findLast((message) => message.actor !== 'agente');
+  return snapshot.messages.findLast((message) => message.actor !== 'agente' && !message.verification_input);
+}
+
+function draftIsCurrent(snapshot: CaseSnapshot) {
+  const card = snapshot.card;
+  return snapshot.status === 'open' && !!card?.advisor_draft && !!card.advisor_draft_run_id &&
+    card.advisor_draft_case_revision === snapshot.revision && card.advisor_draft_turn_seq === latestAnalyzable(snapshot)?.turn_seq;
+}
+
+function operatorSnapshot(snapshot: CaseSnapshot): CaseSnapshot {
+  if (!snapshot.card?.advisor_draft || draftIsCurrent(snapshot)) return snapshot;
+  const {advisor_draft:_draft,advisor_draft_run_id:_run,...context} = snapshot.card;
+  return {...snapshot,card:{...context,advisor_draft_status:'stale'}};
 }
 
 export function stillCurrent(row: CaseRow, turn: AgentTurn) {
@@ -53,13 +78,21 @@ export async function saveCase(tx: EntityManager, row: CaseRow) {
 }
 
 function assessor(viewer: Viewer) {
-  if (viewer.role !== 'asesor') throw new ForbiddenException('Se requiere rol asesor');
+  if (!viewer.capabilities?.some(capability => ['n1','n2','supervisor'].includes(capability)) && !(viewer.capabilities === undefined && viewer.role === 'asesor')) throw new ForbiddenException('Se requiere capacidad de atención');
 }
 
-function checkCase(viewer: Viewer, row: CaseRow, mustOwn = false) {
+export function checkCase(viewer: Viewer, row: CaseRow, mustOwn = false) {
   assessor(viewer);
   const owner = row.snapshot.owner_id;
   if ((owner && owner !== viewer.id) || (mustOwn && owner !== viewer.id)) throw new NotFoundException('Caso no disponible');
+}
+
+export function customerReference(row: CaseRow) {
+  if (!row.snapshot.verified) return null;
+  const ref = row.snapshot.channel === 'web'
+    ? row.account_ref ?? (row.contact_ref.startsWith('web-c1001:') ? 'C-1001' : null)
+    : row.contact_ref;
+  return ref && /^C-\d{4}$/.test(ref) ? ref : null;
 }
 
 export function addMessage(row: CaseRow, actor: z.infer<typeof Actor>, text: string, citations?: Message['citations']) {
@@ -71,9 +104,39 @@ export function addMessage(row: CaseRow, actor: z.infer<typeof Actor>, text: str
   return message;
 }
 
+const replayScenarios:Record<string,{fixture:string;channel:'telegram'|'whatsapp'}> = {
+  'CC-E03':{fixture:'C-1013',channel:'telegram'}, 'CC-E10':{fixture:'C-1013',channel:'whatsapp'},
+  'CC-E11':{fixture:'C-1004',channel:'telegram'}, 'CC-E12':{fixture:'C-1007',channel:'telegram'},
+  'CC-E13':{fixture:'C-1013',channel:'telegram'},
+  'GQ-25':{fixture:'C-1001',channel:'telegram'}, 'GQ-26':{fixture:'C-1004',channel:'telegram'},
+  'GQ-27':{fixture:'C-1007',channel:'telegram'}, 'GQ-28':{fixture:'C-1013',channel:'telegram'}
+};
+function localPromptReplayAllowed() {
+  const loopback = ['127.0.0.1','localhost','[::1]'];
+  const authUrl = new URL(process.env.BETTER_AUTH_URL ?? 'http://127.0.0.1:0');
+  return process.env.DEMO_MODE === 'true' && loopback.includes(authUrl.hostname)
+    && loopback.includes(process.env.HOST ?? '') && !process.env.TELEGRAM_BOT_TOKEN;
+}
+async function revisionForTurn(tx: EntityManager, row: CaseRow): Promise<{revision:string;scenario?:string}> {
+  const [{revision}] = await tx.query('SELECT revision FROM prompt_revision WHERE activated');
+  const replay = process.env.LOCAL_PROMPT_REPLAY_REVISION;
+  const requested=process.env.LOCAL_PROMPT_REPLAY_SCENARIO;
+  const scenario=requested ?? (row.contact_ref==='C-1004'?'CC-E11':row.contact_ref==='C-1013'?'CC-E13':undefined);
+  const mapping=scenario ? replayScenarios[scenario] : undefined;
+  if (!replay || !scenario || !mapping || row.contact_ref!==mapping.fixture || row.snapshot.channel!==mapping.channel) return {revision};
+  if (!localPromptReplayAllowed()) {
+    throw new Error('Local prompt replay requires a loopback demo API with Telegram delivery disabled');
+  }
+  const [candidate] = await tx.query(`SELECT revision FROM prompt_revision
+    WHERE revision=$1 AND base_revision=$2 AND NOT activated AND manifest IS NOT NULL
+    AND status IN ('candidate','passed')`,[replay,revision]);
+  if (!candidate) throw new ConflictException('La revisión de replay no es candidata de la revisión activa');
+  return {revision:candidate.revision,scenario};
+}
+
 export async function queueRun(tx: EntityManager, row: CaseRow, message = latestAnalyzable(row.snapshot), shadow = false) {
   if (!message || message.actor === 'agente') return;
-  const [{ revision }] = await tx.query('SELECT revision FROM prompt_revision WHERE activated');
+  const {revision,scenario} = await revisionForTurn(tx, row);
   const scope = row.snapshot.verified ? 'verified' : 'unverified';
   const turn = AgentTurn.parse({
     run_id: randomUUID(), case_id: row.id, conversation_id: row.snapshot.conversation_id, turn_id: message.id,
@@ -83,10 +146,25 @@ export async function queueRun(tx: EntityManager, row: CaseRow, message = latest
     text: clearPersonalData(message.text)
   });
   await tx.query('INSERT INTO agent_run VALUES ($1,$2,$3)', [turn.run_id, row.id, turn]);
+  if (scenario) await audit(tx,row.id,'candidate_replay_queued',{
+    run_id:turn.run_id,candidate_revision:revision,scenario_id:scenario,fixture:row.contact_ref,
+    ...(scenario==='CC-E10' ? {transport:'whatsapp_fixture'} : {})
+  });
   await enqueue(tx, turn.run_id, row.id, 'run', turn);
-  if (shadow && message.actor === 'cliente' && process.env.ML_API_URL) {
+  if (shadow && message.actor === 'cliente' && !message.verification_input && process.env.ML_API_URL) {
     await enqueue(tx, `ml:${message.id}`, row.id, 'ml', turn);
   }
+}
+
+async function queueIntentOnly(tx:EntityManager,row:CaseRow,message:Message) {
+  if (!process.env.ML_API_URL || message.actor!=='cliente' || message.verification_input) return;
+  const [{revision}]=await tx.query('SELECT revision FROM prompt_revision WHERE activated');
+  const turn=AgentTurn.parse({run_id:randomUUID(),case_id:row.id,conversation_id:row.snapshot.conversation_id,turn_id:message.id,
+    channel:row.snapshot.channel,actor:'cliente',turn_seq:message.turn_seq,case_revision:row.snapshot.revision,
+    attention_mode:row.snapshot.attention_mode,audience:row.snapshot.attention_mode==='asistido'?'asesor':'cliente',
+    scope_ref:row.snapshot.verified?'verified':'unverified',config_revision:revision,
+    business_date:process.env.DEMO_MODE==='true'?(process.env.DEMO_BUSINESS_DATE || '2026-11-18'):new Date().toISOString().slice(0,10),text:clearPersonalData(message.text)});
+  await enqueue(tx,`ml:${message.id}`,row.id,'ml',turn);
 }
 
 @Injectable()
@@ -95,9 +173,10 @@ export class Cases {
 
   async list(viewer: Viewer) {
     assessor(viewer);
+    const canIntake = viewer.capabilities?.includes('n1') ?? viewer.role === 'asesor';
     const rows: CaseRow[] = await this.db.query(`SELECT * FROM attention_case WHERE snapshot->>'owner_id'=$1 OR
-      (snapshot->>'owner_id' IS NULL AND (handoff_pending IS NOT NULL OR snapshot->>'attention_mode'='asistido'))
-      ORDER BY snapshot->>'updated_at' DESC LIMIT 100`, [viewer.id]);
+      ($2 AND snapshot->>'owner_id' IS NULL AND (handoff_pending IS NOT NULL OR snapshot->>'attention_mode'='asistido'))
+      ORDER BY snapshot->>'updated_at' DESC LIMIT 100`, [viewer.id, canIntake]);
     return rows.map(({ snapshot: { messages: _messages, card: _card, cursor: _cursor, ...summary } }) => summary);
   }
 
@@ -109,20 +188,51 @@ export class Cases {
 
   async get(viewer: Viewer, id: string) {
     const row = await loadCase(this.db.manager, id);
-    checkCase(viewer, row);
+    checkCase(viewer, row, true);
     if (!row.snapshot.owner_id && !row.handoff_pending) throw new NotFoundException('Caso no disponible');
-    return row.snapshot;
+    const [ml, tracking] = await Promise.all([privateSignals(this.db,row),this.caseTracking(row)]);
+    return {...operatorSnapshot(row.snapshot),ml,tracking};
+  }
+
+  private async caseTracking(row:CaseRow):Promise<NonNullable<CaseSnapshot['tracking']>> {
+    const [[owner],[escalation],events,receipts] = await Promise.all([
+      this.db.query(`SELECT u.name, r.capabilities FROM "user" u JOIN operator_role r ON u.id=r.user_id WHERE u.id=$1`,
+        [row.snapshot.owner_id]),
+      this.db.query(`SELECT e.id,e.destination,e.reason_code,e.status,e.updated_at,
+        GREATEST(0,EXTRACT(EPOCH FROM (COALESCE(t.first_action,now())-e.created_at)))::int AS queued_seconds
+        FROM escalation e LEFT JOIN LATERAL (
+          SELECT MIN(created_at) AS first_action FROM attention_event
+          WHERE case_id=e.case_id AND kind IN ('escalation_claim','escalation_reassign','escalation_cancel')
+            AND created_at>=e.created_at
+        ) t ON true WHERE e.case_id=$1 ORDER BY e.created_at DESC LIMIT 1`, [row.id]),
+      this.db.query(`SELECT kind,created_at AS at FROM attention_event
+        WHERE case_id=$1 AND (kind LIKE 'escalation_%' OR kind IN ('handoff_taken','holder_verified','closed'))
+        ORDER BY id DESC LIMIT 12`, [row.id]),
+      this.db.query(`SELECT action->>'kind' AS kind, reference FROM integration_operation
+        WHERE case_id=$1 AND status='confirmed' AND reference IS NOT NULL ORDER BY created_at DESC LIMIT 12`, [row.id])
+    ]);
+    const preferred = escalation?.status==='tomado' || escalation?.status==='resuelto'
+      ? escalation.destination==='supervision' ? 'supervisor' : 'n2' : 'n1';
+    const level = owner?.capabilities?.includes(preferred) ? preferred :
+      (['n1','n2','supervisor'] as const).find(cap => owner?.capabilities?.includes(cap)) ?? null;
+    return {owner_name:owner?.name ?? null,level,
+      escalation:escalation ? {...escalation,updated_at:escalation.updated_at.toISOString()} : null,
+      events:events.map((event:{kind:string;at:Date})=>({kind:event.kind,at:event.at.toISOString()})),receipts};
   }
 
   async take(viewer: Viewer, id: string) {
     return this.change(viewer, id, false, async (tx, row) => {
       if (row.snapshot.owner_id === viewer.id) return;
+      if (!(viewer.capabilities?.includes('n1') ?? viewer.role === 'asesor') || viewer.available === false) {
+        throw new ForbiddenException('Se requiere un asesor de primer nivel disponible');
+      }
       if (!row.handoff_pending) throw new ConflictException('El caso todavía está en autoservicio');
       row.snapshot.owner_id = viewer.id;
       row.snapshot.attention_mode = 'asistido';
       row.snapshot.revision += 1;
       row.snapshot.card = null;
       await audit(tx, id, 'handoff_taken');
+      await queueChurn(tx,row);
       await queueRun(tx, row);
     });
   }
@@ -147,6 +257,7 @@ export class Cases {
         row.snapshot.revision += 1;
         row.snapshot.card = null;
         await audit(tx, id, 'holder_verified');
+        await queueChurn(tx,row);
         await queueRun(tx, row);
       }
     }).then((snapshot) => {
@@ -177,17 +288,74 @@ export class Cases {
     return this.change(viewer, id, true, async (tx, row) => {
       const scope = `message:${viewer.id}:${id}`;
       if (await this.replay(tx, scope, input.idempotency_key, input)) return;
-      await this.assessorMessage(tx, row, input.text);
+      let publication: DraftPublication | undefined;
+      if (input.draft) {
+        this.assertCurrentDraft(row,input.draft);
+        await this.saveDraftEvent(tx,row,viewer.id,{...input.draft,event_id:`sent:${viewer.id}:${id}:${input.idempotency_key}`,kind:'sent'});
+        publication = await this.draftPublication(tx,row,input.draft.run_id,input.text);
+      }
+      await this.assessorMessage(tx, row, input.text, publication);
       await this.remember(tx, scope, input.idempotency_key, input, id);
     });
   }
 
-  async close(viewer: Viewer, id: string, resolved: boolean) {
+  private async draftPublication(tx:EntityManager,row:CaseRow,runId:string,text:string):Promise<DraftPublication|undefined> {
+    const card=row.snapshot.card;
+    if (!card?.advisor_draft || !card.intent || text.trim() !== card.advisor_draft.trim() || card.pending.length) return;
+    const source=card.citations[0]?.id;
+    const invoiceExplained = card.intent === 'facturacion' && row.snapshot.verified
+      && card.reason_codes.includes('verified_account') && card.facts.length > 0;
+    const terminal = invoiceExplained ? 'invoice_explained'
+      : card.reason_codes.includes('knowledge') && source ? knowledgePublication[card.intent] : undefined;
+    if (!terminal) return;
+    const [run] = await tx.query(`SELECT turn->>'config_revision' AS revision FROM agent_run WHERE id=$1 AND case_id=$2`,[runId,row.id]);
+    if (!run?.revision) return;
+    return {run_id:runId,category:card.intent,terminal,config_revision:run.revision,...(source ? {source} : {})};
+  }
+
+  async recordDraftEvent(viewer:Viewer, id:string, event:{
+    run_id:string;case_revision:number;event_id:string;kind:'used'|'edited'|'feedback_positive'|'feedback_negative'
+  }) {
+    return this.db.transaction(async tx => {
+      const row = await loadCase(tx,id,true);
+      checkCase(viewer,row,true);
+      this.assertCurrentDraft(row,event);
+      await this.saveDraftEvent(tx,row,viewer.id,event);
+      return {accepted:true};
+    });
+  }
+
+  private assertCurrentDraft(row:CaseRow,event:{run_id:string;case_revision:number}) {
+    if (!draftIsCurrent(row.snapshot) || row.snapshot.revision !== event.case_revision ||
+        row.snapshot.card?.advisor_draft_run_id !== event.run_id) {
+      throw new ConflictException('El borrador corresponde a un turno anterior');
+    }
+  }
+
+  private async saveDraftEvent(tx:EntityManager,row:CaseRow,operator:string,event:{
+    run_id:string;event_id:string;kind:'used'|'edited'|'sent'|'feedback_positive'|'feedback_negative'
+  }) {
+    const inserted = await tx.query(`INSERT INTO draft_event(event_id,case_id,run_id,operator_id,kind)
+      VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING event_id`,
+    [event.event_id,row.id,event.run_id,operator,event.kind]);
+    if (inserted.length) await audit(tx,row.id,event.kind.startsWith('feedback_') ? `reply_${event.kind}` : `draft_${event.kind}`,
+      {run_id:event.run_id,category:row.intent_hint});
+  }
+
+  async close(viewer: Viewer, id: string, input:z.infer<typeof CloseCase>) {
     return this.change(viewer, id, true, async (tx, row) => {
+      const {resolved,retention_outcome} = input;
+      const eligible = row.snapshot.verified && row.intent_hint === 'cancelacion' &&
+        (row.snapshot.card?.reason_codes.includes('retention_eligible') || row.snapshot.card?.proposal?.kind === 'retention_offer');
+      if (retention_outcome && retention_outcome !== 'pendiente' && !eligible) {
+        throw new ConflictException('Se requiere un caso de cancelación elegible y verificado');
+      }
+      if (eligible) await audit(tx,id,'retention_outcome',{category:'cancelacion',outcome:retention_outcome ?? 'pendiente'});
       row.snapshot.status = 'closed';
       row.snapshot.revision += 1;
       await tx.query('UPDATE attention_case SET resolved=$2 WHERE id=$1', [id, resolved]);
       await audit(tx, id, 'closed', { resolved });
+      await queueChurn(tx,row);
       if (row.snapshot.channel === 'telegram') {
         await enqueue(tx, `feedback:${id}`, id, 'deliver', {
           sender:'sistema', revision:row.snapshot.revision, feedback_case_id:id,
@@ -205,10 +373,16 @@ export class Cases {
       const row = await loadCase(tx, ref.case_id, true);
       checkCase(viewer, row, true);
       const scope = `decision:${viewer.id}:${proposalId}`;
-      if (await this.replay(tx, scope, input.idempotency_key, input)) return row.snapshot;
       const [p]: ProposalRow[] = await tx.query('SELECT * FROM retention_proposal WHERE id=$1 FOR UPDATE', [proposalId]);
+      if (!p) throw new NotFoundException();
+      const auditData = {proposal_id:proposalId,run_id:p.run_id,decision:input.decision};
+      if (await this.replay(tx, scope, input.idempotency_key, input)) {
+        await audit(tx,row.id,'proposal_decision_replayed',auditData);
+        return row.snapshot;
+      }
       if (p.proposal.status !== 'pending_approval') {
-        if (!(p.proposal.status === input.decision || (p.proposal.status === 'confirmed' && input.decision === 'approved'))) {
+        if (!(p.proposal.status === input.decision || (input.decision === 'approved' &&
+          ['pending_verification','confirmed'].includes(p.proposal.status)))) {
           throw new ConflictException('La propuesta ya está decidida');
         }
         return row.snapshot;
@@ -222,7 +396,7 @@ export class Cases {
       await this.remember(tx, scope, input.idempotency_key, input, row.id);
       if (input.decision === 'approved') await enqueue(tx, `effect:${proposalId}`, row.id, 'effect', { proposal_id: proposalId });
       else await enqueue(tx, `resume:${proposalId}`, row.id, 'resume', { run_id: p.run_id, effect_id: proposalId, status: 'rejected' });
-      await audit(tx, row.id, `proposal_${input.decision}`);
+      await audit(tx, row.id, `proposal_${input.decision}`,auditData);
       await saveCase(tx, row);
       return row.snapshot;
     });
@@ -239,12 +413,18 @@ export class Cases {
     return this.receive(input.chat_id, input.text, `telegram:${input.update_id}`, false);
   }
 
-  async receiveSynthetic(contactRef: string, text: string, key: string) {
+  async receiveSynthetic(contactRef: string, text: string, key: string, channel?:'whatsapp') {
     if (process.env.DEMO_MODE !== 'true') throw new NotFoundException();
+    if (channel === 'whatsapp') {
+      const scenario = process.env.LOCAL_PROMPT_REPLAY_SCENARIO;
+      if (scenario !== 'CC-E10' || !process.env.LOCAL_PROMPT_REPLAY_REVISION || contactRef !== replayScenarios[scenario].fixture
+        || !localPromptReplayAllowed()) throw new NotFoundException();
+      return this.receive(contactRef, text, `synthetic:whatsapp:${contactRef}:${key}`, true, channel);
+    }
     return this.receive(contactRef, text, `synthetic:${contactRef}:${key}`, true);
   }
 
-  private async receive(address: string, text: string, key: string, synthetic: boolean) {
+  private async receive(address: string, text: string, key: string, synthetic: boolean, channel:'telegram'|'whatsapp'='telegram') {
     return this.db.transaction(async (tx) => {
       const payload = { address, text };
       if (await this.replay(tx, 'incoming', key, payload)) return;
@@ -252,10 +432,10 @@ export class Cases {
         `SELECT * FROM telegram_contact WHERE ${synthetic ? 'ref' : 'chat_id'}=$1 AND enabled FOR UPDATE`, [address]);
       if (!contact) return;
       let row = await this.activeForContact(tx, contact.ref);
+      if (row && row.snapshot.channel !== channel) throw new ConflictException('El contacto ya tiene un caso abierto en otro canal');
       if (!row && contact.fixture === 'C-1004') return;
-      row ??= await this.newCase(tx, contact, contact.direct_owner);
-      const message = addMessage(row, 'cliente', text);
-      await queueRun(tx, row, message, true);
+      row ??= await this.newCase(tx, contact, contact.direct_owner, channel);
+      await this.customerTurn(tx,row,text);
       await this.remember(tx, 'incoming', key, payload, row.id);
       await audit(tx, row.id, 'customer_turn');
       await saveCase(tx, row);
@@ -293,29 +473,10 @@ export class Cases {
       if (await this.replay(tx, scope, input.idempotency_key, input)) return this.publicWeb(row);
       if (row.snapshot.status !== 'open') throw new UnprocessableEntityException('La conversación está cerrada');
       await this.consumeWebQuota(tx, 'send', 40);
-      await this.consumeWebQuota(tx, scope, 6);
-      const message = addMessage(row, 'cliente', clearPersonalData(input.text));
-      await this.remember(tx, scope, input.idempotency_key, input, row.id);
-      await audit(tx, row.id, 'customer_turn');
-      const inquiry = accountInquiry(message.text);
-      if (row.snapshot.attention_mode === 'autoservicio' && requestedAdvisor(message.text)) {
-        row.snapshot.revision += 1;
-        row.handoff_pending = 'Atención humana';
-        row.account_inquiry = null;
-        row.account_challenge_ref = row.account_challenge_id = row.account_challenge_expires_at = null;
-        addMessage(row, 'agente', 'Te comunicaré con un asesor en esta misma conversación.');
-        await audit(tx, row.id, 'handoff_requested');
-      } else if (inquiry && !row.account_ref) {
-        if (!row.account_inquiry) {
-          addMessage(row, 'agente', 'Para consultar tu cuenta, verifica un correo o un número de teléfono de prueba.');
-        }
-        row.account_inquiry = inquiry;
-        row.intent_hint = inquiry === 'plans' ? 'consulta_planes' : inquiry === 'tickets' ? 'soporte_tecnico' : 'facturacion';
-      } else if (inquiry && row.snapshot.attention_mode === 'autoservicio') {
-        await this.answerWebAccount(tx, row, inquiry);
-      } else {
-        await queueRun(tx, row, message, true);
-      }
+      await this.consumeWebQuota(tx, scope, 12);
+      await this.customerTurn(tx,row,input.text);
+      await this.remember(tx,scope,input.idempotency_key,input,row.id);
+      await audit(tx,row.id,'customer_turn');
       await saveCase(tx, row);
       return this.publicWeb(row);
     });
@@ -323,25 +484,32 @@ export class Cases {
 
   async startWebVerification(token: string | undefined, identifier: string) {
     this.requireWebDemo();
-    const snapshot = await this.db.transaction(async (tx) => {
-      const row = await this.lockWebCase(tx, token);
+    const caseId = await this.db.transaction(async tx => {
+      const row = await this.lockWebCase(tx,token);
       if (row.account_ref) throw new ConflictException('La cuenta de esta conversación ya está verificada.');
-      const inquiry = this.pendingWebInquiry(row);
-      if (!inquiry) throw new ConflictException('Primero solicita una consulta de cuenta en el chat.');
+      if (!this.pendingInquiry(row)) throw new ConflictException('Primero solicita una consulta de cuenta en el chat.');
       await this.consumeWebQuota(tx, 'verification-start', 36);
       await this.consumeWebQuota(tx, `verification-start:${row.id}`, 6);
-      const ref = await findDemoAccount(tx, identifier);
-      if (!ref) return null;
+      return row.id;
+    });
+    const ref = await simulators.alias(identifier).then(result => result.cliente_id, error => {
+      if (error instanceof SimulatorFailure && error.status === 404) {
+        throw new NotFoundException('No encontramos esa cuenta de prueba. Usa uno de los números o correos indicados.');
+      }
+      throw new ServiceUnavailableException('El CRM de prueba no está disponible. Reintenta en unos segundos.');
+    });
+    return this.db.transaction(async tx => {
+      const row = await this.lockWebCase(tx,token);
+      const inquiry = this.pendingInquiry(row);
+      if (row.id !== caseId || row.account_ref || !inquiry) throw new ConflictException('La consulta cambió. Intenta de nuevo.');
       row.account_inquiry = inquiry;
       row.account_challenge_ref = ref;
       row.account_challenge_id = randomUUID();
       row.account_challenge_expires_at = new Date(Date.now() + 5 * 60 * 1000);
-      await audit(tx, row.id, 'web_demo_challenge_started');
-      await saveCase(tx, row);
+      await audit(tx,row.id,'web_demo_challenge_started');
+      await saveCase(tx,row);
       return this.publicWeb(row);
     });
-    if (!snapshot) throw new NotFoundException('No encontramos esa cuenta de prueba. Usa uno de los números o correos indicados.');
-    return snapshot;
   }
 
   async confirmWebVerification(token: string | undefined, challengeId: string) {
@@ -354,22 +522,7 @@ export class Cases {
         throw new ConflictException('El código de prueba venció o cambió. Solicita otro.');
       }
       await this.consumeWebQuota(tx, `verification-confirm:${row.id}`, 6);
-      const inquiry = row.account_inquiry;
-      row.account_ref = row.account_challenge_ref;
-      row.account_challenge_ref = row.account_challenge_id = row.account_challenge_expires_at = null;
-      row.account_inquiry = null;
-      row.snapshot.verified = true;
-      row.snapshot.display_name = `Cliente ${row.account_ref} · Web`;
-      row.snapshot.revision += 1;
-      row.snapshot.card = null;
-      if (row.snapshot.attention_mode === 'autoservicio' && row.handoff_pending !== 'Atención humana') row.handoff_pending = null;
-      await audit(tx, row.id, 'holder_verified', {method:'web_demo'});
-      if (row.snapshot.attention_mode === 'autoservicio') {
-        await this.answerWebAccount(tx, row, inquiry, 'Cuenta de prueba verificada. ');
-      } else {
-        addMessage(row, 'agente', 'Cuenta de prueba verificada. Tu asesor ya puede continuar con la consulta.');
-        await queueRun(tx, row);
-      }
+      await this.confirmAccount(tx,row);
       await saveCase(tx, row);
       return this.publicWeb(row);
     });
@@ -383,12 +536,142 @@ export class Cases {
     return row;
   }
 
-  private async answerWebAccount(tx: EntityManager, row: CaseRow, inquiry: NonNullable<CaseRow['account_inquiry']>, prefix = '') {
-    if (!row.account_ref || !row.snapshot.verified) throw new ForbiddenException('Verifica tu cuenta para consultar los datos.');
-    const profile = await demoAccount(tx, row.account_ref);
-    if (!profile) throw new NotFoundException('La cuenta de prueba no está disponible.');
-    await audit(tx, row.id, inquiry === 'plans' ? 'crm_read' : inquiry === 'tickets' ? 'tickets_read' : 'billing_read', {scope:'web_demo_account'});
-    addMessage(row, 'agente', prefix + demoAccountReply(profile, inquiry));
+  private async customerTurn(tx: EntityManager, row: CaseRow, text: string) {
+    const demo = process.env.DEMO_MODE === 'true';
+    const requested = demo ? accountInquiry(text) : null;
+    const pending = demo ? this.pendingInquiry(row) : null;
+    const handoff = demo && requestedAdvisor(text);
+    const verified = customerReference(row);
+    const aliases = demo ? contactCandidates(text) : [];
+    const codes = demo ? codeCandidates(text) : [];
+    const activeChallenge = row.account_challenge_id && Number(row.account_challenge_expires_at) > Date.now();
+    const verificationTurn = !verified && !!pending && !handoff && (!requested || !!activeChallenge);
+    const message = addMessage(row,'cliente',verificationTurn
+      ? '[Dato de verificación oculto]'
+      : this.safeCustomerText(text,aliases,codes));
+    if (verificationTurn) message.verification_input = true;
+
+    if (handoff && row.snapshot.attention_mode === 'autoservicio') {
+      row.snapshot.revision += 1;
+      row.handoff_pending = 'Atención humana';
+      row.account_inquiry = null;
+      this.clearChallenge(row);
+      await this.channelReply(tx,row,'Te comunicaré con un asesor en esta misma conversación.');
+      await audit(tx,row.id,'handoff_requested');
+      return;
+    }
+    if (verified && requested && requested !== 'assistance' && row.snapshot.attention_mode === 'autoservicio' && !row.handoff_pending) {
+      await queueIntentOnly(tx,row,message);
+      await this.answerAccount(tx,row,verified,requested);
+      return;
+    }
+    if (verified || (!requested && !pending) || handoff) {
+      if (!(demo && !requested && (aliases.length || codes.length) && !handoff)) await queueRun(tx,row,message,true);
+      else await this.channelReply(tx,row,'Cuéntame qué necesitas consultar. Si hace falta, te pediré un dato de prueba.');
+      return;
+    }
+
+    row.account_inquiry = requested ?? pending;
+    if (requested && requested !== 'assistance') row.intent_hint = requested === 'plans' ? 'consulta_planes' : requested === 'tickets' ? 'soporte_tecnico' : 'facturacion';
+    const replaceContact = aliases.some(alias => alias.includes('@') || alias.length >= 10) ||
+      (aliases.length > 0 && /\b(correo|tel[eé]fono|celular|contacto|mi n[uú]mero)\b/i.test(text) &&
+        !/\b(c[oó]digo|otp)\b/i.test(text));
+    if (activeChallenge && !replaceContact) {
+      if (codes.length === 1) await this.confirmAccount(tx,row);
+      else await this.channelReply(tx,row,'Escribe un solo código de seis dígitos. En modo demo puedes usar cualquier código de ese formato.');
+      return;
+    }
+    this.clearChallenge(row);
+    if (aliases.length !== 1) {
+      await this.channelReply(tx,row,aliases.length > 1 ? 'Indícame un solo correo o teléfono de prueba.' :
+        accountVerificationPrompt);
+      return;
+    }
+    try {
+      const {cliente_id:ref} = await simulators.alias(aliases[0]);
+      if (row.snapshot.channel === 'telegram' && ref !== row.contact_ref) {
+        await this.channelReply(tx,row,'No encontré una coincidencia para este chat. Escribe el contacto de prueba asociado.');
+        return;
+      }
+      row.account_challenge_ref = ref;
+      row.account_challenge_id = randomUUID();
+      row.account_challenge_expires_at = new Date(Date.now()+5*60*1000);
+      await audit(tx,row.id,'demo_challenge_started',{channel:row.snapshot.channel});
+      await this.channelReply(tx,row,'Simulé el envío de un código a tu contacto. En modo demo escribe cualquier número de seis dígitos, en este chat.');
+    } catch (error) {
+      if (!(error instanceof SimulatorFailure)) throw error;
+      await this.channelReply(tx,row,error.status === 404
+        ? row.snapshot.channel === 'telegram'
+          ? 'No encontré una coincidencia para este chat. Escribe el contacto de prueba asociado.'
+          : 'No encontré ese contacto de prueba. Escribe de nuevo tu correo o número.'
+        : 'La verificación está temporalmente indisponible. Vuelve a escribir tu contacto en unos segundos.');
+    }
+  }
+
+  private safeCustomerText(text: string, aliases: string[], codes: string[]) {
+    const redacted = clearPersonalData(text);
+    if (!aliases.length && !codes.length) return redacted;
+    const sensitive = new Set([...aliases,...codes]);
+    return redacted.replace(/(?<!\w)\+?\d(?:[ ()-]*\d){4,14}(?!\w)/g,value =>
+      sensitive.has(value.replace(/\D/g,'')) ? '[dato oculto]' : value);
+
+  }
+
+  private clearChallenge(row: CaseRow) {
+    row.account_challenge_ref = row.account_challenge_id = row.account_challenge_expires_at = null;
+  }
+
+  private async confirmAccount(tx: EntityManager,row: CaseRow) {
+    const ref = row.account_challenge_ref;
+    const inquiry = row.account_inquiry;
+    if (!ref || !inquiry) throw new ConflictException('Solicita un código nuevo.');
+    row.account_ref = ref;
+    this.clearChallenge(row);
+    row.account_inquiry = null;
+    row.snapshot.verified = true;
+    if (row.snapshot.channel === 'web') row.snapshot.display_name = `Cliente ${ref} · Web`;
+    row.snapshot.revision += 1;
+    row.snapshot.card = null;
+    await audit(tx,row.id,'holder_verified',{method:'demo_chat',channel:row.snapshot.channel});
+    await queueChurn(tx,row);
+    if (row.snapshot.attention_mode === 'asistido') {
+      await this.channelReply(tx,row,'Cuenta de prueba verificada. Tu asesor ya puede continuar con la consulta.');
+      await queueRun(tx,row,latestAnalyzable(row.snapshot),true);
+    } else if (inquiry === 'assistance' || row.handoff_pending === 'Atención humana') {
+      row.handoff_pending = 'Atención humana';
+      await audit(tx,row.id,'handoff_requested');
+      await this.channelReply(tx,row,'Cuenta de prueba verificada. Un asesor continuará en esta misma conversación.');
+    } else {
+      row.handoff_pending = null;
+      await this.answerAccount(tx,row,ref,inquiry,'Cuenta de prueba verificada. ');
+    }
+  }
+
+  private async channelReply(tx: EntityManager,row: CaseRow,text: string) {
+    const message = addMessage(row,'agente',text);
+    if (row.snapshot.channel === 'telegram') {
+      await enqueue(tx,`deliver:${message.id}`,row.id,'deliver',{
+        text,sender:'sistema',revision:row.snapshot.revision,turn_seq:message.turn_seq
+      });
+    }
+  }
+
+  private async answerAccount(tx: EntityManager,row: CaseRow,ref: string,inquiry: Exclude<AccountInquiry,'assistance'>,prefix = '') {
+    try {
+      const reply = await accountReply(ref,inquiry);
+      const [active] = await tx.query('SELECT revision FROM prompt_revision WHERE activated');
+      const config = active ? await readRunPromptConfig(tx,active.revision) : null;
+      const template = config?.prompts.account_answer;
+      const values:Record<string,string> = {account_fact_sentence:reply,next_step_sentence:''};
+      const rendered = template?.replace(/\{\{\s*([a-z][a-z0-9_]*)\s*\}\}/g,(_,key:string)=>values[key] ?? '').trim();
+      await audit(tx,row.id,inquiry === 'plans' ? 'crm_read' : inquiry === 'tickets' ? 'tickets_read' : 'billing_read',{
+        scope:'demo_chat_account', ...(rendered ? {config_revision:active.revision,prompt_sha256:config?.prompt_metadata.account_answer?.sha256} : {})
+      });
+      await this.channelReply(tx,row,prefix + (rendered || reply));
+    } catch (error) {
+      if (!(error instanceof SimulatorFailure)) throw error;
+      await this.channelReply(tx,row,prefix + 'La API de esta consulta está temporalmente indisponible. Puedes volver a preguntar o solicitar un asesor.');
+    }
   }
 
   private requireWebDemo() {
@@ -421,7 +704,7 @@ export class Cases {
     if (row.account_ref) verification = {stage:'verified'};
     else if (row.account_challenge_id && row.account_challenge_expires_at && Number(row.account_challenge_expires_at) > Date.now()) {
       verification = {stage:'code_sent', challenge_id:row.account_challenge_id};
-    } else if (this.pendingWebInquiry(row)) verification = {stage:'required'};
+    } else if (this.pendingInquiry(row)) verification = {stage:'required'};
     return WebChatSnapshot.parse({ ...row.snapshot,
       awaiting_advisor: !!row.handoff_pending && row.snapshot.attention_mode === 'autoservicio' &&
         (row.handoff_pending === 'Atención humana' || verification.stage === 'idle' || verification.stage === 'verified'),
@@ -429,16 +712,20 @@ export class Cases {
     });
   }
 
-  private pendingWebInquiry(row: CaseRow) {
+  private pendingInquiry(row: CaseRow) {
     if (row.account_inquiry) return row.account_inquiry;
     if (!row.contact_ref.startsWith('web-c1001:') || !row.handoff_pending || row.handoff_pending === 'Atención humana') return null;
     return accountInquiry(row.snapshot.messages.findLast(message => message.actor === 'cliente')?.text ?? '');
   }
 
-  private async assessorMessage(tx: EntityManager, row: CaseRow, text: string) {
+  private async assessorMessage(tx: EntityManager, row: CaseRow, text: string, publication?:DraftPublication) {
     const m = addMessage(row, 'asesor', text);
     if (row.snapshot.channel === 'telegram') {
-      await enqueue(tx, `deliver:${m.id}`, row.id, 'deliver', { text, sender: 'asesor', revision: row.snapshot.revision });
+      await enqueue(tx, `deliver:${m.id}`, row.id, 'deliver', {
+        text,sender:'asesor',revision:row.snapshot.revision,...(publication ? {draft_publication:publication} : {})
+      });
+    } else if (row.snapshot.channel === 'web' && publication) {
+      await audit(tx,row.id,'agent_task_outcome',{...publication,channel:'web',outcome:'qualified_success'});
     }
     await queueRun(tx, row, m);
   }
@@ -450,7 +737,8 @@ export class Cases {
       if (row.snapshot.status !== 'open') throw new UnprocessableEntityException('El caso ya está cerrado');
       await apply(tx, row);
       await saveCase(tx, row);
-      return row.snapshot;
+      const snapshot=operatorSnapshot(row.snapshot);
+      return snapshot.owner_id===viewer.id ? {...snapshot,ml:await privateSignals(tx,row)} : snapshot;
     });
   }
 
@@ -459,7 +747,7 @@ export class Cases {
     return row;
   }
 
-  private async newCase(tx: EntityManager, contact: Pick<ContactRow, 'ref' | 'display_name'>, owner: string | null, channel: 'telegram' | 'web' = 'telegram'): Promise<CaseRow> {
+  private async newCase(tx: EntityManager, contact: Pick<ContactRow, 'ref' | 'display_name'>, owner: string | null, channel: 'telegram' | 'web' | 'whatsapp' = 'telegram'): Promise<CaseRow> {
     const id = randomUUID();
     const snapshot: CaseSnapshot = {
       id, conversation_id: randomUUID(), display_name: contact.display_name, channel,
@@ -468,6 +756,7 @@ export class Cases {
     };
     await tx.query('INSERT INTO attention_case(id,contact_ref,snapshot) VALUES ($1,$2,$3)', [id, contact.ref, snapshot]);
     await audit(tx, id, 'opened');
+    if (owner) await audit(tx,id,'human_attention_started',{operator_id:owner,channel});
     return { id, snapshot, contact_ref: contact.ref, handoff_pending: null, intent_hint: null };
   }
 

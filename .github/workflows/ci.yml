@@ -22,10 +22,30 @@ jobs:
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm test
+      - name: Capture Node test line coverage
+        run: |
+          mkdir -p coverage
+          node --test --experimental-test-coverage --test-reporter=lcov --test-reporter-destination=coverage/lcov.info \
+            --test-coverage-include='apps/backend/dist/**/*.js' --test-coverage-include='packages/agent/dist/**/*.js' \
+            apps/backend/test/*.test.mjs packages/agent/test/*.test.mjs
+          node scripts/ci-coverage.mjs coverage/lcov.info coverage/line-coverage.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-coverage
+          path: |
+            coverage/lcov.info
+            coverage/line-coverage.json
       - name: Validate Compose
         env:
           DATABASE_URL: postgresql://claro:ci@postgres:5432/claro_demo
           POSTGRES_PASSWORD: ci
+          PLATFORM_DATABASE_URL: postgresql://claro_platform:ci-only@postgres:5432/claro_demo
+          CRM_DATABASE_URL: postgresql://claro_crm_app:ci-only@postgres:5432/claro_crm
+          BILLING_DATABASE_URL: postgresql://claro_billing_app:ci-only@postgres:5432/claro_facturacion
+          CRM_API_KEY: ci-only-crm-key
+          BILLING_API_KEY: ci-only-billing-key
+          INTEGRATION_MCP_TOKEN: ci-only-private-mcp-service-token
+          INTEGRATION_MCP_SIGNING_KEY: ci-only-private-mcp-signing-key-fixture
           BETTER_AUTH_URL: http://localhost:3000
           BETTER_AUTH_SECRET: ci-only-placeholder
           TELEGRAM_BOT_TOKEN: ci-only-placeholder
@@ -80,6 +100,18 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       DATABASE_URL: postgresql://claro:ci@127.0.0.1:5432/claro_e2e
+      PLATFORM_DATABASE_URL: postgresql://claro_platform:ci-platform-only@127.0.0.1:5432/claro_e2e
+      CRM_DATABASE_URL: postgresql://claro_crm_app:ci-crm-only@127.0.0.1:5432/claro_crm
+      BILLING_DATABASE_URL: postgresql://claro_billing_app:ci-billing-only@127.0.0.1:5432/claro_facturacion
+      CRM_API_KEY: ci-only-crm-key
+      BILLING_API_KEY: ci-only-billing-key
+      CRM_API_URL: http://127.0.0.1:8081/v1
+      BILLING_API_URL: http://127.0.0.1:8082/v1
+      CRM_MCP_URL: http://127.0.0.1:39181/mcp
+      BILLING_MCP_URL: http://127.0.0.1:39182/mcp
+      INTEGRATION_MCP_TOKEN: ci-only-private-mcp-service-token
+      INTEGRATION_MCP_SIGNING_KEY: ci-only-private-mcp-signing-key-fixture
+      SIMULATOR_CONTRACT_TEST: '1'
       BETTER_AUTH_URL: http://127.0.0.1:39081
       BETTER_AUTH_SECRET: ci-only-randomish-32-character-secret-123456
       HOST: 127.0.0.1
@@ -90,12 +122,20 @@ jobs:
       ML_SERVICE_TOKEN: ci-only-shadow-service-token
       DEMO_HOLDER_CODE: '927186'
       TELEGRAM_WEBHOOK_SECRET: ci-only-hook-secret
+      DEMO_BILLING_CHAT_ID: '355000001'
+      DEMO_RETENTION_CHAT_ID: '355000004'
       DEMO_ASSIGNED_CHAT_ID: '355000007'
       DEMO_SUPPORT_CHAT_ID: '355000013'
       DEMO_ASESSOR_EMAIL: asesor@example.test
       DEMO_ASESSOR_PASSWORD: CI-only-advisor-password-123
       DEMO_ADMIN_EMAIL: admin@example.test
       DEMO_ADMIN_PASSWORD: CI-only-admin-password-123
+      DEMO_N2_EMAIL: n2@example.test
+      DEMO_N2_PASSWORD: CI-only-n2-password-123
+      DEMO_SUPERVISOR_EMAIL: supervisor@example.test
+      DEMO_SUPERVISOR_PASSWORD: CI-only-supervisor-password-123
+      DEMO_SUPERADMIN_EMAIL: superadmin@example.test
+      DEMO_SUPERADMIN_PASSWORD: CI-only-superadmin-password-123
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -112,14 +152,27 @@ jobs:
         run: |
           set -euo pipefail
           pnpm --filter @claro/backend migrate
+          node apps/simulators/bootstrap.mjs
+          pnpm --filter @claro/simulators test:contract
+          node apps/simulators/bootstrap.mjs
+          FCR_TEST_DATABASE_URL="$DATABASE_URL" node --test apps/backend/test/metrics-fcr.test.mjs
+          export DATABASE_URL="$PLATFORM_DATABASE_URL"
           pnpm --filter @claro/backend seed
+          node apps/simulators/test/platform-servers.mjs > simulators-e2e.log 2>&1 &
+          simulators_pid=$!
+          MCP_DOMAIN=crm MCP_PORT=39181 node apps/backend/dist/integration-mcp.js > crm-mcp-e2e.log 2>&1 &
+          crm_mcp_pid=$!
+          MCP_DOMAIN=billing MCP_PORT=39182 node apps/backend/dist/integration-mcp.js > billing-mcp-e2e.log 2>&1 &
+          billing_mcp_pid=$!
           node apps/backend/dist/main.js > api-e2e.log 2>&1 &
           api_pid=$!
           node apps/backend/dist/worker.js > worker-e2e.log 2>&1 &
           worker_pid=$!
-          trap 'kill "$api_pid" "$worker_pid" 2>/dev/null || true; cat api-e2e.log worker-e2e.log' EXIT
+          trap 'kill "$api_pid" "$worker_pid" "$simulators_pid" "$crm_mcp_pid" "$billing_mcp_pid" 2>/dev/null || true; cat api-e2e.log worker-e2e.log simulators-e2e.log crm-mcp-e2e.log billing-mcp-e2e.log' EXIT
           node --input-type=module -e 'for(let i=0;i<60;i++){try{if((await fetch(process.env.BETTER_AUTH_URL+"/readyz")).ok)process.exit(0)}catch{} await new Promise(r=>setTimeout(r,500))}process.exit(1)'
           pnpm --filter @claro/backend test:integration
+          pnpm --filter @claro/backend test:mcp
+          pnpm --filter @claro/backend test:evolution
   ml-checks:
     runs-on: ubuntu-latest
     defaults:
@@ -172,14 +225,23 @@ jobs:
           severity: CRITICAL
           scanners: vuln
           exit-code: '1'
+      - uses: actions/download-artifact@v4
+        with:
+          name: node-coverage
+          path: coverage
       - name: Publish the scanned image and record its immutable reference
         env:
           IMAGE: ${{ steps.image.outputs.tag }}
+          COMPONENT: ${{ matrix.image }}
         shell: bash
         run: |
           docker push "$IMAGE"
           docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE" | tee candidate-image.txt
+          IMAGE_BYTES=$(docker image inspect --format '{{.Size}}' "$IMAGE") COMMIT_AT=$(git log -1 --format=%cI) \
+            node scripts/ci-release-evidence.mjs candidate-image.txt coverage/line-coverage.json release-evidence.json
       - uses: actions/upload-artifact@v4
         with:
           name: candidate-${{ matrix.image }}
-          path: candidate-image.txt
+          path: |
+            candidate-image.txt
+            release-evidence.json

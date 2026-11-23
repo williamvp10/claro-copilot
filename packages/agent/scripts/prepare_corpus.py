@@ -6,6 +6,7 @@
 from __future__ import annotations
 import argparse
 import json
+from hashlib import sha256
 import os
 import re
 import sys
@@ -145,10 +146,12 @@ def chunks(blocks: list[tuple[str,str]]):
         yield section, '\n'.join(parts)
 
 
-def prepare(root: Path) -> list[dict[str,str]]:
+def prepare(root: Path, initial: bool = False) -> list[dict[str,str]]:
     output = []
     v2_date = next(source.effective_from for source in SOURCES if source.key == 'catalogo-v2')
     for source in SOURCES:
+        if initial and source.key == 'catalogo-v2':
+            continue
         path = root / source.path
         if not path.is_file():
             raise FileNotFoundError(f'Missing required source: {source.path}')
@@ -176,7 +179,7 @@ def prepare(root: Path) -> list[dict[str,str]]:
             row = {'id':f'{source.key}-{count:03d}', 'title':f'{source.title} · {section}', 'excerpt':excerpt,
                    'version':source.version, 'scope':source.scope, 'effective_from':source.effective_from,
                    'status':'ready', 'type':source.kind}
-            if source.key == 'catalogo-v1':
+            if source.key == 'catalogo-v1' and not initial:
                 row['effective_to'] = v2_date
             output.append(row)
         if not count:
@@ -188,12 +191,25 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input', type=Path, required=True, help='Root of Insumos_Prueba_Consultor_IA')
     parser.add_argument('--output', type=Path, required=True, help='New private JSON file outside the repository and source tree')
+    parser.add_argument('--manifest', type=Path, help='Write the publication manifest alongside the bundle')
+    parser.add_argument('--initial', action='store_true', help='Publish the first catalog snapshot for an isolated replay')
+    parser.add_argument('--approved-public', type=Path, help='Previously approved public passages, matched by identity and excerpt')
     args = parser.parse_args()
     root, target = args.input.resolve(strict=True), args.output.resolve()
     repo = Path(__file__).resolve().parents[3]
     if not root.is_dir() or target.is_relative_to(root) or target.is_relative_to(repo):
         parser.error('Output must be outside the source tree and repository')
-    records = prepare(root)
+    manifest_target = args.manifest.resolve() if args.manifest else None
+    if manifest_target and (manifest_target.is_relative_to(root) or manifest_target.is_relative_to(repo) or manifest_target == target):
+        parser.error('Manifest must be a distinct private file')
+    records = prepare(root, args.initial)
+    if args.approved_public:
+        approved = json.loads(args.approved_public.read_text(encoding='utf-8'))
+        fingerprints = {(row['id'], row['version'], row['excerpt']) for row in approved
+                        if row.get('scope') == 'public' and row.get('provider_approved') is True}
+        for record in records:
+            if record['scope'] == 'public' and (record['id'], record['version'], record['excerpt']) in fingerprints:
+                record['provider_approved'] = True
     # Exclusive creation prevents overwriting existing data or following an existing symlink.
     fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
@@ -203,6 +219,18 @@ def main() -> int:
     except BaseException:
         target.unlink(missing_ok=True)
         raise
+    if manifest_target:
+        try:
+            with os.fdopen(os.open(manifest_target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w', encoding='utf-8') as file:
+                json.dump({'sha256': sha256(target.read_bytes()).hexdigest(),
+                           'stage': 'initial' if args.initial else 'current',
+                           'sources': {source.key: sha256((root / source.path).read_bytes()).hexdigest()
+                                       for source in SOURCES if not args.initial or source.key != 'catalogo-v2'},
+                           'count': len(records)}, file, ensure_ascii=False, indent=2)
+                file.write('\n')
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
     counts = Counter(row['type'] for row in records)
     print(f'Created {len(records)} passages from {len(SOURCES)} reviewed sources; types: {dict(sorted(counts.items()))}; catalog v2 effective: 2026-12-01.')
     return 0

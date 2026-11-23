@@ -1,0 +1,260 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Arquitectura propuesta de la plataforma · Claro Copiloto",
+    "locale": "es",
+    "output": "docs/evolucion-mvp/diagramas/arquitectura-plataforma.html",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "cliente",
+      "type": "external",
+      "label": "Cliente web",
+      "sublabel": "Chat en el navegador",
+      "pos": [
+        36,
+        80
+      ],
+      "size": [
+        142,
+        63
+      ]
+    },
+    {
+      "id": "telegram",
+      "type": "external",
+      "label": "Telegram",
+      "sublabel": "Chat con el bot",
+      "pos": [550, 80],
+      "size": [177, 63]
+    },
+    {
+      "id": "operadores",
+      "type": "external",
+      "label": "Equipo de atención",
+      "sublabel": "N1 · N2 · supervisión",
+      "pos": [
+        36,
+        251
+      ],
+      "size": [
+        142,
+        63
+      ]
+    },
+    {
+      "id": "administradores",
+      "type": "external",
+      "label": "Administración",
+      "sublabel": "Operativo · superadmin",
+      "pos": [
+        36,
+        423
+      ],
+      "size": [
+        142,
+        63
+      ]
+    },
+    {
+      "id": "web",
+      "type": "frontend",
+      "label": "Consola Next.js",
+      "sublabel": "Chat web, CRM y administración",
+      "pos": [
+        273,
+        251
+      ],
+      "size": [
+        177,
+        63
+      ]
+    },
+    {
+      "id": "bff",
+      "type": "security",
+      "label": "API NestJS",
+      "sublabel": "Better Auth · rol y ámbito",
+      "pos": [
+        550,
+        251
+      ],
+      "size": [
+        177,
+        63
+      ]
+    },
+    {
+      "id": "casos",
+      "type": "database",
+      "label": "PostgreSQL de plataforma",
+      "sublabel": "Casos · colas · prompts · outbox",
+      "pos": [
+        842,
+        251
+      ],
+      "size": [
+        191,
+        63
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "Worker de atención",
+      "sublabel": "LangGraph y cliente MCP",
+      "pos": [
+        1150,
+        251
+      ],
+      "size": [
+        175,
+        63
+      ]
+    },
+    {
+      "id": "mocks",
+      "type": "backend",
+      "label": "APIs mock Express",
+      "sublabel": "CRM y Facturación",
+      "pos": [
+        550,
+        423
+      ],
+      "size": [
+        177,
+        63
+      ]
+    },
+    {
+      "id": "metrica",
+      "type": "backend",
+      "label": "Agregados de operación",
+      "sublabel": "Negocio, calidad y operaciones",
+      "pos": [
+        842,
+        80
+      ],
+      "size": [
+        191,
+        63
+      ]
+    },
+    {
+      "id": "evidencia",
+      "type": "backend",
+      "label": "Evidencia operativa",
+      "sublabel": "Langfuse · MLflow · CI/CD",
+      "pos": [
+        1150,
+        80
+      ],
+      "size": [
+        175,
+        63
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "cliente-web",
+      "from": "cliente",
+      "to": "web",
+      "label": "Chat web"
+    },
+    {
+      "id": "telegram-webhook",
+      "from": "telegram",
+      "to": "bff",
+      "label": "Webhook HTTPS"
+    },
+    {
+      "id": "operadores-web",
+      "from": "operadores",
+      "to": "web",
+      "label": "Consola",
+      "variant": "emphasis"
+    },
+    {
+      "id": "administradores-web",
+      "from": "administradores",
+      "to": "web",
+      "label": "Administración"
+    },
+    {
+      "id": "web-bff",
+      "from": "web",
+      "to": "bff",
+      "label": "HTTPS / SSE",
+      "variant": "emphasis"
+    },
+    {
+      "id": "bff-casos",
+      "from": "bff",
+      "to": "casos",
+      "label": "Caso y outbox",
+      "variant": "emphasis"
+    },
+    {
+      "id": "casos-worker",
+      "from": "casos",
+      "to": "worker",
+      "label": "Turnos pendientes",
+      "variant": "dashed"
+    },
+    {
+      "id": "bff-mocks",
+      "from": "bff",
+      "to": "mocks",
+      "label": "REST autorizado",
+      "variant": "security"
+    },
+    {
+      "id": "casos-metrica",
+      "from": "casos",
+      "to": "metrica",
+      "label": "Eventos y series"
+    },
+    {
+      "id": "evidencia-metrica",
+      "from": "evidencia",
+      "to": "metrica",
+      "label": "Runs y evidencias"
+    },
+    {
+      "id": "worker-evidencia",
+      "from": "worker",
+      "to": "evidencia",
+      "label": "Trazas y ML",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Consola y métricas",
+      "items": [
+        "Panel general enlaza Negocio, Calidad del LLM, Técnica, Agentes, Machine learning y DevOps. El administrador elige indicadores por tablero y conserva sus filtros.",
+        "NestJS normaliza web y Telegram. N1 y N2 conservan diálogo, fuentes y borrador editable en el mismo caso."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Escalamiento",
+      "items": [
+        "N1 conserva el caso hasta la toma exclusiva. N2 atiende por especialidad con el hilo, las fuentes, los pendientes y el borrador privado.",
+        "Supervisión reasigna casos y aprueba ajustes por política. Superadmin gestiona clientes y operadores con auditoría."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Sistemas de origen",
+      "items": [
+        "CRM y Facturación tienen APIs mock HTTP con bases independientes. El CRM integrado abre ficha, casos y seguimiento mediante proyecciones autorizadas de NestJS.",
+        "El worker decide las lecturas MCP por objetivo y registra efectos por outbox tras confirmación humana."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,534 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Arquitectura propuesta del agente · Claro Copiloto",
+    "locale": "es",
+    "output": "docs/evolucion-mvp/diagramas/arquitectura-agente.html",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "canales",
+      "type": "frontend",
+      "label": "Chat y consola",
+      "sublabel": "Web · Telegram · asesor",
+      "pos": [
+        30,
+        260
+      ],
+      "size": [
+        132,
+        66
+      ],
+      "tag": "CANAL"
+    },
+    {
+      "id": "plataforma",
+      "type": "backend",
+      "label": "API NestJS",
+      "sublabel": "Caso, permisos y salida",
+      "pos": [
+        240,
+        260
+      ],
+      "size": [
+        153,
+        66
+      ],
+      "tag": "BACKEND"
+    },
+    {
+      "id": "orquestador",
+      "type": "backend",
+      "label": "Orquestador LangGraph",
+      "sublabel": "Política, ruta y salida",
+      "pos": [
+        480,
+        260
+      ],
+      "size": [
+        168,
+        66
+      ],
+      "tag": "AGENTE"
+    },
+    {
+      "id": "jev",
+      "type": "external",
+      "label": "Jev por OpenRouter",
+      "sublabel": "Intención y complejidad",
+      "pos": [
+        480,
+        32
+      ],
+      "size": [
+        168,
+        62
+      ],
+      "tag": "PROVEEDOR"
+    },
+    {
+      "id": "soporte",
+      "type": "backend",
+      "label": "Soporte técnico",
+      "sublabel": "Diagnóstico, ticket y N2",
+      "pos": [
+        718,
+        128
+      ],
+      "size": [
+        144,
+        65
+      ],
+      "tag": "SUBAGENTE"
+    },
+    {
+      "id": "cobros",
+      "type": "backend",
+      "label": "Facturación",
+      "sublabel": "Saldo, detalle y ajuste",
+      "pos": [
+        718,
+        260
+      ],
+      "size": [
+        144,
+        66
+      ],
+      "tag": "SUBAGENTE"
+    },
+    {
+      "id": "comercial",
+      "type": "backend",
+      "label": "Comercial y portabilidad",
+      "sublabel": "Planes, retención, portabilidad",
+      "pos": [
+        718,
+        392
+      ],
+      "size": [
+        158,
+        66
+      ],
+      "tag": "SUBAGENTE"
+    },
+    {
+      "id": "tools",
+      "type": "security",
+      "label": "Cliente compartido",
+      "sublabel": "Permiso por paso y caso",
+      "pos": [
+        936,
+        260
+      ],
+      "size": [
+        144,
+        66
+      ],
+      "tag": "CLIENTE MCP"
+    },
+    {
+      "id": "conocimiento",
+      "type": "backend",
+      "label": "MCP Conocimiento",
+      "sublabel": "Pasajes y citas vigentes",
+      "pos": [
+        1330,
+        128
+      ],
+      "size": [
+        144,
+        65
+      ],
+      "tag": "SERVIDOR MCP"
+    },
+    {
+      "id": "crm",
+      "type": "backend",
+      "label": "MCP CRM",
+      "sublabel": "Contexto y elegibilidad",
+      "pos": [
+        1330,
+        260
+      ],
+      "size": [
+        144,
+        66
+      ],
+      "tag": "SERVIDOR MCP"
+    },
+    {
+      "id": "facturacion",
+      "type": "backend",
+      "label": "MCP Facturación",
+      "sublabel": "Saldos y facturas",
+      "pos": [
+        1330,
+        392
+      ],
+      "size": [
+        144,
+        66
+      ],
+      "tag": "SERVIDOR MCP"
+    },
+    {
+      "id": "indice",
+      "type": "database",
+      "label": "Índice de conocimiento",
+      "sublabel": "PostgreSQL / pgvector",
+      "pos": [
+        1550,
+        128
+      ],
+      "size": [
+        166,
+        65
+      ],
+      "tag": "ÍNDICE"
+    },
+    {
+      "id": "mockcrm",
+      "type": "backend",
+      "label": "CRM mock",
+      "sublabel": "REST · base CRM",
+      "pos": [
+        1550,
+        260
+      ],
+      "size": [
+        166,
+        66
+      ],
+      "tag": "API MOCK"
+    },
+    {
+      "id": "mockbilling",
+      "type": "backend",
+      "label": "Facturación mock",
+      "sublabel": "REST · base Facturación",
+      "pos": [
+        1550,
+        392
+      ],
+      "size": [
+        166,
+        66
+      ],
+      "tag": "API MOCK"
+    },
+    {
+      "id": "aprobacion",
+      "type": "security",
+      "label": "Confirmación humana",
+      "sublabel": "Asesor o supervisor",
+      "pos": [
+        240,
+        534
+      ],
+      "size": [
+        171,
+        66
+      ],
+      "tag": "APROBACIÓN"
+    },
+    {
+      "id": "ejecutor",
+      "type": "messagebus",
+      "label": "Ejecutor del outbox",
+      "sublabel": "Verifica e identifica efecto",
+      "pos": [
+        480,
+        534
+      ],
+      "size": [
+        173,
+        66
+      ],
+      "tag": "WORKER"
+    },
+    {
+      "id": "efecto",
+      "type": "backend",
+      "label": "CRM / Facturación",
+      "sublabel": "Devuelve recibo por operación",
+      "pos": [
+        745,
+        534
+      ],
+      "size": [
+        184,
+        66
+      ],
+      "tag": "API MOCK"
+    },
+    {
+      "id": "clasificar",
+      "type": "backend",
+      "tag": "PASO",
+      "label": "Clasificar turno",
+      "sublabel": "Usa dos prompts tipados",
+      "pos": [
+        480,
+        136
+      ],
+      "size": [
+        168,
+        66
+      ]
+    },
+    {
+      "id": "langfuse",
+      "type": "external",
+      "tag": "GESTOR DE PROMPTS",
+      "label": "Langfuse",
+      "sublabel": "Plantillas y trazas",
+      "pos": [
+        480,
+        398
+      ],
+      "size": [
+        168,
+        66
+      ]
+    },
+    {
+      "id": "tool-rag",
+      "type": "backend",
+      "tag": "TOOL",
+      "label": "Buscar conocimiento",
+      "sublabel": "search_knowledge",
+      "pos": [
+        1135,
+        128
+      ],
+      "size": [
+        152,
+        66
+      ]
+    },
+    {
+      "id": "tool-crm",
+      "type": "backend",
+      "tag": "TOOLS",
+      "label": "Lecturas de CRM",
+      "sublabel": "Servicios y elegibilidad",
+      "pos": [
+        1135,
+        260
+      ],
+      "size": [
+        152,
+        66
+      ]
+    },
+    {
+      "id": "tool-billing",
+      "type": "backend",
+      "tag": "TOOLS",
+      "label": "Lecturas de facturación",
+      "sublabel": "Saldo, lista y detalle",
+      "pos": [
+        1135,
+        392
+      ],
+      "size": [
+        152,
+        66
+      ]
+    },
+    {
+      "id": "openai",
+      "type": "external",
+      "tag": "PROVEEDOR",
+      "label": "OpenAI Responses",
+      "sublabel": "Redacción pública con citas",
+      "pos": [
+        240,
+        32
+      ],
+      "size": [
+        168,
+        62
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "canales-plataforma",
+      "from": "canales",
+      "to": "plataforma",
+      "label": "HTTPS / SSE",
+      "variant": "emphasis"
+    },
+    {
+      "id": "plataforma-orquestador",
+      "from": "plataforma",
+      "to": "orquestador",
+      "label": "Turno vigente",
+      "variant": "emphasis"
+    },
+    {
+      "id": "orquestador-soporte",
+      "from": "orquestador",
+      "to": "soporte"
+    },
+    {
+      "id": "orquestador-cobros",
+      "from": "orquestador",
+      "to": "cobros"
+    },
+    {
+      "id": "orquestador-comercial",
+      "from": "orquestador",
+      "to": "comercial"
+    },
+    {
+      "id": "soporte-tools",
+      "from": "soporte",
+      "to": "tools"
+    },
+    {
+      "id": "cobros-tools",
+      "from": "cobros",
+      "to": "tools"
+    },
+    {
+      "id": "comercial-tools",
+      "from": "comercial",
+      "to": "tools"
+    },
+    {
+      "id": "conocimiento-indice",
+      "from": "conocimiento",
+      "to": "indice",
+      "label": "RAG"
+    },
+    {
+      "id": "crm-mockcrm",
+      "from": "crm",
+      "to": "mockcrm",
+      "label": "GET"
+    },
+    {
+      "id": "facturacion-mockbilling",
+      "from": "facturacion",
+      "to": "mockbilling",
+      "label": "GET"
+    },
+    {
+      "id": "plataforma-aprobacion",
+      "from": "plataforma",
+      "to": "aprobacion",
+      "label": "Propuesta privada",
+      "variant": "security"
+    },
+    {
+      "id": "aprobacion-ejecutor",
+      "from": "aprobacion",
+      "to": "ejecutor",
+      "label": "Aprueba",
+      "variant": "security"
+    },
+    {
+      "id": "ejecutor-efecto",
+      "from": "ejecutor",
+      "to": "efecto",
+      "label": "Escritura REST",
+      "variant": "dashed"
+    },
+    {
+      "id": "orquestador-clasificar",
+      "from": "orquestador",
+      "to": "clasificar",
+      "label": "Paso del grafo"
+    },
+    {
+      "id": "clasificar-jev",
+      "from": "clasificar",
+      "to": "jev",
+      "label": "Señales"
+    },
+    {
+      "id": "orquestador-langfuse",
+      "from": "orquestador",
+      "to": "langfuse",
+      "label": "Versión y traza",
+      "variant": "dashed"
+    },
+    {
+      "id": "cliente-tool-rag",
+      "from": "tools",
+      "to": "tool-rag"
+    },
+    {
+      "id": "cliente-tool-crm",
+      "from": "tools",
+      "to": "tool-crm"
+    },
+    {
+      "id": "cliente-tool-billing",
+      "from": "tools",
+      "to": "tool-billing"
+    },
+    {
+      "id": "tool-rag-conocimiento",
+      "from": "tool-rag",
+      "to": "conocimiento"
+    },
+    {
+      "id": "tool-crm-servidor",
+      "from": "tool-crm",
+      "to": "crm"
+    },
+    {
+      "id": "tool-billing-servidor",
+      "from": "tool-billing",
+      "to": "facturacion"
+    },
+    {
+      "id": "orquestador-openai",
+      "from": "orquestador",
+      "to": "openai",
+      "label": "Fuentes públicas",
+      "fromSide": "left",
+      "toSide": "right"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Agente, subagente y paso",
+      "items": [
+        "El orquestador aplica política y verifica el modo del caso. Jev propone intención y complejidad. LangGraph decide qué subgrafo ejecutar y cuándo pedir una segunda lectura autorizada.",
+        "El cliente recibe la respuesta pública con evidencia o una derivación. En atención asistida, el asesor recibe la ficha y edita el borrador antes de enviar en el mismo canal."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Acceso a herramientas",
+      "items": [
+        "Soporte usa search_knowledge, crm.list_services y crm.list_recent_tickets. Facturación usa search_knowledge, billing.get_balance, billing.list_invoices y billing.get_invoice_detail. Consulta crm.list_services cuando el servicio explica el cargo.",
+        "Comercial y portabilidad usan search_knowledge, crm.get_customer_context, crm.list_services y crm.evaluate_retention. Para fallas recurrentes el orquestador delega la lectura de tickets a Soporte.",
+        "Un cliente MCP compartido limita las tools por paso. CRM y Facturación solo leen para un caso verificado y un asesor activo, con capacidad firmada por tool. Los servidores consultan sus APIs mock por HTTP privado."
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Prompts y borrador",
+      "items": [
+        "Cada turno fija revisión y hash del catálogo. Una edición en Langfuse se importa por versión y pasa por A/B y aprobación antes de activarse.",
+        "Jev recibe señales tipadas. OpenAI recibe pasajes públicos autorizados. Las plantillas locales añaden hechos verificados y un reconocimiento del inconveniente cuando aplica."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Efectos y escalamiento",
+      "items": [
+        "El asesor confirma la propuesta y supervisión aprueba cuando la política lo exige. El outbox revalida el caso y confirma la escritura con un recibo idempotente de la API mock.",
+        "N2 o supervisión toma el mismo caso y recibe historial, evidencia y pendientes según su permiso. Los pasos y resultados saneados se correlacionan por run_id con Langfuse."
+      ]
+    }
+  ]
+}

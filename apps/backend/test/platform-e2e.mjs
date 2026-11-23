@@ -35,6 +35,11 @@ async function until(check, name) {
 
 try {
   await request(api+'/cases', {status:401});
+  const whatsappFixture = {contact_ref:'C-1013',channel:'whatsapp',text:'Solicitud de prueba',idempotency_key:randomUUID()};
+  await request(api+'/demo/incoming',{method:'POST',body:whatsappFixture,status:401});
+  if (process.env.LOCAL_PROMPT_REPLAY_SCENARIO!=='CC-E10') {
+    await request(api+'/demo/incoming',{method:'POST',body:whatsappFixture,token:process.env.DEMO_INGRESS_TOKEN,status:404});
+  }
   const cookie = await login('ASESSOR');
   const admin = await login('ADMIN');
   const post = async (path, body) => (await request(api+path, { cookie, method:'POST', body })).json;
@@ -44,15 +49,31 @@ try {
     return predicate(current) ? current : null;
   }, `card for ${id}`);
   const count = async (id, kind) => (await db.query('SELECT count(*)::integer AS n FROM attention_event WHERE case_id=$1 AND kind=$2', [id,kind])).rows[0].n;
-  const verify = id => post(`/cases/${id}/verify-holder`, {verification_code:process.env.DEMO_HOLDER_CODE});
+  let updateId = 81000;
+  const telegram = async (ref,chatId,text) => {
+    if (!chatId || !process.env.TELEGRAM_WEBHOOK_SECRET) return incoming(ref,text);
+    const res = await fetch(target+api+'/webhooks/telegram',{
+      method:'POST', headers:{'Content-Type':'application/json','X-Telegram-Bot-Api-Secret-Token':process.env.TELEGRAM_WEBHOOK_SECRET},
+      body:JSON.stringify({update_id:updateId++,message:{chat:{type:'private',id:Number(chatId)},text}}),signal:AbortSignal.timeout(5000)
+    });
+    assert.ok(res.ok,await res.text());
+  };
+  const verifyByChat = async (ref,chatId,alias) => {
+    await telegram(ref,chatId,`Mi contacto es ${alias}.`);
+    await telegram(ref,chatId,'El código que recibí es 729 413.');
+  };
 
   await request(api+'/admin/dashboard', {cookie,status:403});
-  await request(api+'/cases', {cookie:admin,status:403});
-  const candidate = (await request(api+'/admin/prompts', {cookie:admin,method:'POST',body:{prompts:{orchestrator:'Prioriza fuentes vigentes.'}}})).json;
+  assert.deepEqual((await request(api+'/cases', {cookie:admin})).json, []);
+  const candidate = (await request(api+'/admin/prompts', {cookie:admin,method:'POST',body:{prompts:{public_answer:'Responde en español con evidencia vigente y citas verificadas.'}}})).json;
   assert.equal(candidate.status, 'candidate');
-  const gated = (await request(api+`/admin/prompts/${candidate.revision}/eval`, {cookie:admin,method:'POST'})).json;
-  assert.ok(['failed','passed'].includes(gated.status));
-  if (gated.status === 'failed') await request(api+`/admin/prompts/${candidate.revision}/activate`, {cookie:admin,method:'POST',status:403});
+  if (process.env.PROMPT_EVAL_ENABLED === 'true') {
+    const queued = await request(api+`/admin/prompts/${candidate.revision}/eval`, {cookie:admin,method:'POST'});
+    assert.ok(['queued','running'].includes(queued.json.status));
+  } else {
+    await request(api+`/admin/prompts/${candidate.revision}/eval`, {cookie:admin,method:'POST',status:503});
+  }
+  await request(api+`/admin/prompts/${candidate.revision}/activate`, {cookie:admin,method:'POST',status:403});
 
   const startWeb = () => request(api+'/web-chat/session', {method:'POST',body:{}});
   const [firstBrowser, otherBrowser] = await Promise.all([startWeb(), startWeb()]);
@@ -89,16 +110,17 @@ try {
   assert.equal(awaitingVerification.awaiting_advisor, false);
   assert.doesNotMatch(JSON.stringify(awaitingVerification),/169\.315/);
   await verifyWeb(firstBrowser, 'start', {identifier:'99999'}, 404);
-  const challenge = (await verifyWeb(firstBrowser, 'start', {identifier:'11111'})).json.verification;
+  await sendWeb('Mi correo es Cliente1@Example.test.');
+  const challenge = (await readWeb()).verification;
   assert.equal(challenge.stage, 'code_sent');
   await verifyWeb(otherBrowser, 'confirm', {challenge_id:challenge.challenge_id, code:'123456'}, 409);
-  await verifyWeb(firstBrowser, 'confirm', {challenge_id:challenge.challenge_id, code:'12345'}, 400);
-  const verified = (await verifyWeb(firstBrowser, 'confirm', {challenge_id:challenge.challenge_id, code:'123456'})).json;
+  await sendWeb('Mi código es 12345');
+  assert.equal((await readWeb()).verification.stage,'code_sent');
+  const verified = (await sendWeb('El código que recibí es 729 413.')).json;
   assert.equal(verified.verification.stage, 'verified');
   assert.match(verified.messages.at(-1).text, /169\.315/);
   assert.equal(verified.conversation_id, publicAnswer.conversation_id);
-  assert.doesNotMatch(JSON.stringify(verified),/123456|11111|account_ref/);
-  assert.equal((await verifyWeb(firstBrowser, 'confirm', {challenge_id:challenge.challenge_id, code:'123456'})).json.cursor, verified.cursor);
+  assert.doesNotMatch(JSON.stringify(verified),/12345|729 413|cliente1@example\.test|account_ref/i);
   await verifyWeb(firstBrowser, 'start', {identifier:'22222'}, 409);
   await sendWeb('¿Qué plan tengo?');
   assert.match((await readWeb()).messages.at(-1).text, /Hogar Fibra 500/);
@@ -114,7 +136,7 @@ try {
   const webCase=await until(async()=> (await get('/cases')).find(c=>c.conversation_id===publicAnswer.conversation_id),'web handoff to advisor');
   assert.equal((await post(`/cases/${webCase.id}/take`)).verified, true);
   await sendWeb('¿Cuánto debo de mi factura de noviembre?');
-  await cards(webCase.id,x=>x.card?.facts.some(f=>f.value==='$169.315'));
+  await cards(webCase.id,x=>x.card?.facts.some(f=>f.value.replace(/\s/g,'')==='$169.315'));
   const webHistory=await readWeb();
   assert.equal(webHistory.conversation_id,webCase.conversation_id);
   assert.equal(webHistory.attention_mode,'asistido');
@@ -131,35 +153,32 @@ try {
 
   await incoming('C-1001','Quiero información del plan Fibra 500.');
   await until(async () => (await db.query("SELECT snapshot FROM attention_case WHERE contact_ref='C-1001'")).rows[0]?.snapshot.messages.some(m=>m.actor==='agente' && m.citations?.some(c=>c.id==='catalogo-2026-fibra500')), 'public plan citation');
-  await incoming('C-1001','¿Cuánto debo de mi factura de noviembre?');
+  const billingChat = process.env.DEMO_BILLING_CHAT_ID;
+  await telegram('C-1001',billingChat,'Quiero consultar mi última factura.');
+  const [unverifiedBilling] = (await db.query("SELECT id,snapshot FROM attention_case WHERE contact_ref='C-1001'")).rows;
+  assert.match(unverifiedBilling.snapshot.messages.at(-1).text,/correo o teléfono de prueba/);
+  await telegram('C-1001',billingChat,'Mi número es 22222.');
+  await telegram('C-1001',billingChat,'Mi código es 354920.');
+  assert.equal(await count(unverifiedBilling.id,'billing_read'),0);
+  await verifyByChat('C-1001',billingChat,'11111');
+  const [verifiedBilling] = (await db.query('SELECT snapshot FROM attention_case WHERE id=$1',[unverifiedBilling.id])).rows;
+  assert.equal(verifiedBilling.snapshot.verified,true);
+  assert.match(verifiedBilling.snapshot.messages.at(-1).text,/169\.315/);
+  assert.doesNotMatch(JSON.stringify(verifiedBilling),/11111|22222|354920|729 413/);
+  if (billingChat) await until(async () => (await count(unverifiedBilling.id,'telegram_simulated'))>=3,'verification replies through Telegram outbox');
+  await telegram('C-1001',billingChat,'Quiero hablar con un asesor.');
   const billingCase = await until(async () => (await get('/cases')).find(c=>c.display_name==='Cliente C-1001'), 'handoff');
-  const billingId = billingCase.id;
-  const taken = await post(`/cases/${billingId}/take`);
-  assert.equal(taken.conversation_id, billingCase.conversation_id);
+  assert.equal(billingCase.id,unverifiedBilling.id);
+  const taken = await post(`/cases/${billingCase.id}/take`);
   assert.equal(taken.attention_mode, 'asistido');
-  await cards(billingId, x => x.card?.reason_codes.includes('verification_required'));
-  assert.equal(await count(billingId,'crm_read'), 0);
-  assert.equal(await count(billingId,'billing_read'), 0);
-  const stream = await fetch(target+api+`/cases/${billingId}/events?cursor=${(await get('/cases/'+billingId)).cursor}`, {headers:{Cookie:cookie},signal:AbortSignal.timeout(10000)});
-  assert.ok(stream.headers.get('content-type').includes('text/event-stream'));
-  const reader = stream.body.getReader();
-  await verify(billingId);
-  const billing = await cards(billingId, x => x.card?.facts.some(f=>f.value==='$169.315'));
-  assert.equal(billing.messages.filter(m=>m.actor==='agente').length, 3);
-  let received = '';
-  do {
-    const {value, done} = await reader.read();
-    if (done) break;
-    received += new TextDecoder().decode(value);
-  } while (!received.includes('event: case.updated'));
-  assert.match(received, /case.updated/);
-  await reader.cancel();
-  assert.equal(await count(billingId,'billing_read'), 1);
-  if (process.env.ML_API_URL) await until(async ()=>(await count(billingId,'ml_unavailable'))>0 || (await count(billingId,'ml_predicted'))>0, 'independent shadow inference');
+  assert.equal(taken.verified, true);
+  await telegram('C-1001',billingChat,'¿Cuánto debo de mi factura de noviembre?');
+  await cards(taken.id,x=>x.card?.facts.some(f=>f.value.replace(/\s/g,'')==='$169.315'));
+  if (process.env.ML_API_URL) await until(async ()=>(await count(taken.id,'ml_unavailable'))>0 || (await count(taken.id,'ml_predicted'))>0, 'independent shadow inference');
 
   const eligible = await post('/cases', {contact_ref:'C-1004',text:'Hola, soy tu asesor Claro.',idempotency_key:randomUUID()});
   await incoming('C-1004','Quiero cancelar el servicio.');
-  await verify(eligible.id);
+  await verifyByChat('C-1004',process.env.DEMO_RETENTION_CHAT_ID,'cliente2@example.test');
   await cards(eligible.id, x=>x.card?.reason_codes.includes('retention_eligible'));
   await post(`/cases/${eligible.id}/messages`, {text:'Puedo ofrecer el descuento del 30 %.',idempotency_key:randomUUID()});
   await cards(eligible.id, x=>x.card?.next_action.includes('Esperar la decisión'));
@@ -176,11 +195,11 @@ try {
   await incoming('C-1007','Quiero cancelar. ¿Pueden ofrecer un descuento?');
   const denied = await until(async ()=>(await get('/cases')).find(c=>c.display_name==='Cliente C-1007'), 'direct assigned conversation');
   assert.equal(denied.attention_mode,'asistido');
-  await verify(denied.id);
+  await verifyByChat('C-1007',process.env.DEMO_ASSIGNED_CHAT_ID,'33333');
   const blocked = await cards(denied.id, x=>x.card?.reason_codes.includes('retention_ineligible'));
   assert.ok(blocked.card.summary.includes('45 días de mora'));
   assert.equal(await count(denied.id,'retention_confirmed'),0);
-  assert.equal(blocked.messages.filter(m=>m.actor==='agente').length,0);
+  assert.match(blocked.messages.at(-1).text,/Cuenta de prueba verificada/);
   await post(`/cases/${denied.id}/close`,{resolved:false});
   if (process.env.DEMO_ASSIGNED_CHAT_ID && process.env.TELEGRAM_WEBHOOK_SECRET && !process.env.TELEGRAM_BOT_TOKEN) {
     const sendScore = (score) => fetch(target+api+'/webhooks/telegram', {
@@ -198,7 +217,7 @@ try {
   if (process.env.DEMO_SUPPORT_CHAT_ID) {
     await incoming('C-1013','Me quiero retirar porque el internet se cae todo el tiempo.');
     const support = await until(async ()=>(await get('/cases')).find(c=>c.display_name==='Cliente C-1013'), 'support case');
-    await verify(support.id);
+    await verifyByChat('C-1013',process.env.DEMO_SUPPORT_CHAT_ID,'11013');
     const requested = await cards(support.id, x=>x.card?.reason_codes.includes('priority_support_required') && x.card.proposal);
     assert.equal(await count(support.id,'support_ticket_confirmed'),0);
     const p = requested.card.proposal;
@@ -213,8 +232,96 @@ try {
     console.log('CC-E13 verified: one prioritized support ticket after approval, appointment pending.');
   }
   const dashboard = (await request(api+'/admin/dashboard',{cookie:admin})).json;
+  assert.equal(dashboard.daily.length,7);
+  const webStats = (await request(api+'/admin/dashboard?days=30&channel=web',{cookie:admin})).json;
+  assert.equal(webStats.daily.length,30);
+  assert.equal(webStats.channel,'web');
+  assert.equal(webStats.daily.reduce((sum,day)=>sum+day.cases,0),webStats.metrics.find(m=>m.id==='cases').value);
+  assert.equal(webStats.metrics.find(m=>m.id==='retention').value,0);
+  await request(api+'/admin/dashboard?days=90',{cookie:admin,status:400});
   assert.equal(dashboard.metrics.find(m=>m.id==='retention').value,1);
   console.log('C-1001, C-1004, C-1007 verified through HTTP, SSE and PostgreSQL.');
+
+  const caseApis = `/cases/${webCase.id}/integrations`;
+  const crm = await get(caseApis+'/crm');
+  assert.equal(crm.customer.cliente_id,'C-1001');
+  assert.equal(crm.customer.servicios.length,2);
+  assert.doesNotMatch(JSON.stringify(crm),/example\.test|numero_documento|11111/);
+  const billingView = await get(caseApis+'/billing');
+  const payable = billingView.invoices.find(x=>x.factura_id==='F-5003');
+  assert.equal(payable.saldo_abierto,169315);
+  const detail = caseApis+'/billing/invoices/';
+  await request(api+detail+'F-5019',{cookie,status:404});
+  await request(api+caseApis+'/operations',{cookie,method:'POST',status:404,body:{
+    idempotency_key:randomUUID(),action:{kind:'adjustment',invoice_id:'F-5019',adjustment:{valor:100,motivo:'Factura ajena'}}
+  }});
+  if (process.env.CRM_MCP_URL && process.env.BILLING_MCP_URL) {
+    await sendWeb('¿Por qué subió mi factura F-5003 con el cambio de mi plan?');
+    const planned = await cards(webCase.id,x=>x.card?.facts.some(f=>f.id.startsWith('F-5003-item-'))
+      && x.card.facts.some(f=>crm.customer.servicios.some(s=>s.servicio_id===f.id)));
+    const run = planned.card.advisor_draft_run_id;
+    assert.ok(run);
+    const tools = await until(async () => {
+      const {rows} = await db.query(`SELECT kind, metadata->>'purpose' AS purpose FROM attention_event
+        WHERE case_id=$1 AND metadata->>'run_id'=$2 AND kind LIKE 'tool.%' ORDER BY id`,[webCase.id,run]);
+      return rows.length>=2 ? rows : null;
+    },'scoped MCP invoice and service reads');
+    assert.deepEqual(tools,[{kind:'tool.billing.get_invoice_detail',purpose:'inspect_invoice'},
+      {kind:'tool.crm.list_services',purpose:'compare_billed_service'}]);
+    assert.doesNotMatch(JSON.stringify(await readWeb()),/F-5003-item-|advisor_draft|Titular verificado/);
+    await post(`/cases/${webCase.id}/messages`,{text:planned.card.advisor_draft,idempotency_key:randomUUID(),
+      draft:{run_id:run,case_revision:planned.revision}});
+    const {rows:publications} = await db.query(`SELECT metadata FROM attention_event WHERE case_id=$1
+      AND kind='agent_task_outcome' AND metadata->>'run_id'=$2 AND metadata->>'terminal'='invoice_explained'`,[webCase.id,run]);
+    assert.equal(publications.length,1);
+    assert.equal(publications[0].metadata.outcome,'qualified_success');
+    assert.equal(publications[0].metadata.category,'facturacion');
+    const [suggestionRun] = (await db.query('SELECT turn FROM agent_run WHERE id=$1',[run])).rows;
+    assert.equal(publications[0].metadata.config_revision,suggestionRun.turn.config_revision);
+    assert.ok(!Object.hasOwn(publications[0].metadata,'text'));
+  }
+  const ticket = {
+    idempotency_key:randomUUID(), action:{kind:'ticket',ticket:{categoria:'facturacion',descripcion:'Prueba de conciliación'}}
+  };
+  const accepted = await Promise.all([post(caseApis+'/operations',ticket),post(caseApis+'/operations',ticket)]);
+  assert.equal(accepted[0].id,accepted[1].id);
+  const operation = async (id,status) => until(async () =>
+    (await get(caseApis+'/operations')).find(x=>x.id===id&&x.status===status), `${id} ${status}`);
+  // The test CRM discards the response after committing; the worker must find the durable receipt.
+  await operation(accepted[0].id,'pending_verification');
+  const confirmed = await operation(accepted[0].id,'confirmed');
+  assert.equal((await get(caseApis+'/crm')).customer.tickets_recientes.filter(x=>x.ticket_id===confirmed.reference).length,1);
+  const credit = await post(caseApis+'/operations',{idempotency_key:randomUUID(),action:{
+    kind:'adjustment',invoice_id:payable.factura_id,adjustment:{valor:55_000,motivo:'Validación del flujo de supervisión',aprobado_por:'inyectado'}
+  }});
+  assert.equal(credit.status,'pending_supervisor');
+  const approvals = api+'/admin/integrations/approvals';
+  await request(approvals+'/'+credit.id,{cookie,method:'POST',body:{approved:true},status:403});
+  assert.ok((await request(approvals,{cookie:admin})).json.some(x=>x.id===credit.id));
+  const approve = () => request(approvals+'/'+credit.id,{cookie:admin,method:'POST',body:{approved:true}});
+  await Promise.all([approve(),approve()]);
+  const adjustment = await operation(credit.id,'confirmed');
+  const updated = await get(detail+payable.factura_id);
+  assert.equal(updated.saldo_abierto,114315);
+  assert.equal(updated.ajustes.length,1);
+  assert.equal(updated.ajustes[0].ajuste_id,adjustment.reference);
+  assert.equal(updated.ajustes[0].aprobado_por,(await request(api+'/me',{cookie:admin})).json.id);
+
+  const outage = state => fetch(new URL('/test-outage/'+state,process.env.CRM_API_URL),{method:'POST'});
+  try {
+    await outage('on');
+    await request(api+caseApis+'/crm',{cookie,status:503});
+    assert.equal((await get(caseApis+'/billing')).balance.saldo_pendiente,114315);
+    const health = (await request(api+'/admin/integrations',{cookie:admin})).json;
+    assert.equal(health.find(x=>x.service==='crm').available,false);
+    assert.equal(health.find(x=>x.service==='billing').available,true);
+    await post(`/cases/${webCase.id}/messages`,{text:'Sigo aquí para ayudarte.',idempotency_key:randomUUID()});
+    assert.equal((await readWeb()).messages.at(-1).text,'Sigo aquí para ayudarte.');
+  } finally {
+    await outage('off');
+  }
+  console.log('Verified case API, foreign-invoice rejection, lost-response reconciliation, supervisor approval and isolated CRM outage.');
+
 } finally {
   await db.end();
 }

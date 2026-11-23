@@ -15,7 +15,7 @@ export const Fact = z.object({ id: Id, label: z.string(), value: z.string() });
 export type Fact = z.infer<typeof Fact>;
 export const Message = z.object({
   id: Id, turn_seq: z.number().int().positive(), actor: Actor, text: Text,
-  created_at: z.iso.datetime(), citations: z.array(Citation).optional()
+  created_at: z.iso.datetime(), citations: z.array(Citation).optional(), verification_input: z.literal(true).optional()
 });
 export type Message = z.infer<typeof Message>;
 export const Proposal = z.object({
@@ -26,7 +26,9 @@ export const Proposal = z.object({
 export type Proposal = z.infer<typeof Proposal>;
 export const AdvisorCard = z.object({
   intent: Intent.nullable(), summary: z.string(), facts: z.array(Fact), citations: z.array(Citation),
-  pending: z.array(z.string()), next_action: z.string(), reason_codes: z.array(z.string()), proposal: Proposal.optional()
+  pending: z.array(z.string()), next_action: z.string(), reason_codes: z.array(z.string()), suggested_escalation: z.object({destination:z.enum(['soporte_tecnico','supervision']),reason_code:z.string().min(3).max(120)}).optional(), advisor_draft: z.string().optional(), advisor_draft_run_id: z.string().optional(),
+  advisor_draft_case_revision: z.number().int().positive().optional(), advisor_draft_turn_seq: z.number().int().positive().optional(),
+  advisor_draft_status: z.enum(['current','stale']).optional(), handoff_summary: z.string().optional(), proposal: Proposal.optional()
 });
 export type AdvisorCard = z.infer<typeof AdvisorCard>;
 export const CaseSummary = z.object({
@@ -36,7 +38,34 @@ export const CaseSummary = z.object({
   updated_at: z.iso.datetime(), last_message: z.string().nullable()
 });
 export type CaseSummary = z.infer<typeof CaseSummary>;
+export const CaseMlSignals = z.object({
+  intent: z.object({
+    prediction_id:Id, turn_id:Id, case_revision:z.number().int().positive(), label:Intent, model_version:Id,
+    recommendation:z.enum(['confirm_cancellation_intent','suggest_intent_for_review','clarify_intent']),
+    requires_human_confirmation:z.literal(true),
+    feedback:z.object({label:Intent,synchronized:z.boolean()}).nullable().optional()
+  }).nullable(),
+  churn: z.discriminatedUnion('status',[
+    z.object({status:z.literal('unavailable')}),
+    z.object({status:z.literal('available'),priority:z.enum(['alta','media','habitual']),
+      recommendation:z.enum(['review_retention_followup','check_unresolved_issues','standard_followup']),
+      fecha_corte:z.iso.date(),model_version:Id,synthetic:z.boolean().optional()})
+  ]),
+  follow_up: z.object({status:z.enum(['agreed','completed']),due_date:z.iso.date(),responsible_name:z.string()}).nullable().optional()
+});
+export type CaseMlSignals = z.infer<typeof CaseMlSignals>;
 export const CaseSnapshot = CaseSummary.extend({
+  tracking: z.object({
+    owner_name:z.string().nullable(), level:z.enum(['n1','n2','supervisor']).nullable(),
+    escalation:z.object({
+      id:Id, destination:z.enum(['soporte_tecnico','facturacion','comercial_portabilidad','supervision']),
+      reason_code:z.string(), status:z.enum(['en_cola','tomado','resuelto','cancelado']),
+      queued_seconds:z.number().int().nonnegative(), updated_at:z.iso.datetime()
+    }).nullable(),
+    events:z.array(z.object({kind:z.string(),at:z.iso.datetime()})),
+    receipts:z.array(z.object({kind:z.string(),reference:Id}))
+  }).optional(),
+  ml: CaseMlSignals.optional(),
   messages: z.array(Message), card: AdvisorCard.nullable(), cursor: z.number().int().nonnegative()
 });
 export type CaseSnapshot = z.infer<typeof CaseSnapshot>;
@@ -57,12 +86,12 @@ export type WebChatSnapshot = z.infer<typeof WebChatSnapshot>;
 export const WebChatEvent = z.object({ type: z.literal('conversation.updated'), snapshot: WebChatSnapshot });
 export type WebChatEvent = z.infer<typeof WebChatEvent>;
 export const OpenCase = z.object({ contact_ref: Id, text: Text, idempotency_key: Id });
-export const SendMessage = z.object({ text: Text, idempotency_key: Id });
+export const SendMessage = z.object({ text: Text, idempotency_key: Id, draft: z.object({run_id:Id,case_revision:z.number().int().positive()}).optional() });
 export const VerifyHolder = z.object({ verification_code: z.string().min(4).max(32) });
 export const WebVerificationStart = z.object({ identifier: z.string().trim().min(5).max(128) });
 export const WebVerificationConfirm = z.object({ challenge_id: z.uuid(), code: z.string().regex(/^\d{6}$/) });
 export const DecideProposal = z.object({ decision: z.enum(['approved', 'rejected']), revision: z.number().int().positive(), idempotency_key: Id });
-export const CloseCase = z.object({ resolved: z.boolean() });
+export const CloseCase = z.object({ resolved: z.boolean(), retention_outcome: z.enum(['permanencia','baja','pendiente']).optional() });
 export const AgentTurn = z.object({
   run_id: Id, case_id: Id, conversation_id: Id, turn_id: Id, channel: Channel, actor: Actor.exclude(['agente']),
   turn_seq: z.number().int().positive(), case_revision: z.number().int().positive(),
@@ -72,7 +101,7 @@ export const AgentTurn = z.object({
 export type AgentTurn = z.infer<typeof AgentTurn>;
 export const RunResult = z.discriminatedUnion('type', [
   z.object({ type: z.literal('answer'), answer: Text, citations: z.array(Citation), route: Id }),
-  z.object({ type: z.literal('handoff'), reason: Text, pending: Text, route: Id }),
+  z.object({ type: z.literal('handoff'), reason: Text, pending: Text, route: Id, verification_required: z.literal(true).optional() }),
   z.object({ type: z.literal('card'), card: AdvisorCard, route: Id }),
   z.object({ type: z.literal('failed'), reason: Id, route: Id })
 ]);
@@ -92,7 +121,10 @@ export interface AgentPorts {
   readCaseForRun(runId: string): Promise<{ messages: Message[]; verified: boolean; pending: string | null }>;
   getAgentConfig(revision: string): Promise<AgentConfig>;
   getCustomerContext(runId: string): Promise<Fact[]>;
+  listServices?(runId: string): Promise<Fact[]>;
   getBilling(runId: string): Promise<Fact[]>;
+  listInvoices?(runId: string): Promise<Fact[]>;
+  getInvoiceDetail?(runId: string, invoiceId: string): Promise<Fact[]>;
   getTickets(runId: string): Promise<Fact[]>;
   evaluateRetention(runId: string): Promise<Retention>;
   createProposal(runId: string, input: { option_id: string; citation_ids: string[] }): Promise<Proposal>;
@@ -108,12 +140,44 @@ export const Prediction = z.object({
 });
 export type Prediction = z.infer<typeof Prediction>;
 export const IntentLabel = z.object({ prediction_id: Id, label: Intent, event_id: Id });
+export const DashboardFilters = z.object({
+  days: z.enum(['7','30']).default('7'),
+  channel: z.enum(['all','web','telegram']).default('all')
+});
+export type DashboardFilters = z.infer<typeof DashboardFilters>;
+export type DashboardDay = {
+  date: string; cases: number; aht: number | null; aht_sample: number;
+  latency_p95: number | null; latency_sample: number; errors: number
+};
+export type EvalMetrics = {
+  accuracy: number | null; groundedness: number | null; recall_at_5: number | null;
+  unresolved_critical?: number; cost_usd?: number
+};
+export type EvalComparison = {
+  evidence?: { golden_sha256?:string; scenarios_sha256?:string; corpus_sha256?:string };
+  gate: string; baseline: EvalMetrics; candidate: EvalMetrics;
+  cases: { id: string; baseline: string; candidate: string; human_review: boolean }[];
+  date?: string; rubric?: string; provider_mode?: string
+};
+export type EvalJob = {
+  id: string; revision: string; status: 'queued' | 'running' | 'completed' | 'failed';
+  completed_cases: number; total_cases: number; failure_code?: string | null
+};
+export type EvalStatus = { job: EvalJob | null; report: EvalComparison | null };
 export type Dashboard = {
   sample: 'synthetic' | 'pilot'; window_days: number;
   metrics: { id: string; label: string; value: number | null; unit: string; denominator?: number }[];
   providers: { name: string; status: string }[];
   revision: string;
+  channel?: DashboardFilters['channel'];
+  timezone?: string;
+  daily?: DashboardDay[];
+  prediction_classes?: { label: string; count: number }[];
+  evaluation?: EvalComparison | null;
+  evidence?: { langfuse: string | null; mlflow: string | null; model_version?: string; model_run_id?: string; traces: { run_id: string; channel: string; url: string }[] };
 };
 export type PromptRevision = { revision: string; status: 'active' | 'candidate' | 'passed' | 'failed'; prompts: Record<string, string> };
 export type Contact = { ref: string; display_name: string; enabled: boolean };
-export type Viewer = { id: string; name: string; role: z.infer<typeof Role> };
+export type Viewer = { id: string; name: string; role: z.infer<typeof Role>; capabilities?: string[]; specialties?: string[]; available?: boolean };
+
+export * from './integrations.js';

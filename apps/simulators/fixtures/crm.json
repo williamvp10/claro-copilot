@@ -1,0 +1,961 @@
+[
+  {
+    "cliente_id": "C-1001",
+    "nombre": "Cliente C-1001",
+    "tipo_documento": "CC",
+    "numero_documento": "91001",
+    "celular": "11111",
+    "email": "cliente1@example.test",
+    "ciudad": "Bogotá",
+    "segmento": "alto_valor",
+    "fecha_vinculacion": "2023-07-21",
+    "antiguedad_meses": 40,
+    "ciclo_facturacion": 10,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 169315,
+    "servicios": [
+      {
+        "servicio_id": "C-1001-S1",
+        "tipo": "hogar",
+        "plan": "Hogar Fibra 500",
+        "valor_mensual": 109900,
+        "fecha_activacion": "2023-07-21",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": [
+          {
+            "tipo": "modem",
+            "modelo": "ZTX-F680",
+            "serial": "DEMO-C-1001-S1-1"
+          },
+          {
+            "tipo": "repetidor",
+            "modelo": "WR-6",
+            "serial": "DEMO-C-1001-S1-2"
+          }
+        ]
+      },
+      {
+        "servicio_id": "C-1001-S2",
+        "tipo": "movil",
+        "plan": "Claro Max 60 GB",
+        "valor_mensual": 59415,
+        "fecha_activacion": "2023-07-21",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": []
+      }
+    ],
+    "tickets_recientes": [
+      {
+        "ticket_id": "TK-913534",
+        "fecha": "2026-10-29",
+        "categoria": "facturacion",
+        "estado": "cerrado"
+      }
+    ],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1002",
+    "nombre": "Cliente C-1002",
+    "tipo_documento": "CC",
+    "numero_documento": "91002",
+    "celular": "11002",
+    "email": "cliente1002@example.test",
+    "ciudad": "Ibagué",
+    "segmento": "masivo",
+    "fecha_vinculacion": "2026-07-20",
+    "antiguedad_meses": 4,
+    "ciclo_facturacion": 20,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 99900,
+    "servicios": [
+      {
+        "servicio_id": "C-1002-S1",
+        "tipo": "movil",
+        "plan": "Claro Max Ilimitado",
+        "valor_mensual": 99900,
+        "fecha_activacion": "2026-07-20",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": []
+      }
+    ],
+    "tickets_recientes": [
+      {
+        "ticket_id": "TK-979316",
+        "fecha": "2026-08-31",
+        "categoria": "facturacion",
+        "estado": "abierto"
+      },
+      {
+        "ticket_id": "TK-947458",
+        "fecha": "2026-09-12",
+        "categoria": "consulta_planes",
+        "estado": "abierto"
+      }
+    ],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1003",
+    "nombre": "Cliente C-1003",
+    "tipo_documento": "CC",
+    "numero_documento": "91003",
+    "celular": "11003",
+    "email": "cliente1003@example.test",
+    "ciudad": "Bucaramanga",
+    "segmento": "masivo",
+    "fecha_vinculacion": "2020-04-22",
+    "antiguedad_meses": 79,
+    "ciclo_facturacion": 20,
+    "dias_mora": 56,
+    "estado": "suspendido",
+    "valor_mensual_total": 49900,
+    "servicios": [
+      {
+        "servicio_id": "C-1003-S1",
+        "tipo": "movil",
+        "plan": "Claro Max 25 GB",
+        "valor_mensual": 49900,
+        "fecha_activacion": "2020-04-22",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": []
+      }
+    ],
+    "tickets_recientes": [
+      {
+        "ticket_id": "TK-925374",
+        "fecha": "2026-09-23",
+        "categoria": "soporte_tecnico",
+        "estado": "abierto"
+      }
+    ],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1004",
+    "nombre": "Cliente C-1004",
+    "tipo_documento": "CC",
+    "numero_documento": "91004",
+    "celular": "22222",
+    "email": "cliente2@example.test",
+    "ciudad": "Medellín",
+    "segmento": "masivo",
+    "fecha_vinculacion": "2024-05-20",
+    "antiguedad_meses": 30,
+    "ciclo_facturacion": 1,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 89900,
+    "servicios": [
+      {
+        "servicio_id": "C-1004-S1",
+        "tipo": "hogar",
+        "plan": "Hogar Fibra 300",
+        "valor_mensual": 89900,
+        "fecha_activacion": "2024-05-20",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": [
+          {
+            "tipo": "modem",
+            "modelo": "ZTX-F680",
+            "serial": "DEMO-C-1004-S1-1"
+          }
+        ]
+      }
+    ],
+    "tickets_recientes": [
+      {
+        "ticket_id": "TK-962992",
+        "fecha": "2026-09-29",
+        "categoria": "soporte_tecnico",
+        "estado": "cerrado"
+      }
+    ],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1005",
+    "nombre": "Cliente C-1005",
+    "tipo_documento": "CC",
+    "numero_documento": "91005",
+    "celular": "11005",
+    "email": "cliente1005@example.test",
+    "ciudad": "Ibagué",
+    "segmento": "alto_valor",
+    "fecha_vinculacion": "2024-10-19",
+    "antiguedad_meses": 25,
+    "ciclo_facturacion": 10,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 182315,
+    "servicios": [
+      {
+        "servicio_id": "C-1005-S1",
+        "tipo": "hogar",
+        "plan": "Hogar Fibra 900",
+        "valor_mensual": 139900,
+        "fecha_activacion": "2024-10-19",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": [
+          {
+            "tipo": "modem",
+            "modelo": "ZTX-F680",
+            "serial": "DEMO-C-1005-S1-1"
+          },
+          {
+            "tipo": "repetidor",
+            "modelo": "WR-6",
+            "serial": "DEMO-C-1005-S1-2"
+          },
+          {
+            "tipo": "repetidor",
+            "modelo": "WR-6",
+            "serial": "DEMO-C-1005-S1-3"
+          }
+        ]
+      },
+      {
+        "servicio_id": "C-1005-S2",
+        "tipo": "movil",
+        "plan": "Claro Max 25 GB",
+        "valor_mensual": 42415,
+        "fecha_activacion": "2024-10-19",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": []
+      }
+    ],
+    "tickets_recientes": [],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1006",
+    "nombre": "Cliente C-1006",
+    "tipo_documento": "CC",
+    "numero_documento": "91006",
+    "celular": "11006",
+    "email": "cliente1006@example.test",
+    "ciudad": "Villavicencio",
+    "segmento": "alto_valor",
+    "fecha_vinculacion": "2024-07-20",
+    "antiguedad_meses": 28,
+    "ciclo_facturacion": 10,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 229315,
+    "servicios": [
+      {
+        "servicio_id": "C-1006-S1",
+        "tipo": "hogar",
+        "plan": "Triple Play 500",
+        "valor_mensual": 169900,
+        "fecha_activacion": "2024-07-20",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": [
+          {
+            "tipo": "modem",
+            "modelo": "ZTX-F680",
+            "serial": "DEMO-C-1006-S1-1"
+          },
+          {
+            "tipo": "repetidor",
+            "modelo": "WR-6",
+            "serial": "DEMO-C-1006-S1-2"
+          },
+          {
+            "tipo": "decodificador",
+            "modelo": "DecoBox 4K",
+            "serial": "DEMO-C-1006-S1-3"
+          }
+        ]
+      },
+      {
+        "servicio_id": "C-1006-S2",
+        "tipo": "movil",
+        "plan": "Claro Max 60 GB",
+        "valor_mensual": 59415,
+        "fecha_activacion": "2024-07-20",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": []
+      }
+    ],
+    "tickets_recientes": [
+      {
+        "ticket_id": "TK-984510",
+        "fecha": "2026-09-12",
+        "categoria": "facturacion",
+        "estado": "cerrado"
+      }
+    ],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1007",
+    "nombre": "Cliente C-1007",
+    "tipo_documento": "CC",
+    "numero_documento": "91007",
+    "celular": "33333",
+    "email": "cliente3@example.test",
+    "ciudad": "Cali",
+    "segmento": "masivo",
+    "fecha_vinculacion": "2025-09-19",
+    "antiguedad_meses": 14,
+    "ciclo_facturacion": 20,
+    "dias_mora": 45,
+    "estado": "suspendido",
+    "valor_mensual_total": 49900,
+    "servicios": [
+      {
+        "servicio_id": "C-1007-S1",
+        "tipo": "movil",
+        "plan": "Claro Max 25 GB",
+        "valor_mensual": 49900,
+        "fecha_activacion": "2025-09-19",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": []
+      }
+    ],
+    "tickets_recientes": [
+      {
+        "ticket_id": "TK-915378",
+        "fecha": "2026-11-06",
+        "categoria": "facturacion",
+        "estado": "abierto"
+      }
+    ],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1008",
+    "nombre": "Cliente C-1008",
+    "tipo_documento": "CC",
+    "numero_documento": "91008",
+    "celular": "11008",
+    "email": "cliente1008@example.test",
+    "ciudad": "Medellín",
+    "segmento": "masivo",
+    "fecha_vinculacion": "2024-02-19",
+    "antiguedad_meses": 33,
+    "ciclo_facturacion": 10,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 99900,
+    "servicios": [
+      {
+        "servicio_id": "C-1008-S1",
+        "tipo": "movil",
+        "plan": "Claro Max Ilimitado",
+        "valor_mensual": 99900,
+        "fecha_activacion": "2024-02-19",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": []
+      }
+    ],
+    "tickets_recientes": [],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1009",
+    "nombre": "Cliente C-1009",
+    "tipo_documento": "CC",
+    "numero_documento": "91009",
+    "celular": "11009",
+    "email": "cliente1009@example.test",
+    "ciudad": "Barranquilla",
+    "segmento": "masivo",
+    "fecha_vinculacion": "2020-07-22",
+    "antiguedad_meses": 76,
+    "ciclo_facturacion": 20,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 69900,
+    "servicios": [
+      {
+        "servicio_id": "C-1009-S1",
+        "tipo": "movil",
+        "plan": "Claro Max 60 GB",
+        "valor_mensual": 69900,
+        "fecha_activacion": "2020-07-22",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": []
+      }
+    ],
+    "tickets_recientes": [],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1010",
+    "nombre": "Cliente C-1010",
+    "tipo_documento": "CC",
+    "numero_documento": "91010",
+    "celular": "11010",
+    "email": "cliente1010@example.test",
+    "ciudad": "Barranquilla",
+    "segmento": "alto_valor",
+    "fecha_vinculacion": "2025-05-20",
+    "antiguedad_meses": 18,
+    "ciclo_facturacion": 10,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 254815,
+    "servicios": [
+      {
+        "servicio_id": "C-1010-S1",
+        "tipo": "hogar",
+        "plan": "Triple Play 500",
+        "valor_mensual": 169900,
+        "fecha_activacion": "2025-05-20",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": [
+          {
+            "tipo": "modem",
+            "modelo": "ZTX-F680",
+            "serial": "DEMO-C-1010-S1-1"
+          },
+          {
+            "tipo": "repetidor",
+            "modelo": "WR-6",
+            "serial": "DEMO-C-1010-S1-2"
+          },
+          {
+            "tipo": "decodificador",
+            "modelo": "DecoBox 4K",
+            "serial": "DEMO-C-1010-S1-3"
+          }
+        ]
+      },
+      {
+        "servicio_id": "C-1010-S2",
+        "tipo": "movil",
+        "plan": "Claro Max Ilimitado",
+        "valor_mensual": 84915,
+        "fecha_activacion": "2025-05-20",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": []
+      }
+    ],
+    "tickets_recientes": [],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1011",
+    "nombre": "Cliente C-1011",
+    "tipo_documento": "CC",
+    "numero_documento": "91011",
+    "celular": "11011",
+    "email": "cliente1011@example.test",
+    "ciudad": "Pereira",
+    "segmento": "masivo",
+    "fecha_vinculacion": "2022-04-21",
+    "antiguedad_meses": 55,
+    "ciclo_facturacion": 20,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 49900,
+    "servicios": [
+      {
+        "servicio_id": "C-1011-S1",
+        "tipo": "movil",
+        "plan": "Claro Max 25 GB",
+        "valor_mensual": 49900,
+        "fecha_activacion": "2022-04-21",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": []
+      }
+    ],
+    "tickets_recientes": [],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1012",
+    "nombre": "Cliente C-1012",
+    "tipo_documento": "CC",
+    "numero_documento": "91012",
+    "celular": "11012",
+    "email": "cliente1012@example.test",
+    "ciudad": "Medellín",
+    "segmento": "masivo",
+    "fecha_vinculacion": "2019-10-22",
+    "antiguedad_meses": 85,
+    "ciclo_facturacion": 1,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 89900,
+    "servicios": [
+      {
+        "servicio_id": "C-1012-S1",
+        "tipo": "hogar",
+        "plan": "Hogar Fibra 300",
+        "valor_mensual": 89900,
+        "fecha_activacion": "2019-10-22",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": [
+          {
+            "tipo": "modem",
+            "modelo": "ZTX-F680",
+            "serial": "DEMO-C-1012-S1-1"
+          }
+        ]
+      }
+    ],
+    "tickets_recientes": [
+      {
+        "ticket_id": "TK-979614",
+        "fecha": "2026-09-29",
+        "categoria": "facturacion",
+        "estado": "cerrado"
+      }
+    ],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1013",
+    "nombre": "Cliente C-1013",
+    "tipo_documento": "CC",
+    "numero_documento": "91013",
+    "celular": "11013",
+    "email": "cliente1013@example.test",
+    "ciudad": "Bucaramanga",
+    "segmento": "masivo",
+    "fecha_vinculacion": "2024-09-19",
+    "antiguedad_meses": 26,
+    "ciclo_facturacion": 1,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 139900,
+    "servicios": [
+      {
+        "servicio_id": "C-1013-S1",
+        "tipo": "hogar",
+        "plan": "Hogar Fibra 900",
+        "valor_mensual": 139900,
+        "fecha_activacion": "2024-09-19",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": [
+          {
+            "tipo": "modem",
+            "modelo": "ZTX-F680",
+            "serial": "DEMO-C-1013-S1-1"
+          },
+          {
+            "tipo": "repetidor",
+            "modelo": "WR-6",
+            "serial": "DEMO-C-1013-S1-2"
+          },
+          {
+            "tipo": "repetidor",
+            "modelo": "WR-6",
+            "serial": "DEMO-C-1013-S1-3"
+          }
+        ]
+      }
+    ],
+    "tickets_recientes": [
+      {
+        "ticket_id": "TK-957385",
+        "fecha": "2026-11-13",
+        "categoria": "soporte_tecnico",
+        "estado": "abierto"
+      },
+      {
+        "ticket_id": "TK-922925",
+        "fecha": "2026-10-30",
+        "categoria": "soporte_tecnico",
+        "estado": "cerrado"
+      },
+      {
+        "ticket_id": "TK-935206",
+        "fecha": "2026-10-08",
+        "categoria": "soporte_tecnico",
+        "estado": "cerrado"
+      },
+      {
+        "ticket_id": "TK-996891",
+        "fecha": "2026-09-09",
+        "categoria": "soporte_tecnico",
+        "estado": "cerrado"
+      }
+    ],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1014",
+    "nombre": "Cliente C-1014",
+    "tipo_documento": "CC",
+    "numero_documento": "91014",
+    "celular": "11014",
+    "email": "cliente1014@example.test",
+    "ciudad": "Bogotá",
+    "segmento": "alto_valor",
+    "fecha_vinculacion": "2024-11-19",
+    "antiguedad_meses": 24,
+    "ciclo_facturacion": 20,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 229315,
+    "servicios": [
+      {
+        "servicio_id": "C-1014-S1",
+        "tipo": "hogar",
+        "plan": "Triple Play 500",
+        "valor_mensual": 169900,
+        "fecha_activacion": "2024-11-19",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": [
+          {
+            "tipo": "modem",
+            "modelo": "ZTX-F680",
+            "serial": "DEMO-C-1014-S1-1"
+          },
+          {
+            "tipo": "repetidor",
+            "modelo": "WR-6",
+            "serial": "DEMO-C-1014-S1-2"
+          },
+          {
+            "tipo": "decodificador",
+            "modelo": "DecoBox 4K",
+            "serial": "DEMO-C-1014-S1-3"
+          }
+        ]
+      },
+      {
+        "servicio_id": "C-1014-S2",
+        "tipo": "movil",
+        "plan": "Claro Max 60 GB",
+        "valor_mensual": 59415,
+        "fecha_activacion": "2024-11-19",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": []
+      }
+    ],
+    "tickets_recientes": [
+      {
+        "ticket_id": "TK-982398",
+        "fecha": "2026-10-08",
+        "categoria": "consulta_planes",
+        "estado": "abierto"
+      }
+    ],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1015",
+    "nombre": "Cliente C-1015",
+    "tipo_documento": "CC",
+    "numero_documento": "91015",
+    "celular": "11015",
+    "email": "cliente1015@example.test",
+    "ciudad": "Pereira",
+    "segmento": "masivo",
+    "fecha_vinculacion": "2022-04-21",
+    "antiguedad_meses": 55,
+    "ciclo_facturacion": 1,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 89900,
+    "servicios": [
+      {
+        "servicio_id": "C-1015-S1",
+        "tipo": "hogar",
+        "plan": "Hogar Fibra 300",
+        "valor_mensual": 89900,
+        "fecha_activacion": "2022-04-21",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": [
+          {
+            "tipo": "modem",
+            "modelo": "ZTX-F680",
+            "serial": "DEMO-C-1015-S1-1"
+          }
+        ]
+      }
+    ],
+    "tickets_recientes": [],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1016",
+    "nombre": "Cliente C-1016",
+    "tipo_documento": "CC",
+    "numero_documento": "91016",
+    "celular": "11016",
+    "email": "cliente1016@example.test",
+    "ciudad": "Manizales",
+    "segmento": "masivo",
+    "fecha_vinculacion": "2020-03-22",
+    "antiguedad_meses": 80,
+    "ciclo_facturacion": 1,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 99900,
+    "servicios": [
+      {
+        "servicio_id": "C-1016-S1",
+        "tipo": "movil",
+        "plan": "Claro Max Ilimitado",
+        "valor_mensual": 99900,
+        "fecha_activacion": "2020-03-22",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": []
+      }
+    ],
+    "tickets_recientes": [
+      {
+        "ticket_id": "TK-913975",
+        "fecha": "2026-10-20",
+        "categoria": "soporte_tecnico",
+        "estado": "abierto"
+      }
+    ],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1017",
+    "nombre": "Cliente C-1017",
+    "tipo_documento": "CC",
+    "numero_documento": "91017",
+    "celular": "11017",
+    "email": "cliente1017@example.test",
+    "ciudad": "Ibagué",
+    "segmento": "alto_valor",
+    "fecha_vinculacion": "2022-09-20",
+    "antiguedad_meses": 50,
+    "ciclo_facturacion": 1,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 229315,
+    "servicios": [
+      {
+        "servicio_id": "C-1017-S1",
+        "tipo": "hogar",
+        "plan": "Triple Play 500",
+        "valor_mensual": 169900,
+        "fecha_activacion": "2022-09-20",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": [
+          {
+            "tipo": "modem",
+            "modelo": "ZTX-F680",
+            "serial": "DEMO-C-1017-S1-1"
+          },
+          {
+            "tipo": "repetidor",
+            "modelo": "WR-6",
+            "serial": "DEMO-C-1017-S1-2"
+          },
+          {
+            "tipo": "decodificador",
+            "modelo": "DecoBox 4K",
+            "serial": "DEMO-C-1017-S1-3"
+          }
+        ]
+      },
+      {
+        "servicio_id": "C-1017-S2",
+        "tipo": "movil",
+        "plan": "Claro Max 60 GB",
+        "valor_mensual": 59415,
+        "fecha_activacion": "2022-09-20",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": []
+      }
+    ],
+    "tickets_recientes": [],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1018",
+    "nombre": "Cliente C-1018",
+    "tipo_documento": "CC",
+    "numero_documento": "91018",
+    "celular": "11018",
+    "email": "cliente1018@example.test",
+    "ciudad": "Bogotá",
+    "segmento": "masivo",
+    "fecha_vinculacion": "2020-02-21",
+    "antiguedad_meses": 81,
+    "ciclo_facturacion": 1,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 109900,
+    "servicios": [
+      {
+        "servicio_id": "C-1018-S1",
+        "tipo": "hogar",
+        "plan": "Hogar Fibra 500",
+        "valor_mensual": 109900,
+        "fecha_activacion": "2020-02-21",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": [
+          {
+            "tipo": "modem",
+            "modelo": "ZTX-F680",
+            "serial": "DEMO-C-1018-S1-1"
+          },
+          {
+            "tipo": "repetidor",
+            "modelo": "WR-6",
+            "serial": "DEMO-C-1018-S1-2"
+          }
+        ]
+      }
+    ],
+    "tickets_recientes": [
+      {
+        "ticket_id": "TK-968759",
+        "fecha": "2026-09-24",
+        "categoria": "soporte_tecnico",
+        "estado": "cerrado"
+      }
+    ],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1019",
+    "nombre": "Cliente C-1019",
+    "tipo_documento": "CC",
+    "numero_documento": "91019",
+    "celular": "11019",
+    "email": "cliente1019@example.test",
+    "ciudad": "Manizales",
+    "segmento": "alto_valor",
+    "fecha_vinculacion": "2021-04-22",
+    "antiguedad_meses": 67,
+    "ciclo_facturacion": 1,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 169900,
+    "servicios": [
+      {
+        "servicio_id": "C-1019-S1",
+        "tipo": "hogar",
+        "plan": "Triple Play 500",
+        "valor_mensual": 169900,
+        "fecha_activacion": "2021-04-22",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": [
+          {
+            "tipo": "modem",
+            "modelo": "ZTX-F680",
+            "serial": "DEMO-C-1019-S1-1"
+          },
+          {
+            "tipo": "repetidor",
+            "modelo": "WR-6",
+            "serial": "DEMO-C-1019-S1-2"
+          },
+          {
+            "tipo": "decodificador",
+            "modelo": "DecoBox 4K",
+            "serial": "DEMO-C-1019-S1-3"
+          }
+        ]
+      }
+    ],
+    "tickets_recientes": [
+      {
+        "ticket_id": "TK-929652",
+        "fecha": "2026-09-12",
+        "categoria": "soporte_tecnico",
+        "estado": "abierto"
+      }
+    ],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  },
+  {
+    "cliente_id": "C-1020",
+    "nombre": "Cliente C-1020",
+    "tipo_documento": "CC",
+    "numero_documento": "91020",
+    "celular": "11020",
+    "email": "cliente1020@example.test",
+    "ciudad": "Cartagena",
+    "segmento": "masivo",
+    "fecha_vinculacion": "2024-07-20",
+    "antiguedad_meses": 28,
+    "ciclo_facturacion": 10,
+    "dias_mora": 0,
+    "estado": "activo",
+    "valor_mensual_total": 89900,
+    "servicios": [
+      {
+        "servicio_id": "C-1020-S1",
+        "tipo": "hogar",
+        "plan": "Hogar Fibra 300",
+        "valor_mensual": 89900,
+        "fecha_activacion": "2024-07-20",
+        "permanencia_hasta": null,
+        "estado": "activo",
+        "equipos": [
+          {
+            "tipo": "modem",
+            "modelo": "ZTX-F680",
+            "serial": "DEMO-C-1020-S1-1"
+          }
+        ]
+      }
+    ],
+    "tickets_recientes": [
+      {
+        "ticket_id": "TK-993399",
+        "fecha": "2026-10-09",
+        "categoria": "facturacion",
+        "estado": "cerrado"
+      },
+      {
+        "ticket_id": "TK-917795",
+        "fecha": "2026-10-03",
+        "categoria": "consulta_planes",
+        "estado": "cerrado"
+      }
+    ],
+    "ofertas_retencion_12m": [],
+    "autorizacion_tratamiento_datos": true
+  }
+]

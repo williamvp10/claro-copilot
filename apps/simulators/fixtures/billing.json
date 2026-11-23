@@ -1,0 +1,1034 @@
+[
+  {
+    "factura_id": "F-5001",
+    "cliente_id": "C-1001",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-10",
+    "fecha_limite_pago": "2026-09-25",
+    "valor_total": 169315,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 500",
+        "valor": 109900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max 60 GB",
+        "valor": 59415
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-09-21"
+  },
+  {
+    "factura_id": "F-5002",
+    "cliente_id": "C-1001",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-10",
+    "fecha_limite_pago": "2026-10-25",
+    "valor_total": 169315,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 500",
+        "valor": 109900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max 60 GB",
+        "valor": 59415
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-18"
+  },
+  {
+    "factura_id": "F-5003",
+    "cliente_id": "C-1001",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-10",
+    "fecha_limite_pago": "2026-11-25",
+    "valor_total": 169315,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 500",
+        "valor": 109900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max 60 GB",
+        "valor": 59415
+      }
+    ],
+    "estado": "pendiente",
+    "fecha_pago": null
+  },
+  {
+    "factura_id": "F-5004",
+    "cliente_id": "C-1002",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-20",
+    "fecha_limite_pago": "2026-10-05",
+    "valor_total": 99900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max Ilimitado",
+        "valor": 99900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-03"
+  },
+  {
+    "factura_id": "F-5005",
+    "cliente_id": "C-1002",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-20",
+    "fecha_limite_pago": "2026-11-04",
+    "valor_total": 99900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max Ilimitado",
+        "valor": 99900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-11-02"
+  },
+  {
+    "factura_id": "F-5006",
+    "cliente_id": "C-1002",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-20",
+    "fecha_limite_pago": "2026-12-05",
+    "valor_total": 99900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max Ilimitado",
+        "valor": 99900
+      }
+    ],
+    "estado": "pendiente",
+    "fecha_pago": null
+  },
+  {
+    "factura_id": "F-5007",
+    "cliente_id": "C-1003",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-20",
+    "fecha_limite_pago": "2026-10-05",
+    "valor_total": 49900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max 25 GB",
+        "valor": 49900
+      }
+    ],
+    "estado": "vencida",
+    "fecha_pago": null
+  },
+  {
+    "factura_id": "F-5008",
+    "cliente_id": "C-1003",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-20",
+    "fecha_limite_pago": "2026-11-04",
+    "valor_total": 49900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max 25 GB",
+        "valor": 49900
+      }
+    ],
+    "estado": "vencida",
+    "fecha_pago": null
+  },
+  {
+    "factura_id": "F-5009",
+    "cliente_id": "C-1003",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-20",
+    "fecha_limite_pago": "2026-12-05",
+    "valor_total": 49900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max 25 GB",
+        "valor": 49900
+      }
+    ],
+    "estado": "pendiente",
+    "fecha_pago": null
+  },
+  {
+    "factura_id": "F-5010",
+    "cliente_id": "C-1004",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-01",
+    "fecha_limite_pago": "2026-09-16",
+    "valor_total": 89900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 300",
+        "valor": 89900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-09-09"
+  },
+  {
+    "factura_id": "F-5011",
+    "cliente_id": "C-1004",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-01",
+    "fecha_limite_pago": "2026-10-16",
+    "valor_total": 89900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 300",
+        "valor": 89900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-12"
+  },
+  {
+    "factura_id": "F-5012",
+    "cliente_id": "C-1004",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-01",
+    "fecha_limite_pago": "2026-11-16",
+    "valor_total": 89900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 300",
+        "valor": 89900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-11-12"
+  },
+  {
+    "factura_id": "F-5013",
+    "cliente_id": "C-1005",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-10",
+    "fecha_limite_pago": "2026-09-25",
+    "valor_total": 182315,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 900",
+        "valor": 139900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max 25 GB",
+        "valor": 42415
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-09-23"
+  },
+  {
+    "factura_id": "F-5014",
+    "cliente_id": "C-1005",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-10",
+    "fecha_limite_pago": "2026-10-25",
+    "valor_total": 182315,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 900",
+        "valor": 139900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max 25 GB",
+        "valor": 42415
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-25"
+  },
+  {
+    "factura_id": "F-5015",
+    "cliente_id": "C-1005",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-10",
+    "fecha_limite_pago": "2026-11-25",
+    "valor_total": 182315,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 900",
+        "valor": 139900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max 25 GB",
+        "valor": 42415
+      }
+    ],
+    "estado": "pendiente",
+    "fecha_pago": null
+  },
+  {
+    "factura_id": "F-5016",
+    "cliente_id": "C-1006",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-10",
+    "fecha_limite_pago": "2026-09-25",
+    "valor_total": 229315,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Triple Play 500",
+        "valor": 169900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max 60 GB",
+        "valor": 59415
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-09-17"
+  },
+  {
+    "factura_id": "F-5017",
+    "cliente_id": "C-1006",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-10",
+    "fecha_limite_pago": "2026-10-25",
+    "valor_total": 229315,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Triple Play 500",
+        "valor": 169900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max 60 GB",
+        "valor": 59415
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-15"
+  },
+  {
+    "factura_id": "F-5018",
+    "cliente_id": "C-1006",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-10",
+    "fecha_limite_pago": "2026-11-25",
+    "valor_total": 229315,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Triple Play 500",
+        "valor": 169900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max 60 GB",
+        "valor": 59415
+      }
+    ],
+    "estado": "pendiente",
+    "fecha_pago": null
+  },
+  {
+    "factura_id": "F-5019",
+    "cliente_id": "C-1007",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-20",
+    "fecha_limite_pago": "2026-10-05",
+    "valor_total": 49900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max 25 GB",
+        "valor": 49900
+      }
+    ],
+    "estado": "vencida",
+    "fecha_pago": null
+  },
+  {
+    "factura_id": "F-5020",
+    "cliente_id": "C-1007",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-20",
+    "fecha_limite_pago": "2026-11-04",
+    "valor_total": 49900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max 25 GB",
+        "valor": 49900
+      }
+    ],
+    "estado": "vencida",
+    "fecha_pago": null
+  },
+  {
+    "factura_id": "F-5021",
+    "cliente_id": "C-1007",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-20",
+    "fecha_limite_pago": "2026-12-05",
+    "valor_total": 49900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max 25 GB",
+        "valor": 49900
+      }
+    ],
+    "estado": "pendiente",
+    "fecha_pago": null
+  },
+  {
+    "factura_id": "F-5022",
+    "cliente_id": "C-1008",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-10",
+    "fecha_limite_pago": "2026-09-25",
+    "valor_total": 99900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max Ilimitado",
+        "valor": 99900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-09-22"
+  },
+  {
+    "factura_id": "F-5023",
+    "cliente_id": "C-1008",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-10",
+    "fecha_limite_pago": "2026-10-25",
+    "valor_total": 99900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max Ilimitado",
+        "valor": 99900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-18"
+  },
+  {
+    "factura_id": "F-5024",
+    "cliente_id": "C-1008",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-10",
+    "fecha_limite_pago": "2026-11-25",
+    "valor_total": 99900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max Ilimitado",
+        "valor": 99900
+      }
+    ],
+    "estado": "pendiente",
+    "fecha_pago": null
+  },
+  {
+    "factura_id": "F-5025",
+    "cliente_id": "C-1009",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-20",
+    "fecha_limite_pago": "2026-10-05",
+    "valor_total": 69900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max 60 GB",
+        "valor": 69900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-09-29"
+  },
+  {
+    "factura_id": "F-5026",
+    "cliente_id": "C-1009",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-20",
+    "fecha_limite_pago": "2026-11-04",
+    "valor_total": 69900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max 60 GB",
+        "valor": 69900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-26"
+  },
+  {
+    "factura_id": "F-5027",
+    "cliente_id": "C-1009",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-20",
+    "fecha_limite_pago": "2026-12-05",
+    "valor_total": 69900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max 60 GB",
+        "valor": 69900
+      }
+    ],
+    "estado": "pendiente",
+    "fecha_pago": null
+  },
+  {
+    "factura_id": "F-5028",
+    "cliente_id": "C-1010",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-10",
+    "fecha_limite_pago": "2026-09-25",
+    "valor_total": 254815,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Triple Play 500",
+        "valor": 169900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max Ilimitado",
+        "valor": 84915
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-09-15"
+  },
+  {
+    "factura_id": "F-5029",
+    "cliente_id": "C-1010",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-10",
+    "fecha_limite_pago": "2026-10-25",
+    "valor_total": 254815,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Triple Play 500",
+        "valor": 169900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max Ilimitado",
+        "valor": 84915
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-21"
+  },
+  {
+    "factura_id": "F-5030",
+    "cliente_id": "C-1010",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-10",
+    "fecha_limite_pago": "2026-11-25",
+    "valor_total": 254815,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Triple Play 500",
+        "valor": 169900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max Ilimitado",
+        "valor": 84915
+      }
+    ],
+    "estado": "pendiente",
+    "fecha_pago": null
+  },
+  {
+    "factura_id": "F-5031",
+    "cliente_id": "C-1011",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-20",
+    "fecha_limite_pago": "2026-10-05",
+    "valor_total": 49900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max 25 GB",
+        "valor": 49900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-01"
+  },
+  {
+    "factura_id": "F-5032",
+    "cliente_id": "C-1011",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-20",
+    "fecha_limite_pago": "2026-11-04",
+    "valor_total": 49900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max 25 GB",
+        "valor": 49900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-11-01"
+  },
+  {
+    "factura_id": "F-5033",
+    "cliente_id": "C-1011",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-20",
+    "fecha_limite_pago": "2026-12-05",
+    "valor_total": 49900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max 25 GB",
+        "valor": 49900
+      }
+    ],
+    "estado": "pendiente",
+    "fecha_pago": null
+  },
+  {
+    "factura_id": "F-5034",
+    "cliente_id": "C-1012",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-01",
+    "fecha_limite_pago": "2026-09-16",
+    "valor_total": 89900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 300",
+        "valor": 89900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-09-10"
+  },
+  {
+    "factura_id": "F-5035",
+    "cliente_id": "C-1012",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-01",
+    "fecha_limite_pago": "2026-10-16",
+    "valor_total": 89900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 300",
+        "valor": 89900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-08"
+  },
+  {
+    "factura_id": "F-5036",
+    "cliente_id": "C-1012",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-01",
+    "fecha_limite_pago": "2026-11-16",
+    "valor_total": 89900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 300",
+        "valor": 89900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-11-13"
+  },
+  {
+    "factura_id": "F-5037",
+    "cliente_id": "C-1013",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-01",
+    "fecha_limite_pago": "2026-09-16",
+    "valor_total": 139900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 900",
+        "valor": 139900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-09-09"
+  },
+  {
+    "factura_id": "F-5038",
+    "cliente_id": "C-1013",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-01",
+    "fecha_limite_pago": "2026-10-16",
+    "valor_total": 139900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 900",
+        "valor": 139900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-13"
+  },
+  {
+    "factura_id": "F-5039",
+    "cliente_id": "C-1013",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-01",
+    "fecha_limite_pago": "2026-11-16",
+    "valor_total": 139900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 900",
+        "valor": 139900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-11-08"
+  },
+  {
+    "factura_id": "F-5040",
+    "cliente_id": "C-1014",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-20",
+    "fecha_limite_pago": "2026-10-05",
+    "valor_total": 229315,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Triple Play 500",
+        "valor": 169900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max 60 GB",
+        "valor": 59415
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-09-28"
+  },
+  {
+    "factura_id": "F-5041",
+    "cliente_id": "C-1014",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-20",
+    "fecha_limite_pago": "2026-11-04",
+    "valor_total": 229315,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Triple Play 500",
+        "valor": 169900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max 60 GB",
+        "valor": 59415
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-28"
+  },
+  {
+    "factura_id": "F-5042",
+    "cliente_id": "C-1014",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-20",
+    "fecha_limite_pago": "2026-12-05",
+    "valor_total": 229315,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Triple Play 500",
+        "valor": 169900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max 60 GB",
+        "valor": 59415
+      }
+    ],
+    "estado": "pendiente",
+    "fecha_pago": null
+  },
+  {
+    "factura_id": "F-5043",
+    "cliente_id": "C-1015",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-01",
+    "fecha_limite_pago": "2026-09-16",
+    "valor_total": 89900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 300",
+        "valor": 89900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-09-13"
+  },
+  {
+    "factura_id": "F-5044",
+    "cliente_id": "C-1015",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-01",
+    "fecha_limite_pago": "2026-10-16",
+    "valor_total": 89900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 300",
+        "valor": 89900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-08"
+  },
+  {
+    "factura_id": "F-5045",
+    "cliente_id": "C-1015",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-01",
+    "fecha_limite_pago": "2026-11-16",
+    "valor_total": 89900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 300",
+        "valor": 89900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-11-16"
+  },
+  {
+    "factura_id": "F-5046",
+    "cliente_id": "C-1016",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-01",
+    "fecha_limite_pago": "2026-09-16",
+    "valor_total": 99900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max Ilimitado",
+        "valor": 99900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-09-14"
+  },
+  {
+    "factura_id": "F-5047",
+    "cliente_id": "C-1016",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-01",
+    "fecha_limite_pago": "2026-10-16",
+    "valor_total": 99900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max Ilimitado",
+        "valor": 99900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-16"
+  },
+  {
+    "factura_id": "F-5048",
+    "cliente_id": "C-1016",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-01",
+    "fecha_limite_pago": "2026-11-16",
+    "valor_total": 99900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Claro Max Ilimitado",
+        "valor": 99900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-11-16"
+  },
+  {
+    "factura_id": "F-5049",
+    "cliente_id": "C-1017",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-01",
+    "fecha_limite_pago": "2026-09-16",
+    "valor_total": 229315,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Triple Play 500",
+        "valor": 169900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max 60 GB",
+        "valor": 59415
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-09-16"
+  },
+  {
+    "factura_id": "F-5050",
+    "cliente_id": "C-1017",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-01",
+    "fecha_limite_pago": "2026-10-16",
+    "valor_total": 229315,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Triple Play 500",
+        "valor": 169900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max 60 GB",
+        "valor": 59415
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-06"
+  },
+  {
+    "factura_id": "F-5051",
+    "cliente_id": "C-1017",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-01",
+    "fecha_limite_pago": "2026-11-16",
+    "valor_total": 229315,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Triple Play 500",
+        "valor": 169900
+      },
+      {
+        "concepto": "Cargo fijo Claro Max 60 GB",
+        "valor": 59415
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-11-08"
+  },
+  {
+    "factura_id": "F-5052",
+    "cliente_id": "C-1018",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-01",
+    "fecha_limite_pago": "2026-09-16",
+    "valor_total": 109900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 500",
+        "valor": 109900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-09-09"
+  },
+  {
+    "factura_id": "F-5053",
+    "cliente_id": "C-1018",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-01",
+    "fecha_limite_pago": "2026-10-16",
+    "valor_total": 109900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 500",
+        "valor": 109900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-09"
+  },
+  {
+    "factura_id": "F-5054",
+    "cliente_id": "C-1018",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-01",
+    "fecha_limite_pago": "2026-11-16",
+    "valor_total": 109900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 500",
+        "valor": 109900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-11-10"
+  },
+  {
+    "factura_id": "F-5055",
+    "cliente_id": "C-1019",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-01",
+    "fecha_limite_pago": "2026-09-16",
+    "valor_total": 169900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Triple Play 500",
+        "valor": 169900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-09-06"
+  },
+  {
+    "factura_id": "F-5056",
+    "cliente_id": "C-1019",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-01",
+    "fecha_limite_pago": "2026-10-16",
+    "valor_total": 169900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Triple Play 500",
+        "valor": 169900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-12"
+  },
+  {
+    "factura_id": "F-5057",
+    "cliente_id": "C-1019",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-01",
+    "fecha_limite_pago": "2026-11-16",
+    "valor_total": 169900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Triple Play 500",
+        "valor": 169900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-11-11"
+  },
+  {
+    "factura_id": "F-5058",
+    "cliente_id": "C-1020",
+    "periodo": "2026-09",
+    "fecha_corte": "2026-09-10",
+    "fecha_limite_pago": "2026-09-25",
+    "valor_total": 89900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 300",
+        "valor": 89900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-09-20"
+  },
+  {
+    "factura_id": "F-5059",
+    "cliente_id": "C-1020",
+    "periodo": "2026-10",
+    "fecha_corte": "2026-10-10",
+    "fecha_limite_pago": "2026-10-25",
+    "valor_total": 89900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 300",
+        "valor": 89900
+      }
+    ],
+    "estado": "pagada",
+    "fecha_pago": "2026-10-23"
+  },
+  {
+    "factura_id": "F-5060",
+    "cliente_id": "C-1020",
+    "periodo": "2026-11",
+    "fecha_corte": "2026-11-10",
+    "fecha_limite_pago": "2026-11-25",
+    "valor_total": 89900,
+    "detalle": [
+      {
+        "concepto": "Cargo fijo Hogar Fibra 300",
+        "valor": 89900
+      }
+    ],
+    "estado": "pendiente",
+    "fecha_pago": null
+  }
+]

@@ -22,10 +22,10 @@ export function createAuth(seed = false) {
 export async function getViewer(request: Request, auth: ReturnType<typeof createAuth>['auth'], db: DataSource): Promise<Viewer> {
   const session = await auth.api.getSession({ headers: fromNodeHeaders(request.headers) });
   if (!session) throw new UnauthorizedException();
-  const [operator] = await db.query('SELECT role FROM operator_role WHERE user_id=$1', [session.user.id]);
+  const [operator] = await db.query('SELECT role,capabilities,specialties,available,enabled FROM operator_role WHERE user_id=$1', [session.user.id]);
   const role = Role.safeParse(operator?.role);
-  if (!role.success) throw new UnauthorizedException();
-  return { id: session.user.id, name: session.user.name, role: role.data };
+  if (!role.success || !operator.enabled) throw new UnauthorizedException();
+  return { id: session.user.id, name: session.user.name, role: role.data, capabilities:operator.capabilities, specialties:operator.specialties, available:operator.available };
 }
 
 export const AUTH = Symbol('BETTER_AUTH');

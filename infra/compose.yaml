@@ -7,7 +7,11 @@ x-app: &app
   restart: unless-stopped
   environment: &app-env
     NODE_ENV: production
-    DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL using the postgres service hostname}
+    DATABASE_URL: ${PLATFORM_DATABASE_URL:?Set the platform runtime database URL}
+    CRM_API_URL: http://crm-simulator:8081/v1
+    BILLING_API_URL: http://billing-simulator:8082/v1
+    CRM_API_KEY: ${CRM_API_KEY:?Set the internal CRM API key}
+    BILLING_API_KEY: ${BILLING_API_KEY:?Set the internal billing API key}
     REDIS_URL: ${REDIS_URL:-redis://redis:6379}
     BETTER_AUTH_URL: ${BETTER_AUTH_URL:?Set BETTER_AUTH_URL}
     BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Set BETTER_AUTH_SECRET}
@@ -20,6 +24,12 @@ x-app: &app
     DEMO_INGRESS_TOKEN: ${DEMO_INGRESS_TOKEN:-}
     DEMO_ADMIN_EMAIL: ${DEMO_ADMIN_EMAIL:-}
     DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:-}
+    DEMO_N2_EMAIL: ${DEMO_N2_EMAIL:-}
+    DEMO_N2_PASSWORD: ${DEMO_N2_PASSWORD:-}
+    DEMO_SUPERVISOR_EMAIL: ${DEMO_SUPERVISOR_EMAIL:-}
+    DEMO_SUPERVISOR_PASSWORD: ${DEMO_SUPERVISOR_PASSWORD:-}
+    DEMO_SUPERADMIN_EMAIL: ${DEMO_SUPERADMIN_EMAIL:-}
+    DEMO_SUPERADMIN_PASSWORD: ${DEMO_SUPERADMIN_PASSWORD:-}
     DEMO_BILLING_CHAT_ID: ${DEMO_BILLING_CHAT_ID:-}
     DEMO_RETENTION_CHAT_ID: ${DEMO_RETENTION_CHAT_ID:-}
     DEMO_ASSIGNED_CHAT_ID: ${DEMO_ASSIGNED_CHAT_ID:-}
@@ -29,6 +39,10 @@ x-app: &app
     DEMO_BUSINESS_DATE: ${DEMO_BUSINESS_DATE:-2026-11-18}
     AGENT_PROVIDERS: ${AGENT_PROVIDERS:-fixtures}
     JEV_MODEL: ${JEV_MODEL:-typesafe/jev-1.14}
+    CRM_MCP_URL: http://crm-mcp:3031/mcp
+    BILLING_MCP_URL: http://billing-mcp:3031/mcp
+    INTEGRATION_MCP_TOKEN: ${INTEGRATION_MCP_TOKEN:?Set a private MCP service token}
+    INTEGRATION_MCP_SIGNING_KEY: ${INTEGRATION_MCP_SIGNING_KEY:?Set a private MCP signing key}
     KNOWLEDGE_MCP_URL: ${KNOWLEDGE_MCP_URL:-}
     KNOWLEDGE_SERVICE_TOKEN: ${KNOWLEDGE_SERVICE_TOKEN:-}
     OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -36,6 +50,11 @@ x-app: &app
     LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
     LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
     LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-}
+    LANGFUSE_UI_URL: ${LANGFUSE_UI_URL:-}
+    LANGFUSE_PROJECT_ID: ${LANGFUSE_PROJECT_ID:-claro-copiloto}
+    MLFLOW_UI_URL: ${MLFLOW_UI_URL:-http://127.0.0.1:39086}
+    PROMETHEUS_URL: ${PROMETHEUS_URL:-http://prometheus:9090}
+    PROMPT_EVAL_ENABLED: ${PROMPT_EVAL_ENABLED:-false}
     OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
   depends_on:
     postgres: {condition: service_healthy}
@@ -68,7 +87,44 @@ services:
   migrate:
     <<: *app
     restart: 'no'
-    command: [node, apps/backend/dist/migrate.js]
+    command: [sh, -ec, 'node apps/backend/dist/migrate.js && node apps/simulators/bootstrap.mjs']
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set the administrative database URL using the postgres service hostname}
+      PLATFORM_DATABASE_URL: ${PLATFORM_DATABASE_URL}
+      CRM_DATABASE_URL: ${CRM_DATABASE_URL:?Set the CRM runtime database URL}
+      BILLING_DATABASE_URL: ${BILLING_DATABASE_URL:?Set the billing runtime database URL}
+    depends_on:
+      postgres: {condition: service_healthy}
+  crm-simulator:
+    <<: *app
+    command: [node, apps/simulators/server.mjs, crm]
+    environment:
+      CRM_DATABASE_URL: ${CRM_DATABASE_URL}
+      CRM_API_KEY: ${CRM_API_KEY}
+      DEMO_BUSINESS_DATE: ${DEMO_BUSINESS_DATE:-2026-11-18}
+      SIMULATOR_FAULT_MODE: ${SIMULATOR_FAULT_MODE:-off}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8081/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 4s
+      retries: 5
+  billing-simulator:
+    <<: *app
+    command: [node, apps/simulators/server.mjs, billing]
+    environment:
+      BILLING_DATABASE_URL: ${BILLING_DATABASE_URL}
+      BILLING_API_KEY: ${BILLING_API_KEY}
+      DEMO_BUSINESS_DATE: ${DEMO_BUSINESS_DATE:-2026-11-18}
+      SIMULATOR_FAULT_MODE: ${SIMULATOR_FAULT_MODE:-off}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8082/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 4s
+      retries: 5
   seed:
     <<: *app
     profiles: [jobs]
@@ -91,6 +147,38 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+  crm-mcp:
+    <<: *app
+    command: [node, apps/backend/dist/integration-mcp.js]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${PLATFORM_DATABASE_URL}
+      CRM_API_URL: http://crm-simulator:8081/v1
+      CRM_API_KEY: ${CRM_API_KEY}
+      INTEGRATION_MCP_TOKEN: ${INTEGRATION_MCP_TOKEN}
+      INTEGRATION_MCP_SIGNING_KEY: ${INTEGRATION_MCP_SIGNING_KEY}
+      MCP_DOMAIN: crm
+      MCP_PORT: 3031
+      HOST: 0.0.0.0
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      crm-simulator: {condition: service_started}
+  billing-mcp:
+    <<: *app
+    command: [node, apps/backend/dist/integration-mcp.js]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${PLATFORM_DATABASE_URL}
+      BILLING_API_URL: http://billing-simulator:8082/v1
+      BILLING_API_KEY: ${BILLING_API_KEY}
+      INTEGRATION_MCP_TOKEN: ${INTEGRATION_MCP_TOKEN}
+      INTEGRATION_MCP_SIGNING_KEY: ${INTEGRATION_MCP_SIGNING_KEY}
+      MCP_DOMAIN: billing
+      MCP_PORT: 3031
+      HOST: 0.0.0.0
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      billing-simulator: {condition: service_started}
   worker:
     <<: *app
     command: [node, apps/backend/dist/worker.js]
@@ -113,12 +201,42 @@ services:
     depends_on:
       api: {condition: service_healthy}
     ports: ['${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3000}:3000']
+  eval-worker:
+    <<: *app
+    profiles: [evals]
+    command: [node, apps/backend/scripts/eval-worker.mjs]
+    environment:
+      DATABASE_URL: ${PLATFORM_DATABASE_URL}
+      DEMO_MODE: ${DEMO_MODE:-true}
+      DEMO_BUSINESS_DATE: ${DEMO_BUSINESS_DATE:-2026-11-18}
+      PROMPT_EVAL_PROVIDERS: ${PROMPT_EVAL_PROVIDERS:-local}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      JEV_MODEL: ${JEV_MODEL:-typesafe/jev-1.14}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-}
+    volumes:
+      - ${PROMPT_EVAL_INPUT_DIR:-./private-evals}:/eval-input:ro
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+  publish-knowledge:
+    <<: *app
+    profiles: [jobs]
+    restart: 'no'
+    command: [node, apps/backend/dist/knowledge-ingest.js, /publication/corpus.json, /publication/manifest.json]
+    environment:
+      DATABASE_URL: ${PLATFORM_DATABASE_URL}
+    volumes:
+      - ${KNOWLEDGE_PUBLICATION_DIR:-./private-publication}:/publication:ro
+    depends_on:
+      migrate: {condition: service_completed_successfully}
   knowledge-mcp:
     <<: *app
     profiles: [knowledge]
     command: [node, apps/backend/dist/mcp.js]
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: ${PLATFORM_DATABASE_URL}
       KNOWLEDGE_SERVICE_TOKEN: ${KNOWLEDGE_SERVICE_TOKEN:-}
       HOST: 0.0.0.0
       MCP_PORT: '3030'
@@ -145,8 +263,9 @@ services:
       context: ../services/ml
       dockerfile: Dockerfile
     environment:
-      MLFLOW_SERVER_ALLOWED_HOSTS: 'mlflow:5000,localhost:5000,127.0.0.1:5000'
+      MLFLOW_SERVER_ALLOWED_HOSTS: 'mlflow:5000,localhost:5000,127.0.0.1:5000,localhost:${MLFLOW_UI_PORT:-39086},127.0.0.1:${MLFLOW_UI_PORT:-39086}'
     command: [mlflow, server, --host, 0.0.0.0, --port, '5000', --backend-store-uri, 'sqlite:////mlflow/db/mlflow.db', --artifacts-destination, /mlflow/artifacts, --serve-artifacts, --workers, '1']
+    ports: ['127.0.0.1:${MLFLOW_UI_PORT:-39086}:5000']
     volumes: [mlflow-data:/mlflow]
     depends_on:
       ml-init: {condition: service_completed_successfully}
@@ -161,6 +280,7 @@ services:
     environment:
       ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-}
       ML_BUNDLE_DIR: /models/releases/${ML_RELEASE_VERSION:-2}
+      ML_CHURN_BUNDLE_DIR: ${ML_CHURN_BUNDLE_DIR:-}
       ML_STATE_DB: /state/ml.sqlite
     volumes:
       - ml-models:/models:ro

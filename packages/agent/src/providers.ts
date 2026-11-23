@@ -19,15 +19,21 @@ function acceptedChoice(value: unknown, labels: readonly string[]): { choice: st
   if (Math.abs(labels.reduce((sum,k)=>sum+(p[k] as number),0)-1) > 0.02 || selected < 0.75 || selected !== ordered[0] || selected - ordered[1] < 0.2) return null;
   return {choice:answer.choice, probability:selected};
 }
-export type JevOptions = { apiKey: string; model: string; timeoutMs?: number; fetch?: Fetch };
+export type JevOptions = { apiKey: string; model: string; timeoutMs?: number; fetch?: Fetch; semanticTemplate?: string };
+export function parseJevQuestion(template:string, expectedKeys:readonly string[], variables:Record<string,string> = {}): {instructions:string;criteria:Record<string,string>} | null {
+ try { const value=JSON.parse(template) as {instructions:unknown;criteria:unknown}; if (typeof value.instructions !== 'string' || !value.criteria || typeof value.criteria !== 'object' || Array.isArray(value.criteria)) return null; const criteria=value.criteria as Record<string,unknown>; if (Object.keys(criteria).length !== expectedKeys.length || expectedKeys.some(k=>typeof criteria[k] !== 'string') || Object.keys(criteria).some(k=>!expectedKeys.includes(k))) return null; const render=(s:string)=>s.replace(/{{\s*([a-zA-Z_][a-zA-Z_0-9]*)\s*}}/g,(_,key:string)=>variables[key] ?? ''); return {instructions:render(value.instructions),criteria:Object.fromEntries(expectedKeys.map(k=>[k,render(criteria[k] as string)]))}; } catch { return null; }
+}
 /** Jev receives only categorical features; API errors and uncertain output abstain. */
 export function createJevDecisionAdapter(options: JevOptions): DecisionAdapter {
   if (!options.apiKey || !/^typesafe\/jev-[a-zA-Z0-9.-]+$/.test(options.model)) throw new Error('A server key and explicit Jev model are required');
-  return { async classify(text): Promise<Decision | null> {
+  return { async classify(text, prompts): Promise<Decision | null> {
+    const intentQuestion = prompts?.intent_decision ? parseJevQuestion(prompts.intent_decision,intents) : {instructions:'Clasifica la intención a partir de señales categóricas.',criteria:intentCriteria};
+    const complexityQuestion = prompts?.complexity_decision ? parseJevQuestion(prompts.complexity_decision,complexity) : {instructions:'Clasifica la complejidad solo si hay información suficiente.',criteria:complexityCriteria};
+    if (!intentQuestion || !complexityQuestion) return null;
     const features = safeDecisionFeatures(text);
     if (features === 'indeterminada') return null;
     try {
-      const response = await (options.fetch ?? fetch)('https://openrouter.ai/api/alpha/decisions', {method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${options.apiKey}`},signal:AbortSignal.timeout(options.timeoutMs ?? 800),body:JSON.stringify({model:options.model,state:{senales:features},questions:{intencion:{type:'choice',instructions:'Clasifica la intención a partir de señales categóricas.',criteria:intentCriteria},complejidad:{type:'choice',instructions:'Clasifica la complejidad solo si hay información suficiente.',criteria:complexityCriteria}}})});
+      const response = await (options.fetch ?? fetch)('https://openrouter.ai/api/alpha/decisions', {method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${options.apiKey}`},signal:AbortSignal.timeout(options.timeoutMs ?? 800),body:JSON.stringify({model:options.model,state:{senales:features},questions:{intencion:{type:'choice',...intentQuestion},complejidad:{type:'choice',...complexityQuestion}}})});
       if (!response.ok) return null;
       const data = await response.json() as {model?: unknown; answers?: Record<string,unknown>};
       if (typeof data.model !== 'string' || !(data.model === options.model || data.model.startsWith(`${options.model}-`))) return null;
@@ -38,19 +44,19 @@ export function createJevDecisionAdapter(options: JevOptions): DecisionAdapter {
   }};
 }
 
-export interface EvidenceSelector { select(query: string, citations: Citation[], profile: Decision['complexity']): Promise<number | null> }
+export interface EvidenceSelector { select(query: string, citations: Citation[], profile: Decision['complexity'], prompt?:string): Promise<number | null> }
 export type OpenAISelectorOptions = {apiKey: string; models: Partial<Record<Decision['complexity'],string>>; timeoutMs?:number; fetch?:Fetch};
 /** Responses API selects an already-authorized passage; generated prose is never published. */
 export function createOpenAIEvidenceSelector(options: OpenAISelectorOptions): EvidenceSelector {
   if (!options.apiKey) throw new Error('A server key is required');
   for (const model of Object.values(options.models)) if (typeof model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}$/.test(model)) throw new Error('Invalid model identifier');
-  return {async select(query,citations,profile) {
+  return {async select(query,citations,profile,prompt) {
     const model = options.models[profile];
     if (!model || citations.length === 0 || citations.length > 3) return null;
     // Labels are from a closed vocabulary; neither the query nor source passages leave the process.
     const candidates = citations.map((c,index)=>({index,senales:safeDecisionFeatures(`${c.title} ${c.excerpt}`)}));
     try {
-      const response = await (options.fetch ?? fetch)('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${options.apiKey}`},signal:AbortSignal.timeout(options.timeoutMs ?? 1500),body:JSON.stringify({model,store:false,max_output_tokens:64,input:[{role:'developer',content:'Select the most relevant candidate index. Return exactly one digit; if uncertain return -1.'},{role:'user',content:JSON.stringify({senales:safeDecisionFeatures(query),candidates})}]})});
+      const response = await (options.fetch ?? fetch)('https://api.openai.com/v1/responses',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${options.apiKey}`},signal:AbortSignal.timeout(options.timeoutMs ?? 1500),body:JSON.stringify({model,store:false,max_output_tokens:64,input:[{role:'developer',content:prompt || 'Select the most relevant candidate index. Return exactly one digit; if uncertain return -1.'},{role:'user',content:JSON.stringify({senales:safeDecisionFeatures(query),candidates})}]})});
       if (!response.ok) return null;
       const data = await response.json() as {model?:unknown;output?:Array<{type?:unknown;content?:Array<{type?:unknown;text?:unknown}>}>};
       if (typeof data.model !== 'string' || !(data.model === model || data.model.startsWith(`${model}-`))) return null;
@@ -77,7 +83,8 @@ export function createJevSemanticEvaluator(options: JevOptions) {
   if (!criteria.length) return {status:'not_applicable',decisions:[]};
   if (criteria.length > 20 || !safeEvalText(input.answer) || criteria.some(x=>!safeEvalText(x.text))) return {status:'review',decisions:[]};
   const questions:Record<string,unknown>={};
-  criteria.forEach((x,i)=>{questions[`q${i}`]={type:'choice',instructions:`Evalúa la afirmación ${safeEvalText(x.text)} en la respuesta y evidencia.`,criteria:{presente:'La afirmación está claramente presente y respaldada.',ausente:'La afirmación no está presente.',ambiguo:'La evidencia o respuesta no permiten decidir.'}}});
+  criteria.forEach((x,i)=>{const question=options.semanticTemplate ? parseJevQuestion(options.semanticTemplate,['presente','ausente','ambiguo'],{criterion:safeEvalText(x.text),criterio:safeEvalText(x.text),rubric_statement:safeEvalText(x.text)}) : {instructions:`Evalúa la afirmación ${safeEvalText(x.text)} en la respuesta y evidencia.`,criteria:{presente:'La afirmación está claramente presente y respaldada.',ausente:'La afirmación no está presente.',ambiguo:'La evidencia o respuesta no permiten decidir.'}}; if (question) questions[`q${i}`]={type:'choice',...question};});
+  if (Object.keys(questions).length !== criteria.length) return {status:'review',decisions:[]};
   try {
    const response=await (options.fetch ?? fetch)('https://openrouter.ai/api/alpha/decisions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${options.apiKey}`},signal:AbortSignal.timeout(options.timeoutMs ?? 800),body:JSON.stringify({model:options.model,state:{pregunta:safeEvalText(input.question),respuesta:safeEvalText(input.answer),evidencia:input.evidence.slice(0,3).map(safeEvalText)},questions})});
    if (!response.ok) return {status:'error',decisions:[]};

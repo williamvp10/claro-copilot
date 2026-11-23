@@ -1,6 +1,6 @@
 # SDD de plataforma web y backend
 
-**Responsabilidad.** Dar al cliente acceso por chat web y Telegram y al asesor y al administrador acceso por consola. La plataforma posee casos, identidad, integraciones con CRM y facturación, aprobaciones, revisiones activas del agente y vistas del tablero. Puede implementarse con stubs de agente y ML.
+**Responsabilidad.** Dar al cliente acceso por chat web y Telegram, y a asesores, supervisión y administración acceso por consola. La plataforma posee casos, colas, identidad, integraciones con CRM y Facturación, aprobaciones, revisiones activas del agente y vistas de los tableros. [Especificación de consola y CRM](../evolucion-mvp/consola-crm.md) · [Panel y seis tableros](../evolucion-mvp/tableros.md)
 
 [Arquitectura Docker](../02-arquitectura-docker.md) · [Guía de arranque](../01-arranque.md) · [Inicio](../../README.md) · [DDD compartido](../03-dominio.md) · [Contratos](../04-contratos.md) · [Diseño de interfaz](#sistema-de-diseño-para-la-consola)
 
@@ -11,7 +11,7 @@
 | **Web** | Next.js App Router, TypeScript, Tailwind y shadcn/ui. Bandeja y caso, chat con progreso y respuesta vía SSE, historial, ficha del titular, citas y confirmación accesible. Admin con métricas, ejecuciones del agente, fuentes y configuración. Cliente Better Auth con cuentas de demo y roles validados en servidor. |
 | **Platform API** | NestJS con Express, TypeScript en ESM, TypeORM y PostgreSQL. Módulos de Atención, Identidad, Retención, Aprobación y Administración. TypeORM administra casos, turnos, propuestas, efectos, revisiones y auditoría. Better Auth posee el esquema de sesiones con su adaptador PostgreSQL. |
 | **Canales y workers** | Adaptador Telegram con webhook, verificación de secreto y deduplicación. Worker NestJS en proceso separado, con inbox/outbox en PostgreSQL para ejecutar el módulo de agente, entregar mensajes, registrar encuestas y reconciliar efectos. Puerto uniforme para WhatsApp y voz. |
-| **Integraciones** | Adaptadores HTTP a CRM y facturación con su OpenAPI, servidos por dos bases URL privadas del mismo `business-mocks`. El agente consume los puertos TypeScript autorizados de plataforma a través de DI. Lecturas con timeout y reintentos acotados. Escrituras con resultado y reconciliación por clave del efecto. |
+| **Integraciones** | APIs mock de CRM y Facturación con sus OpenAPI, servidas por `crm-simulator` y `billing-simulator` en la red privada, cada una con base y rol propios. La consola consume proyecciones de NestJS. El worker de atención usa MCPs privados de lectura con acceso por caso. Las escrituras pasan por comandos autorizados, outbox y reconciliación por clave del efecto. |
 | **Operación** | Traefik/Dokploy, TLS, roles y secretos desde el entorno. Exponer web y webhooks. Red privada para worker, base, mocks, ML y MLflow. Backups verificables de datos y un entorno de staging con sus credenciales. |
 
 ## Flujos por perfil
@@ -19,16 +19,18 @@
 | Perfil | Recorrido principal |
 | --- | --- |
 | Cliente | Entra por el bot y recibe respuesta pública con cita o transferencia, escribe directamente a un asesor o responde al contacto iniciado por este. Sigue el mismo hilo hasta el cierre. |
-| Asesor | Recibe, toma o abre el caso → conversa con el cliente → valida titularidad → recibe hechos y recomendaciones en la ficha privada → responde y aprueba o rechaza propuestas → cierra y revisa el resumen. |
+| Asesor N1 | Toma o abre el caso, consulta la ficha privada con evidencia y borrador, responde y confirma propuestas permitidas. Puede pedir el traspaso a una especialidad. |
+| Asesor N2 | Toma un caso de su cola por especialidad, recibe el mismo hilo con evidencias y pendientes, y lo resuelve o transfiere según política. |
 | Supervisor | Atiende escalamiento sensible o ajuste fuera del límite del asesor → revisa hechos y evidencia → decide o reasigna. |
-| Administrador | Revisa salud y calidad → filtra ejecuciones → configura candidato del agente → revisa Evals → promueve o restaura una revisión autorizada. |
+| Admin operativo | Consulta el Panel general y las seis vistas, revisa trazas y evals y publica o restaura una revisión autorizada. |
+| Super admin | Gestiona clientes del CRM mock, operadores, capacidades y especialidades. Los cambios tienen auditoría y la ficha privada sigue bajo ámbito de caso. |
 | Gestor de conocimiento | Carga fuente con visibilidad y vigencia → sigue su ingesta → verifica cuándo quedó indexada y cuándo entra en vigor. |
 
 **Sesión y autorización.** Next.js y NestJS comparten un origen. Better Auth autentica bajo `/api/auth`. Los guards y casos de uso verifican el rol y el caso. Una sesión de asesor permite usar la consola. La titularidad es una validación adicional para acceder al CRM de ese caso.
 
 **Apertura y propiedad.** En el ingreso por bot, el caso comienza en autoservicio. Para simular el ingreso directo, preparar un chat con ruta de atención humana y asesor asignado: el primer webhook crea el caso asistido y entrega el turno a la bandeja. Para simular el contacto saliente, el asesor selecciona un contacto sintético con chat habilitado y envía el primer mensaje desde la consola. Persistir caso, asignación, turno saliente y outbox en una transacción. Reflejar el estado de entrega y conservar el mismo hilo cuando el cliente responda.
 
-**Consola durante la atención.** El campo de redacción envía mensajes al cliente. Junto al hilo, mostrar la ficha privada con motivo, resumen, evidencias, recursos pendientes y próxima acción. Persistir cada intervención de cliente y asesor y actualizar la ficha por SSE. Si falta titularidad, mostrar «Validar titular» y reanudar la consulta pendiente al completar la verificación. Ante reasignación, retirar la vista privada de la sesión anterior. Al cerrar, publicar resolución y solicitar encuesta.
+**Consola durante la atención.** El campo de redacción envía mensajes al cliente. Junto al hilo, mostrar la ficha privada con motivo, resumen, evidencias, recursos pendientes y próxima acción. Persistir cada intervención de cliente y asesor y actualizar la ficha por SSE. Si falta titularidad, el cliente verifica su contacto y código de prueba en el chat. El asesor ve el estado y la ficha se actualiza al confirmar el código. Ante reasignación, retirar la vista privada de la sesión anterior. Al cerrar, publicar resolución y solicitar encuesta.
 
 **Acciones.** La propuesta se crea desde el agente usando el contrato interno. Mostrar un diálogo con detalle, implicación y confirmación explícita. La API revalida identidad, rol, política, vigencia e idempotencia. En ejecución usa el mock correspondiente y reanuda el agente con resultado autenticado. Intentos repetidos no duplican efectos y los timeouts ambiguos se reconcilian. En la demo registrar la oferta y mostrar las pruebas de ticket y ajuste. [Contrato de aprobación](../04-contratos.md#aprobación-y-efecto)
 
@@ -54,11 +56,9 @@ La consola ofrece revisión de prompts, políticas de enrutamiento entre modelos
 
 Separar permisos de soporte, operación, edición y publicación. Una configuración de administrador solo selecciona modelos y capacidades dentro de una lista habilitada por el sistema. [Versionamiento de prompts de Langfuse](https://langfuse.com/docs/prompt-management/features/prompt-version-control)
 
-## Tablero y observabilidad
+## Tableros y observabilidad
 
-- **Negocio.** AHT, FCR, escalamiento, retención, estado de casos y CSAT con participación. La fuente es el historial de eventos de atención y encuesta.
-- **Calidad y agentes.** Exactitud, groundedness, Recall@k, citas, éxito por ruta, herramientas, errores, bloqueos y bucles. La fuente son Evals, trazas de Langfuse y auditoría de efectos.
-- **Operación, ML y DevOps.** p95, disponibilidad, costos, tokens y frescura del índice. Reportar F1, recall, modo y drift del modelo. CI aporta cobertura, lead time, tamaños de imagen y hallazgos de escaneo. Usar filtros por ambiente, fecha, canal y versión.
+El Panel general enlaza a seis tableros con indicadores seleccionables. **Negocio**, **Calidad del LLM**, **Técnica**, **Agentes**, **Machine learning** y **DevOps** conservan los grupos del reto. Cada vista presenta fuente, muestra, ventana y meta cuando aplica. [Definiciones y fuentes por grupo](../evolucion-mvp/tableros.md)
 
 OpenTelemetry une solicitudes, workers y dependencias. El worker envía trazas OTLP saneadas a Langfuse autohospedado. Prometheus recoge las métricas técnicas. El tablero permite abrir una traza autorizada y muestra datos sintéticos y piloto como procedencias distintas. Presenta OpenAI Direct y Jev por OpenRouter como etapas y costos separados. [Diseño de observabilidad](observabilidad.md) [Definiciones de KPIs y metas](../06-calidad-y-release.md#métricas-de-aceptación) · [Enunciado](../06-calidad-y-release.md#métricas-de-aceptación)
 

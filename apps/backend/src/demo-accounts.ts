@@ -1,26 +1,18 @@
-import type { Fact } from '@claro/contracts';
-import type { EntityManager } from 'typeorm';
+import type { Fact, Service } from '@claro/contracts';
+import type { z } from 'zod';
+import { simulators } from './simulator-client.js';
 
-type Invoice = {
-  period: string;
-  due: string;
-  amount: number;
-  status: 'pagada' | 'pendiente' | 'vencida';
-};
-type DemoProfile = {
-  plans: { name: string; monthly: number }[];
-  invoices: Invoice[];
-  openTickets: number;
-};
-type DemoAccount = DemoProfile & { ref: string; email: string; phone: string };
-export type AccountInquiry = 'invoice' | 'balance' | 'plans' | 'tickets';
+export const accountVerificationPrompt = 'Para verificar tu cuenta, escribe tu correo o teléfono de prueba en el chat.';
+
+export type AccountInquiry = 'invoice' | 'balance' | 'plans' | 'tickets' | 'assistance';
 
 export function accountInquiry(text: string): AccountInquiry | null {
   const value = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   if (/\b(mis tickets|mis casos|tickets abiertos|mis solicitudes)\b/.test(value)) return 'tickets';
   if (/\b(saldo|cuanto debo|cuanto adeudo|mi mora)\b/.test(value)) return 'balance';
-  if (/^(?:facturas?|facturacion|vencimiento)[.?!]*$|\b(mi factura|mis facturas|consultar (?:la )?factura|factura de [a-z]+|vencimiento de mi factura)\b/.test(value)) return 'invoice';
+  if (/^(?:facturas?|facturacion|vencimiento)[.?!]*$|\b(mi (?:ultima )?factura|mis facturas|mi recibo|consultar (?:la )?factura|factura de [a-z]+|vencimiento de mi factura)\b/.test(value)) return 'invoice';
   if (/\b(mi plan|mis planes|mis servicios|que plan tengo|que servicio tengo|plan (?:que tengo|contratado))\b/.test(value)) return 'plans';
+  if (/\b(cancelar|cancelacion|dar de baja|retirar(?:me)?|portar mi (?:linea|numero)|portabilidad saliente)\b/.test(value)) return 'assistance';
   return null;
 }
 
@@ -29,86 +21,55 @@ export function requestedAdvisor(text: string) {
     .test(text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
 }
 
-export async function findDemoAccount(tx: EntityManager, identifier: string): Promise<string | undefined> {
-  const value = identifier.trim().toLowerCase();
-  const query = value.includes('@') ? value : value.replace(/[\s()+.-]/g, '');
-  const [result] = await tx.query('SELECT ref FROM demo_customer WHERE email=$1 OR phone=$1', [query]);
-  return result?.ref;
+
+export function contactCandidates(text: string) {
+  const emails = text.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi) ?? [];
+  const digits = text.replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, ' ')
+    .match(/(?<![\w.])\+?\d(?:[ ()-]*\d){4,14}(?!\w|[.]\d)/g) ?? [];
+  const phones = digits.map(number => number.replace(/\D/g, ''))
+    .filter(number => number.length === 5 || number.length >= 10);
+  return [...new Set([...emails.map(email => email.toLowerCase()), ...phones])];
 }
 
-export async function demoAccount(tx: EntityManager, ref: string): Promise<DemoProfile | undefined> {
-  const [result] = await tx.query('SELECT profile FROM demo_customer WHERE ref=$1', [ref]);
-  return result?.profile;
+export function codeCandidates(text: string) {
+  const codes = text.replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, ' ')
+    .match(/(?<![\w])(?:\d{6}|\d{3}[ -]\d{3})(?![\w])/g) ?? [];
+  return [...new Set(codes.map(code => code.replace(/\D/g, '')))];
 }
 
 const formatAmount = new Intl.NumberFormat('es-CO');
-const formatDate = new Intl.DateTimeFormat('es-CO', { dateStyle: 'long', timeZone: 'UTC' });
+const formatDate = new Intl.DateTimeFormat('es-CO', { dateStyle:'long', timeZone:'UTC' });
 const amount = (value: number) => '$' + formatAmount.format(value);
 const date = (value: string) => formatDate.format(new Date(value));
-const fact = (id: string, label: string, value: string): Fact => ({id,label,value});
-const balance = (account: DemoProfile) => account.invoices.filter(invoice => invoice.status !== 'pagada')
-  .reduce((total, invoice) => total + invoice.amount, 0);
+export const fact = (id: string, label: string, value: string): Fact => ({ id,label,value });
 
-export function demoPlanFacts(account: DemoProfile) {
-  return account.plans.map((plan, i) => fact(`demo-plan-${i+1}`, plan.name, amount(plan.monthly)));
+export function planFacts(services: z.infer<typeof Service>[]) {
+  return services.filter(item => item.estado === 'activo').map(item => fact(item.servicio_id,item.plan,amount(item.valor_mensual)));
 }
 
-export function demoBillingFacts(account: DemoProfile) {
-  const invoice = account.invoices.at(-1);
-  if (!invoice) return [];
-  const period = new Intl.DateTimeFormat('es-CO', { month: 'long', timeZone: 'UTC' }).format(new Date(invoice.period+'-01'));
+export async function billingFacts(ref: string) {
+  const [balance,invoices] = await Promise.all([simulators.balance(ref),simulators.invoices(ref)]);
+  const invoice = invoices[0];
   return [
-    fact('invoice-status', `Factura de ${period}`, invoice.status[0].toUpperCase()+invoice.status.slice(1)),
-    fact('invoice-balance', 'Saldo', amount(balance(account))),
-    fact('invoice-due', 'Vencimiento', date(invoice.due))
+    ...(invoice ? [fact('invoice-status',`Factura de ${invoice.periodo}`,invoice.estado)] : []),
+    fact('invoice-balance','Saldo',amount(balance.saldo_pendiente)),
+    ...(balance.proxima_fecha_limite ? [fact('invoice-due','Vencimiento',date(balance.proxima_fecha_limite))] : [])
   ];
 }
 
-export function demoAccountReply(account: DemoProfile, request: AccountInquiry): string {
-  if (request === 'plans') {
-    if (!account.plans.length) return 'Esta cuenta de prueba no tiene planes activos.';
-    const plans = account.plans.map(plan => `${plan.name} (${amount(plan.monthly)} al mes)`);
-    return `Tus planes activos son ${new Intl.ListFormat('es-CO').format(plans)}.`;
+export async function accountReply(ref: string, inquiry: Exclude<AccountInquiry, 'assistance'>) {
+  if (inquiry === 'plans') {
+    const plans = planFacts((await simulators.customer(ref)).servicios).map(plan => `${plan.label} (${plan.value} al mes)`);
+    return plans.length ? `Tus planes activos son ${new Intl.ListFormat('es-CO').format(plans)}.` : 'Esta cuenta de prueba no tiene planes activos.';
   }
-  if (request === 'tickets') {
-    return account.openTickets === 1 ? 'Tienes un ticket abierto de atención.' : `Tienes ${account.openTickets} tickets abiertos de atención.`;
+  if (inquiry === 'tickets') {
+    const open = (await simulators.tickets(ref)).filter(ticket => ticket.estado === 'abierto').length;
+    return open === 1 ? 'Tienes un ticket abierto de atención en los últimos 90 días.' : `Tienes ${open} tickets abiertos de atención en los últimos 90 días.`;
   }
-  const total = `Tu saldo pendiente es ${amount(balance(account))}.`;
-  if (request === 'balance') return total;
-  const invoice = account.invoices.at(-1);
-  if (!invoice) return 'Esta cuenta de prueba no tiene facturas registradas.';
-  return `Tu última factura (${invoice.period}) es por ${amount(invoice.amount)} y figura como ${invoice.status}. Su fecha límite fue fijada para el ${date(invoice.due)}. ${total}`;
+  const [balance,invoices] = await Promise.all([simulators.balance(ref),inquiry === 'invoice' ? simulators.invoices(ref) : []]);
+  const total = `Tu saldo pendiente es ${amount(balance.saldo_pendiente)}.`;
+  const invoice = invoices[0];
+  if (inquiry === 'balance' || !invoice) return total;
+  const state = invoice.estado !== 'pagada' && invoice.saldo_abierto === 0 ? 'saldada por ajuste' : invoice.estado;
+  return `Tu última factura (${invoice.periodo}) es por ${amount(invoice.valor_total)} y figura como ${state}. Su fecha límite fue fijada para el ${date(invoice.fecha_limite_pago)}. ${total}`;
 }
-
-export async function seedDemoAccounts(tx: EntityManager) {
-  for (const {ref, email, phone, ...profile} of demoFixtures) {
-    await tx.query(`INSERT INTO demo_customer(ref,email,phone,profile) VALUES ($1,$2,$3,$4)
-      ON CONFLICT (ref) DO UPDATE SET email=EXCLUDED.email,phone=EXCLUDED.phone,profile=EXCLUDED.profile`,
-    [ref,email,phone,profile]);
-  }
-}
-
-// Minimal projection of crm_clientes.json and facturas.json. The contact aliases are demo-only.
-const demoFixtures: DemoAccount[] = [
-  { ref:'C-1001', email:'cliente1@example.test', phone:'11111',
-    plans: [{name:"Hogar Fibra 500",monthly:109900}, {name:"Claro Max 60 GB",monthly:59415}],
-    openTickets: 0, invoices: [
-      {period:'2026-09',due:'2026-09-25',amount:169315,status:'pagada'},
-      {period:'2026-10',due:'2026-10-25',amount:169315,status:'pagada'},
-      {period:'2026-11',due:'2026-11-25',amount:169315,status:'pendiente'},
-    ] },
-  { ref:'C-1004', email:'cliente2@example.test', phone:'22222',
-    plans: [{name:"Hogar Fibra 300",monthly:89900}],
-    openTickets: 0, invoices: [
-      {period:'2026-09',due:'2026-09-16',amount:89900,status:'pagada'},
-      {period:'2026-10',due:'2026-10-16',amount:89900,status:'pagada'},
-      {period:'2026-11',due:'2026-11-16',amount:89900,status:'pagada'},
-    ] },
-  { ref:'C-1007', email:'cliente3@example.test', phone:'33333',
-    plans: [{name:"Claro Max 25 GB",monthly:49900}],
-    openTickets: 1, invoices: [
-      {period:'2026-09',due:'2026-10-05',amount:49900,status:'vencida'},
-      {period:'2026-10',due:'2026-11-04',amount:49900,status:'vencida'},
-      {period:'2026-11',due:'2026-12-05',amount:49900,status:'pendiente'},
-    ] },
-];

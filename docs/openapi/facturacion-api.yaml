@@ -1,0 +1,148 @@
+openapi: 3.0.3
+info:
+  title: Facturación (mock) – Claro Copiloto
+  version: 1.0.0
+  description: API simulada de facturación. Datos sintéticos en datos_mock/facturas.json.
+servers:
+  - url: http://localhost:8082/v1
+security:
+  - ApiKeyAuth: []
+paths:
+  /clientes/{clienteId}/facturas:
+    get:
+      summary: Listar facturas del cliente (más recientes primero)
+      operationId: listarFacturas
+      parameters:
+        - { in: path, name: clienteId, required: true, schema: { type: string } }
+        - { in: query, name: limite, schema: { type: integer, default: 3, maximum: 12 } }
+      responses:
+        '200':
+          description: Facturas
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Factura' } }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '401': { $ref: '#/components/responses/NoAutorizado' }
+        '429': { $ref: '#/components/responses/LimiteExcedido' }
+        '503': { $ref: '#/components/responses/NoDisponible' }
+  /clientes/{clienteId}/saldo:
+    get:
+      summary: Saldo pendiente del cliente
+      operationId: obtenerSaldo
+      parameters:
+        - { in: path, name: clienteId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Saldo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cliente_id: { type: string }
+                  saldo_pendiente: { type: integer }
+                  saldo_vencido: { type: integer }
+                  proxima_fecha_limite: { type: string, format: date, nullable: true }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '401': { $ref: '#/components/responses/NoAutorizado' }
+        '429': { $ref: '#/components/responses/LimiteExcedido' }
+        '503': { $ref: '#/components/responses/NoDisponible' }
+  /facturas/{facturaId}:
+    get:
+      summary: Detalle de una factura
+      operationId: obtenerFactura
+      parameters:
+        - { in: path, name: facturaId, required: true, schema: { type: string, example: F-5001 } }
+      responses:
+        '200':
+          description: Factura
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Factura' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '401': { $ref: '#/components/responses/NoAutorizado' }
+        '429': { $ref: '#/components/responses/LimiteExcedido' }
+        '503': { $ref: '#/components/responses/NoDisponible' }
+  /facturas/{facturaId}/ajustes:
+    post:
+      summary: Aplicar ajuste a una factura (acción con efecto)
+      description: Ajustes mayores a $50.000 requieren el campo aprobado_por (supervisor); si falta, responde 403.
+      operationId: aplicarAjuste
+      parameters:
+        - { in: path, name: facturaId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [valor, motivo]
+              properties:
+                valor: { type: integer, minimum: 1 }
+                motivo: { type: string }
+                aprobado_por: { type: string, nullable: true }
+      responses:
+        '201': { description: Ajuste aplicado }
+        '403':
+          description: El ajuste supera el límite de nivel 1 y requiere aprobación (codigo AJUSTE_REQUIERE_APROBACION)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/NoAutorizado' }
+        '429': { $ref: '#/components/responses/LimiteExcedido' }
+        '503': { $ref: '#/components/responses/NoDisponible' }
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  responses:
+    NoAutorizado:
+      description: API key ausente o inválida
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoEncontrado:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    LimiteExcedido:
+      description: Se excedió el límite de 60 solicitudes por minuto
+      headers:
+        Retry-After: { schema: { type: integer }, description: Segundos para reintentar }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoDisponible:
+      description: Servicio temporalmente no disponible (el mock lo simula en el 2 % de las llamadas)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [codigo, mensaje]
+      properties:
+        codigo: { type: string, example: CLIENTE_NO_ENCONTRADO }
+        mensaje: { type: string }
+        trace_id: { type: string }
+    Factura:
+      type: object
+      properties:
+        factura_id: { type: string }
+        cliente_id: { type: string }
+        periodo: { type: string, example: 2026-11 }
+        fecha_corte: { type: string, format: date }
+        fecha_limite_pago: { type: string, format: date }
+        valor_total: { type: integer }
+        detalle:
+          type: array
+          items:
+            type: object
+            properties:
+              concepto: { type: string }
+              valor: { type: integer }
+        estado: { type: string, enum: [pagada, pendiente, vencida] }
+        fecha_pago: { type: string, format: date, nullable: true }

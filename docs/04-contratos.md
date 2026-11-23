@@ -23,11 +23,12 @@ Estas interfaces v1 permiten desarrollar con stubs. Plataforma y agente comparte
 | Plataforma → Agente | `getIngestionStatus(job_id)` | Devuelve estado, versión, tiempos de detección/indexado y error saneado si aplica. |
 | Agente → MCP | Streamable HTTP privado `/mcp` | Búsqueda pública o de asesor. Devuelve extractos, referencias y versiones autorizadas. Validar el ámbito del run antes de recuperar. |
 | MCP → reranker | `POST /internal/v1/rerank` | Consulta saneada y pasajes ya filtrados. Devuelve scores por candidato o un error que activa la ruta RRF. |
-| Agente → ML | `POST /internal/v1/predict-intent` | Texto saneado, canal, ID de turno y clave de idempotencia. Devuelve clase, score, versión, modo y `prediction_id`. El agente invoca en sombra de forma asíncrona. |
+| Agente → ML | `POST /internal/v1/predict-intent` | Texto saneado, canal, ID de turno y clave de idempotencia. Devuelve clase, score, versión, modo, recomendación y `prediction_id`. El agente invoca en sombra de forma asíncrona. |
+| Plataforma → ML | `POST /internal/v1/predict-churn` | Recibe la foto de variables y los agregados de historial del cliente identificado. Devuelve prioridad relativa, recomendación, horizonte de 90 días, fecha de corte y versión. |
 | Plataforma → ML | `POST /internal/v1/intent-labels` | Emite corrección supervisada con `prediction_id`, clase de dominio y `event_id`. ML valida y deduplica. |
-| Plataforma → ML | `GET /internal/v1/model-metrics` | Devuelve agregados por ventana, modo, canal y versión. Incluye métricas offline, estado de drift y volumen de etiquetas. |
+| Plataforma → ML | `GET /internal/v1/model-metrics` | Devuelve agregados por ventana, modo, canal y versión. Incluye métricas offline de intención y churn. El estado de drift y el volumen de etiquetas corresponden a intención. |
 
-Los nombres de métodos representan puertos TypeScript. En las interfaces HTTP se valida la identidad y el permiso sobre el recurso. El worker usa los mismos casos de uso de dominio mediante inyección de dependencias. Next.js usa la sesión de Better Auth en el mismo origen para llamar a NestJS. La credencial de servicio se aplica a ML y a las demás llamadas privadas que cruzan un proceso por HTTP. CRM y facturación conservan su OpenAPI original hacia la capa anticorrupción. [CRM OpenAPI](05-insumos.md#políticas-y-contratos) · [Facturación OpenAPI](05-insumos.md#políticas-y-contratos)
+Los nombres de métodos representan puertos TypeScript. En las interfaces HTTP se valida la identidad y el permiso sobre el recurso. El worker usa los mismos casos de uso de dominio mediante inyección de dependencias. Next.js usa la sesión de Better Auth en el mismo origen para llamar a NestJS. La credencial de servicio se aplica a ML y a las demás llamadas privadas que cruzan un proceso por HTTP. CRM y facturación conservan su OpenAPI original hacia la capa anticorrupción. [CRM OpenAPI](openapi/crm-api.yaml) · [Facturación OpenAPI](openapi/facturacion-api.yaml) · [Extensiones y rutas BFF](openapi/simuladores.md)
 
 ## Ejemplo de ejecución
 
@@ -81,12 +82,16 @@ Ejemplo de respuesta del servicio de ML. El score es ilustrativo y no representa
   "label": "soporte_tecnico",
   "score": 0.62,
   "score_type": "uncalibrated",
-  "model_version": "intent.v1",
-  "mode": "shadow"
+  "model_version": "intent-e5-svm-1",
+  "mode": "shadow",
+  "recommendation": "suggest_intent_for_review",
+  "requires_human_confirmation": true
 }
 ```
 
-Clases `soporte_tecnico`, `facturacion`, `consulta_planes`, `cancelacion`, `portabilidad`. Un predictor indisponible responde `503` o expira por timeout. El proceso principal sigue su ruta. Una etiqueta revisada incluye clase válida, fecha y referencia de la predicción.
+Clases `soporte_tecnico`, `facturacion`, `consulta_planes`, `cancelacion`, `portabilidad`. Un predictor indisponible responde `503` o expira por timeout. El proceso principal sigue su ruta. `POST /api/v1/cases/:id/ml/intent-label` recibe `prediction_id`, `label` y `event_id`. La plataforma valida sesión, propietario y turno vigente. El outbox reusa el evento al reenviar y la ficha distingue el registro local del acuse de FastAPI.
+
+Para churn la prioridad hace referencia a los percentiles del score en desarrollo. `CaseSnapshot.ml` presenta banda, corte, recomendación y versión al asesor autorizado. La foto queda ligada al titular verificado. `POST /api/v1/cases/:id/ml/follow-up` recibe `case_revision`, `event_id` y `status`. El comando `agreed` exige `due_date` y una banda disponible. `completed` exige un acuerdo pendiente del mismo caso y titular. La plataforma conserva responsable y fecha del acuerdo. El panel identifica cohorte y métricas offline y separa cobertura de fotos, bandas y seguimientos observados. [Integración de intención y churn](evolucion-mvp/ml-intencion-y-churn.md)
 
 Propagar `traceparent`, `run_id` y referencias opacas a través de plataforma, agente y ML. Exponer métricas agregadas por canal, ruta y versión. El detalle de Langfuse conserva prompts/versiones, resultados saneados y latencias. Los eventos de dominio respaldan las métricas de negocio.
 

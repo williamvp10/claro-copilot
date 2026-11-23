@@ -1,16 +1,22 @@
 import {
-  BadRequestException, Body, Controller, ForbiddenException, Get, HttpException, Inject, Module, Param, Post,
+  BadRequestException, Body, Controller, ForbiddenException, Get, HttpException, Inject, Module, Param, Post, Query,
   Req, Res, ServiceUnavailableException, UnauthorizedException, type DynamicModule
 } from '@nestjs/common';
 import { z } from 'zod';
 import type { Request, Response } from 'express';
 import { type DataSource } from 'typeorm';
 import { randomUUID } from 'node:crypto';
-import { CloseCase, DecideProposal, OpenCase, SendMessage, Text, VerifyHolder, WebVerificationStart, WebVerificationConfirm, Id, type CaseEvent, type WebChatEvent, type Dashboard, type Viewer } from '@claro/contracts';
+import { CloseCase, DecideProposal, OpenCase, SendMessage, Text, VerifyHolder, WebVerificationStart, WebVerificationConfirm, Id, ConfirmIntegration, InvoiceId, OperationKey, DashboardFilters, type CaseEvent, type WebChatEvent, type Dashboard, type EvalJob, type EvalStatus, type Viewer } from '@claro/contracts';
 import { AUTH, getViewer, type createAuth } from './auth.js';
 import { Cases, constantEqual } from './cases.js';
 import { createDatabase, DATABASE } from './database.js';
-import { readModelMetrics } from './telemetry.js';
+import { readDashboard, projectComparison } from './dashboard.js';
+import { MetricFilters, MetricGroup, ReleaseEvidence, readMetricGroup } from './metrics.js';
+import { lockPromptReleases, PromptReleases } from './prompt-releases.js';
+import { adjudicatePromptRevision, PromptAdjudication } from './prompt-adjudication.js';
+import { PlatformEvolutionController } from './platform-evolution.js';
+import { IntegrationOperations } from './integration-operations.js';
+import { observeSimulators, simulators } from './simulator-client.js';
 
 const Webhook = z.object({
   update_id: z.number().int().nonnegative(),
@@ -23,9 +29,13 @@ const Webhook = z.object({
     message: z.object({chat:z.object({id:z.number().int().safe(),type:z.string()})}).optional()
   }).optional()
 });
-const Synthetic = z.object({ contact_ref: Id, text: Text, idempotency_key: Id });
-const Prompts = z.object({ prompts: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/), Text) })
-  .refine(({ prompts }) => Object.keys(prompts).length <= 15);
+const Synthetic = z.object({ contact_ref: Id, text: Text, idempotency_key: Id, channel: z.literal('whatsapp').optional() });
+const PromptKey = z.string().regex(/^[a-z][a-z0-9_]{0,39}$/);
+const Prompts = z.object({ prompts: z.record(PromptKey, z.string().min(1).max(4000)) })
+  .refine(({ prompts }) => Object.keys(prompts).length > 0 && Object.keys(prompts).length <= 12);
+const DraftEvent = z.object({run_id:Id,case_revision:z.number().int().positive(),event_id:Id,
+  kind:z.enum(['used','edited','feedback_positive','feedback_negative'])});
+const PromptImport = z.object({ key: PromptKey, version: z.number().int().positive().safe() });
 
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
@@ -184,7 +194,7 @@ class HealthController {
 
 @Controller('api/v1')
 class PlatformController {
-  constructor(private readonly cases: Cases, @Inject(DATABASE) private readonly db: DataSource, @Inject(AUTH) private readonly auth: Auth) {}
+  constructor(private readonly cases: Cases, private readonly integrations: IntegrationOperations, private readonly promptReleases: PromptReleases, @Inject(DATABASE) private readonly db: DataSource, @Inject(AUTH) private readonly auth: Auth) {}
 
   private async viewer(req: Request) {
     if (!['GET', 'HEAD'].includes(req.method) && req.get('Origin') !== new URL(process.env.BETTER_AUTH_URL!).origin) {
@@ -235,7 +245,48 @@ class PlatformController {
 
   @Post('cases/:id/close')
   async close(@Req() req: Request, @Param('id') id: string, @Body() data: unknown) {
-    return this.cases.close(await this.viewer(req), parse(Id, id), parse(CloseCase, data).resolved);
+    return this.cases.close(await this.viewer(req), parse(Id, id), parse(CloseCase, data));
+  }
+
+  @Get('cases/:id/integrations/crm')
+  async crm(@Req() req: Request,@Param('id') id: string) {
+    return this.integrations.crm(await this.viewer(req),parse(Id,id));
+  }
+
+  @Get('cases/:id/integrations/billing')
+  async billing(@Req() req: Request,@Param('id') id: string) {
+    return this.integrations.billing(await this.viewer(req),parse(Id,id));
+  }
+
+  @Get('cases/:id/integrations/billing/invoices/:ref')
+  async invoice(@Req() req: Request,@Param('id') id: string,@Param('ref') ref: string) {
+    return this.integrations.invoice(await this.viewer(req),parse(Id,id),parse(InvoiceId,ref));
+  }
+
+  @Get('cases/:id/integrations/operations')
+  async operations(@Req() req: Request,@Param('id') id: string) {
+    return this.integrations.list(await this.viewer(req),parse(Id,id));
+  }
+
+  @Post('cases/:id/integrations/operations')
+  async integrationOperation(@Req() req: Request,@Param('id') id: string,@Body() body: unknown) {
+    return this.integrations.confirm(await this.viewer(req),parse(Id,id),parse(ConfirmIntegration,body));
+  }
+
+  @Get('admin/integrations')
+  async integrationHealth(@Req() req: Request) {
+    await this.admin(req);
+    return simulators.health(this.db);
+  }
+
+  @Get('admin/integrations/approvals')
+  async integrationApprovals(@Req() req: Request) {
+    return this.integrations.approvals(await this.viewer(req));
+  }
+
+  @Post('admin/integrations/approvals/:id')
+  async integrationApproval(@Req() req: Request,@Param('id') id: string,@Body() body: unknown) {
+    return this.integrations.decision(await this.viewer(req),parse(OperationKey,id),parse(z.object({approved:z.boolean()}),body).approved);
   }
 
   @Post('proposals/:id/decision')
@@ -276,106 +327,110 @@ class PlatformController {
   async synthetic(@Req() req: Request, @Body() body: unknown) {
     const key = process.env.DEMO_INGRESS_TOKEN;
     if (!key || !constantEqual(req.get('Authorization') ?? '', `Bearer ${key}`)) throw new UnauthorizedException();
-    const { contact_ref, text, idempotency_key } = parse(Synthetic, body);
-    await this.cases.receiveSynthetic(contact_ref, text, idempotency_key);
+    const { contact_ref, text, idempotency_key, channel } = parse(Synthetic, body);
+    await this.cases.receiveSynthetic(contact_ref, text, idempotency_key, channel);
     return { ok: true };
   }
 
   @Get('admin/dashboard')
-  async dashboard(@Req() req: Request): Promise<Dashboard> {
+  async dashboard(@Req() req: Request,@Query() query: unknown): Promise<Dashboard> {
     await this.admin(req);
-    const [ml, [{ p95 }]] = await Promise.all([readModelMetrics(), this.db.query(`SELECT
-      percentile_cont(.95) WITHIN GROUP (ORDER BY (metadata->>'ms')::numeric)::float AS p95 FROM attention_event
-      WHERE kind='agent_latency' AND created_at > now()-interval '7 days'`)]);
-    const [{ revision }] = await this.db.query('SELECT revision FROM prompt_revision WHERE activated');
-    const [{ total, resolved, aht }] = await this.db.query(`SELECT count(*)::integer AS total,
-      count(*) FILTER(WHERE resolved)::integer AS resolved,
-      avg(extract(epoch FROM ((snapshot->>'updated_at')::timestamptz-created_at))) FILTER(WHERE resolved IS NOT NULL) AS aht
-      FROM attention_case WHERE created_at > now() - interval '7 days'`);
-    const [{ surveys, satisfied }] = await this.db.query(`SELECT count(*)::integer AS surveys,
-      count(*) FILTER(WHERE score>=4)::integer AS satisfied
-      FROM case_feedback WHERE created_at > now()-interval '7 days'`);
-    const [{ attempts, generation_cost }] = await this.db.query(`SELECT count(*)::integer AS attempts,
-      sum((metadata->>'cost_usd')::double precision) AS generation_cost FROM attention_event
-      WHERE kind='generation.openai' AND metadata ? 'cost_usd' AND created_at > now()-interval '7 days'`);
-    const [quality] = await this.db.query(`SELECT report->'review'->'metrics' AS metrics FROM prompt_evaluation
-      WHERE candidate_revision=$1 AND report->>'gate'='passed'`, [revision]);
-    const events: { kind: string; count: number }[] = await this.db.query(`SELECT kind,count(*)::integer FROM attention_event
-      WHERE created_at > now() - interval '7 days' GROUP BY kind`);
-    const counts = new Map(events.map(({ kind, count }) => [kind, count]));
-    const count = (kind: string) => counts.get(kind) ?? 0;
-    return {
-      window_days: 7, sample: process.env.DEMO_MODE === 'true' ? 'synthetic' : 'pilot', revision,
-      providers: [
-        { name: 'Worker', status: count('agent_completed') > 0 ? 'observed' : 'waiting' },
-        { name: 'Telegram', status: process.env.TELEGRAM_BOT_TOKEN ? 'configured' : 'simulation' },
-        { name: 'Langfuse', status: count('langfuse_exported') ? 'observed' : process.env.LANGFUSE_PUBLIC_KEY ? 'configured' : 'unconfigured' },
-        { name: 'ML en sombra', status: ml?.groups.length ? ml.groups.map(group => `${group.model_version} · ${group.drift?.status ?? 'sin referencia'}`).join(', ') : count('ml_predicted') > 0 ? 'observed' : 'waiting' }
-      ],
-      metrics: [
-        { id: 'cases', label: 'Conversaciones', value: total, unit: 'casos' },
-        { id: 'aht', label: 'Duración media de atención', value: aht === null ? null : Number(aht), unit: 's' },
-        { id: 'resolved', label: 'Resolución reportada', value: total ? resolved * 100 / total : null, unit: '%', denominator: total },
-        { id: 'handoff', label: 'Derivaciones', value: count('handoff'), unit: 'casos' },
-        { id: 'retention', label: 'Ofertas confirmadas', value: count('retention_confirmed'), unit: 'ofertas' },
-        { id: 'agent', label: 'Ejecuciones completadas', value: count('agent_completed'), unit: 'turnos' },
-        { id: 'discarded', label: 'Salidas obsoletas descartadas', value: count('agent_stale'), unit: 'turnos' },
-        { id: 'agent_errors', label: 'Errores de ejecución', value: count('job_failed'), unit: 'eventos' },
-        { id: 'ml', label: 'Predicciones en sombra', value: count('ml_predicted'), unit: 'turnos' },
-        { id: 'agent_p95', label: 'Latencia del worker p95', value: p95, unit: 'ms' },
-        { id: 'ml_f1', label: 'F1 macro agrupado de ML', value: ml?.offline?.metrics.macro_f1 ?? null, unit: 'F1' },
-        { id: 'ml_recall', label: 'Recall de cancelación de ML', value: ml?.offline?.metrics.cancelacion_recall ?? null, unit: 'recall' },
-        { id: 'ml_labels', label: 'Etiquetas supervisadas', value: ml ? ml.groups.reduce((n, group) => n + group.labels_count, 0) : null, unit: 'casos' },
-        { id: 'ml_errors', label: 'Fallos de inferencia en sombra', value: count('ml_unavailable'), unit: 'turnos' },
-        { id: 'csat', label: 'CSAT (4 o 5)', value: surveys ? satisfied * 100 / surveys : null, unit: '%', denominator: surveys },
-        { id: 'generation_cost', label: 'Costo medido de generación pública', value: generation_cost, unit: 'USD', denominator: attempts },
-        { id: 'groundedness', label: 'Groundedness de la revisión activa', value: quality?.metrics?.groundedness ?? null, unit: 'proporción' },
-        { id: 'recall', label: 'Recall@5 de la revisión activa', value: quality?.metrics?.recall_at_5 ?? null, unit: 'proporción' }
-      ]
-    };
+    return readDashboard(this.db,parse(DashboardFilters,query));
+  }
+
+  @Get('admin/metrics/:group')
+  async metricGroup(@Req() req: Request, @Param('group') group: string, @Query() query: unknown) {
+    await this.admin(req);
+    return readMetricGroup(this.db, parse(MetricGroup, group), parse(MetricFilters, query));
+  }
+
+  @Post('admin/releases/evidence')
+  async releaseEvidence(@Req() req: Request, @Body() body: unknown) {
+    const viewer = await this.admin(req);
+    const evidence = parse(ReleaseEvidence, body);
+    const [saved] = await this.db.query(`INSERT INTO release_metric(digest,component,sha,evidence,operator_id)
+      VALUES($1,$2,$3,$4,$5) ON CONFLICT(digest,component,sha) DO UPDATE SET
+        evidence=excluded.evidence,operator_id=excluded.operator_id,observed_at=now()
+      RETURNING observed_at`, [evidence.digest,evidence.component,evidence.sha,evidence,viewer.id]);
+    return {accepted:true, observed_at:saved.observed_at};
+  }
+
+  @Post('cases/:id/draft-events')
+  async draftEvent(@Req() req: Request, @Param('id') id: string, @Body() body: unknown) {
+    return this.cases.recordDraftEvent(await this.viewer(req),parse(Id,id),parse(DraftEvent,body));
   }
 
   @Get('admin/prompts')
   async prompts(@Req() req: Request) {
     await this.admin(req);
-    return this.db.query('SELECT revision,status,prompts FROM prompt_revision ORDER BY created_at DESC LIMIT 50');
+    return this.promptReleases.list();
   }
 
   @Post('admin/prompts')
   async candidate(@Req() req: Request, @Body() body: unknown) {
-    await this.admin(req);
-    const { prompts } = parse(Prompts, body);
-    const [candidate] = await this.db.query(`INSERT INTO prompt_revision(revision,base_revision,prompts,status)
-      SELECT $1,revision,$2,'candidate' FROM prompt_revision WHERE activated RETURNING revision,status,prompts`, [randomUUID(), prompts]);
-    return candidate;
+    const viewer = await this.admin(req);
+    return this.promptReleases.edit(viewer.id, parse(Prompts, body).prompts);
+  }
+
+  @Post('admin/prompts/import')
+  async importPrompt(@Req() req: Request, @Body() body: unknown) {
+    const viewer = await this.admin(req);
+    const { key, version } = parse(PromptImport, body);
+    return this.promptReleases.import(viewer.id, key, version);
   }
 
   @Post('admin/prompts/:revision/eval')
-  async evaluate(@Req() req: Request, @Param('revision') revision: string) {
+  async evaluate(@Req() req: Request,@Param('revision') revision: string): Promise<EvalJob> {
     await this.admin(req);
-    const [[candidate]] = await this.db.query(`UPDATE prompt_revision AS p SET status=CASE
-      WHEN EXISTS (SELECT 1 FROM prompt_evaluation e WHERE e.candidate_revision=p.revision
-        AND e.base_revision=p.base_revision AND e.report->>'gate'='passed') THEN 'passed' ELSE 'failed' END
-      WHERE p.revision=$1 AND NOT p.activated AND p.status IN ('candidate','failed','passed')
-      RETURNING p.revision,p.status,p.prompts`, [parse(Id, revision)]);
-    if (!candidate) throw new BadRequestException('Revisión candidata no disponible');
-    return { ...candidate, reason: candidate.status === 'passed' ? 'Evidencia de evaluación aprobada' : 'Evidencia de evaluación semántica independiente requerida' };
+    if (process.env.PROMPT_EVAL_ENABLED !== 'true') {
+      throw new ServiceUnavailableException('El worker de evaluaciones está deshabilitado para este entorno');
+    }
+    return this.db.transaction(async db => {
+      const id = parse(Id,revision);
+      await lockPromptReleases(db);
+      const [active] = await db.query('SELECT revision FROM prompt_revision WHERE activated FOR SHARE');
+      const [candidate] = await db.query('SELECT revision,base_revision,activated FROM prompt_revision WHERE revision=$1 FOR UPDATE',[id]);
+      if (!candidate || candidate.activated || candidate.base_revision !== active?.revision) {
+        throw new BadRequestException('La candidata debe provenir de la revisión activa');
+      }
+      const [pending] = await db.query(`SELECT id,revision,status,completed_cases,total_cases FROM prompt_eval_job
+        WHERE revision=$1 AND status IN ('queued','running')`,[id]);
+      if (pending) return pending;
+      const [job] = await db.query(`INSERT INTO prompt_eval_job(id,revision,status) VALUES ($1,$2,'queued')
+        RETURNING id,revision,status,completed_cases,total_cases`,[randomUUID(),id]);
+      await db.query("UPDATE prompt_revision SET status='candidate' WHERE revision=$1",[id]);
+      return job;
+    });
+  }
+
+  @Get('admin/prompts/:revision/eval')
+  async evaluation(@Req() req: Request,@Param('revision') revision: string): Promise<EvalStatus> {
+    await this.admin(req);
+    const id = parse(Id,revision);
+    const [[job],[report]] = await Promise.all([
+      this.db.query(`SELECT id,revision,status,completed_cases,total_cases,failure_code FROM prompt_eval_job
+        WHERE revision=$1 ORDER BY created_at DESC LIMIT 1`,[id]),
+      this.db.query('SELECT report FROM prompt_evaluation WHERE candidate_revision=$1',[id])
+    ]);
+    return {job:job ?? null,report:job && job.status!=='completed' ? null : projectComparison(report?.report)};
+  }
+
+  @Post('admin/prompts/:revision/review')
+  async review(@Req() req: Request, @Param('revision') revision: string, @Body() body: unknown) {
+    const viewer = await this.admin(req);
+    return adjudicatePromptRevision(this.db,parse(Id,revision),parse(PromptAdjudication,body),viewer.id);
   }
 
   @Post('admin/prompts/:revision/activate')
   async activate(@Req() req: Request, @Param('revision') revision: string) {
-    await this.admin(req);
-    return this.db.transaction(async (db) => {
-      const [active] = await db.query('SELECT revision FROM prompt_revision WHERE activated FOR UPDATE');
-      const [target] = await db.query(`SELECT revision FROM prompt_revision
-        WHERE revision=$1 AND status='passed' AND base_revision=$2 FOR UPDATE`, [parse(Id, revision), active?.revision]);
-      const [evidence] = target ? await db.query(`SELECT candidate_revision FROM prompt_evaluation
-        WHERE candidate_revision=$1 AND base_revision=$2 AND report->>'gate'='passed' FOR UPDATE`, [target.revision, active.revision]) : [];
-      if (!evidence) throw new ForbiddenException('Se requiere evaluación aprobada para la revisión activa');
-      await db.query("UPDATE prompt_revision SET activated=false,status='passed' WHERE activated");
-      const [[updated]] = await db.query(`UPDATE prompt_revision SET activated=true,status='active' WHERE revision=$1 RETURNING revision,status,prompts`, [target.revision]);
-      return updated;
-    });
+    const viewer = await this.admin(req);
+    return this.promptReleases.activate(viewer.id, parse(Id, revision));
+  }
+
+  @Post('admin/prompts/:revision/rollback')
+  async rollback(@Req() req: Request, @Param('revision') revision: string) {
+    const viewer = await this.admin(req);
+    return this.promptReleases.activate(viewer.id, parse(Id, revision), true);
   }
 }
 
@@ -383,8 +438,15 @@ class PlatformController {
 export class ApiModule {
   static create(auth: Auth): DynamicModule {
     return {
-      module: ApiModule, controllers: [PlatformController, HealthController, WebChatController],
-      providers: [Cases, { provide: AUTH, useValue: auth }, { provide: DATABASE, useFactory: () => createDatabase().initialize() }]
+      module: ApiModule, controllers: [PlatformController, PlatformEvolutionController, HealthController, WebChatController],
+      providers: [Cases, IntegrationOperations, PromptReleases, { provide: AUTH, useValue: auth }, {
+        provide: DATABASE,
+        async useFactory() {
+          const db = await createDatabase().initialize();
+          observeSimulators(db);
+          return db;
+        }
+      }]
     };
   }
 }

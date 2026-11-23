@@ -1,0 +1,229 @@
+openapi: 3.0.3
+info:
+  title: CRM Clientes (mock) – Claro Copiloto
+  version: 1.0.0
+  description: |
+    API simulada del CRM para la prueba técnica. Datos sintéticos en datos_mock/crm_clientes.json.
+    El candidato debe implementar o simular este servicio respetando el contrato.
+servers:
+  - url: http://localhost:8081/v1
+security:
+  - ApiKeyAuth: []
+paths:
+  /clientes:
+    get:
+      summary: Buscar cliente por documento
+      operationId: buscarCliente
+      parameters:
+        - { in: query, name: tipo_documento, required: true, schema: { type: string, enum: [CC, CE, NIT, PAS] } }
+        - { in: query, name: numero_documento, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Cliente encontrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ClienteResumen' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '401': { $ref: '#/components/responses/NoAutorizado' }
+        '429': { $ref: '#/components/responses/LimiteExcedido' }
+        '503': { $ref: '#/components/responses/NoDisponible' }
+  /clientes/{clienteId}:
+    get:
+      summary: Obtener ficha del cliente
+      operationId: obtenerCliente
+      parameters:
+        - { $ref: '#/components/parameters/ClienteId' }
+      responses:
+        '200':
+          description: Ficha del cliente
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cliente' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '401': { $ref: '#/components/responses/NoAutorizado' }
+        '429': { $ref: '#/components/responses/LimiteExcedido' }
+        '503': { $ref: '#/components/responses/NoDisponible' }
+  /clientes/{clienteId}/servicios:
+    get:
+      summary: Listar servicios activos del cliente
+      operationId: listarServicios
+      parameters:
+        - { $ref: '#/components/parameters/ClienteId' }
+      responses:
+        '200':
+          description: Servicios
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Servicio' } }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '401': { $ref: '#/components/responses/NoAutorizado' }
+        '429': { $ref: '#/components/responses/LimiteExcedido' }
+        '503': { $ref: '#/components/responses/NoDisponible' }
+  /clientes/{clienteId}/tickets:
+    get:
+      summary: Listar tickets del cliente
+      operationId: listarTickets
+      parameters:
+        - { $ref: '#/components/parameters/ClienteId' }
+        - { in: query, name: dias, schema: { type: integer, default: 90, maximum: 365 }, description: Ventana de días hacia atrás }
+      responses:
+        '200':
+          description: Tickets
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Ticket' } }
+        '401': { $ref: '#/components/responses/NoAutorizado' }
+        '429': { $ref: '#/components/responses/LimiteExcedido' }
+        '503': { $ref: '#/components/responses/NoDisponible' }
+    post:
+      summary: Crear ticket (ej. escalamiento o visita técnica)
+      operationId: crearTicket
+      parameters:
+        - { $ref: '#/components/parameters/ClienteId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NuevoTicket' }
+      responses:
+        '201':
+          description: Ticket creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+        '400': { description: Solicitud inválida, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/NoAutorizado' }
+        '429': { $ref: '#/components/responses/LimiteExcedido' }
+        '503': { $ref: '#/components/responses/NoDisponible' }
+  /clientes/{clienteId}/ofertas-retencion:
+    post:
+      summary: Registrar oferta de retención aceptada (acción con efecto; requiere confirmación del asesor)
+      operationId: registrarOfertaRetencion
+      parameters:
+        - { $ref: '#/components/parameters/ClienteId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OfertaRetencion' }
+      responses:
+        '201': { description: Oferta registrada }
+        '409':
+          description: Cliente no elegible (mora > 30 días u oferta en los últimos 12 meses)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/NoAutorizado' }
+        '429': { $ref: '#/components/responses/LimiteExcedido' }
+        '503': { $ref: '#/components/responses/NoDisponible' }
+components:
+  parameters:
+    ClienteId:
+      in: path
+      name: clienteId
+      required: true
+      schema: { type: string, pattern: '^C-\d{4}$', example: C-1001 }
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  responses:
+    NoAutorizado:
+      description: API key ausente o inválida
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoEncontrado:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    LimiteExcedido:
+      description: Se excedió el límite de 60 solicitudes por minuto
+      headers:
+        Retry-After: { schema: { type: integer }, description: Segundos para reintentar }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoDisponible:
+      description: Servicio temporalmente no disponible (el mock lo simula en el 2 % de las llamadas)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [codigo, mensaje]
+      properties:
+        codigo: { type: string, example: CLIENTE_NO_ENCONTRADO }
+        mensaje: { type: string }
+        trace_id: { type: string }
+    ClienteResumen:
+      type: object
+      properties:
+        cliente_id: { type: string }
+        nombre: { type: string }
+        estado: { type: string, enum: [activo, suspendido, retirado] }
+    Cliente:
+      type: object
+      properties:
+        cliente_id: { type: string }
+        nombre: { type: string }
+        tipo_documento: { type: string }
+        numero_documento: { type: string, description: Dato personal – no exponer en respuestas ni logs }
+        celular: { type: string, description: Dato personal }
+        email: { type: string, description: Dato personal }
+        ciudad: { type: string }
+        segmento: { type: string, enum: [masivo, alto_valor] }
+        fecha_vinculacion: { type: string, format: date }
+        antiguedad_meses: { type: integer }
+        ciclo_facturacion: { type: integer, enum: [1, 10, 20] }
+        dias_mora: { type: integer }
+        estado: { type: string, enum: [activo, suspendido, retirado] }
+        valor_mensual_total: { type: integer }
+        servicios: { type: array, items: { $ref: '#/components/schemas/Servicio' } }
+        tickets_recientes: { type: array, items: { $ref: '#/components/schemas/Ticket' } }
+        ofertas_retencion_12m: { type: array, items: { $ref: '#/components/schemas/OfertaRetencion' } }
+        autorizacion_tratamiento_datos: { type: boolean }
+    Servicio:
+      type: object
+      properties:
+        servicio_id: { type: string }
+        tipo: { type: string, enum: [hogar, movil] }
+        plan: { type: string }
+        valor_mensual: { type: integer }
+        fecha_activacion: { type: string, format: date }
+        permanencia_hasta: { type: string, format: date, nullable: true }
+        estado: { type: string }
+        equipos:
+          type: array
+          items:
+            type: object
+            properties:
+              tipo: { type: string, enum: [modem, repetidor, decodificador] }
+              modelo: { type: string }
+              serial: { type: string }
+    Ticket:
+      type: object
+      properties:
+        ticket_id: { type: string }
+        fecha: { type: string, format: date }
+        categoria: { type: string, enum: [soporte_tecnico, facturacion, consulta_planes, cancelacion, portabilidad] }
+        estado: { type: string, enum: [abierto, cerrado] }
+    NuevoTicket:
+      type: object
+      required: [categoria, descripcion]
+      properties:
+        categoria: { type: string, enum: [soporte_tecnico, facturacion, consulta_planes, cancelacion, portabilidad] }
+        descripcion: { type: string, maxLength: 1000 }
+        prioridad: { type: string, enum: [estandar, prioritaria], default: estandar }
+        escalar_a: { type: string, enum: [nivel2, supervisor, mesa_retencion], nullable: true }
+    OfertaRetencion:
+      type: object
+      required: [codigo, descripcion]
+      properties:
+        codigo: { type: string, enum: [RET-A, RET-B] }
+        descripcion: { type: string }
+        fecha: { type: string, format: date }
+        asesor_id: { type: string }

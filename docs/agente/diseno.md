@@ -1,6 +1,8 @@
 # SDD de agente, conocimiento y LLMOps
 
-**Responsabilidad.** Módulo TypeScript con LangGraph.js en el mismo proyecto NestJS que la plataforma. Un worker separado del proceso HTTP resuelve turnos con contexto, herramientas y evidencia. El agente puede recomendar o proponer. La [plataforma](../plataforma/diseno.md) posee el cliente vinculado, el caso y los efectos de negocio. El módulo empieza con stubs de herramientas CRM, facturación y ML.
+[Propuesta de orquestador, subagentes, MCPs y prompts para el siguiente corte](../evolucion-mvp/agente-y-prompts.md) · [Catálogo JSON de arranque](../evolucion-mvp/prompts.claro-copiloto.json)
+
+**Responsabilidad.** Módulo TypeScript con LangGraph.js en el mismo proyecto NestJS que la plataforma. Un worker separado del proceso HTTP resuelve turnos con contexto, herramientas y evidencia. El agente recomienda y propone. La [plataforma](../plataforma/diseno.md) posee el cliente vinculado, el caso y los efectos de negocio. Las lecturas autorizadas de CRM y Facturación usan MCPs privados sobre las APIs mock. FastAPI aporta señales de ML en sombra.
 
 [Arquitectura Docker](../02-arquitectura-docker.md) · [Guía de arranque](../01-arranque.md) · [Decisión de backend](../plataforma/diseno.md) · [DDD](../03-dominio.md) · [Contratos](../04-contratos.md) · [Playbook, prompts iniciales y Evals](atencion-prompts-y-evals.md) · [Inventario de fixtures](../05-insumos.md#evaluaciones)
 
@@ -14,9 +16,9 @@ El worker NestJS consume el turno desde el outbox y publica eventos del run en P
 
 1. **Entrada y guardas.** Aceptar turno idempotente, comprobar ámbito y fijar `config_revision`. Derivar ante una condición prioritaria o una solicitud humana. Invocar clasificación clásica en sombra fuera de la espera del turno.
 2. **Router de LangGraph.** Aplicar guardas y consultar Jev para clasificación tipada de intención y complejidad. El grafo resuelve la ruta permitida y los datos faltantes. Una pregunta pública usa el subgrafo de conocimiento. Una consulta de cuenta usa la herramienta tipada permitida. Una decisión comercial consulta las reglas de retención de plataforma. Pedir una aclaración concreta cuando cambie el próximo paso.
-3. **Evolución de delegación selectiva.** Deep Agents recibiría un turno compuesto con el contexto mínimo. Invoca hasta tres subagentes de solo lectura, con un nivel de profundidad. **Soporte y conocimiento** contrasta síntomas y fuentes. **Facturación** verifica importes y períodos. **Retención** prepara alternativas según hechos y reglas. Devolver evidencia tipada y respetar límites de tiempo, pasos y herramientas por ruta.
+3. **Delegación selectiva.** LangGraph.js elige entre **Soporte técnico**, **Facturación** y **Comercial y portabilidad**. Cada subgrafo recibe un contexto acotado y consulta las tools listas para su paso. En una consulta compuesta, el orquestador puede solicitar una lectura adicional de otro dominio dentro del mismo ámbito. El resultado vuelve como evidencia, estado y propuesta tipada. [Mapa de decisiones y herramientas](../evolucion-mvp/agente-y-prompts.md)
 4. **Supervisión humana.** Una acción requiere una propuesta tipada creada en la plataforma. Guardar checkpoint y pausar mediante `interrupt`. La plataforma ejecuta tras aprobación y reanuda con un resultado autorizado. Al reanudar, volver a evaluar el ámbito y usar la misma revisión del run.
-5. **Salida verificable.** Validar hechos, citas, visibilidad y estado de efectos. Distinguir propuesta, pendiente y confirmado. La falta de evidencia produce aclaración, abstención o derivación. Publicar eventos con cursors para que plataforma entregue progreso y contenido validado. [Persistencia de LangGraph](https://docs.langchain.com/oss/python/langgraph/persistence) · [Deep Agents Subagents](https://docs.langchain.com/oss/python/deepagents/subagents)
+5. **Salida verificable.** Validar hechos, citas, visibilidad y estado de efectos. Distinguir propuesta, pendiente y confirmado. La falta de evidencia produce aclaración, abstención o derivación. Publicar eventos con cursor para que plataforma entregue progreso y contenido validado. [Subgrafos de LangGraph.js](https://docs.langchain.com/oss/javascript/langgraph/use-subgraphs)
 
 ## Decisiones tipadas y multi-LLM
 
@@ -44,9 +46,9 @@ Los TTL son decisiones iniciales de demo. No mezclar memoria de perfiles con cac
 
 ## Tools, prompts y Langfuse
 
-**MCP de conocimiento** ofrece `search_public_kb` y `search_advisor_kb` en `knowledge-mcp` por Streamable HTTP privado. La plataforma expone puertos TypeScript de lectura, reglas y propuestas con ámbito verificado. Los subagentes reciben el mínimo de tools por perfil. Las skills de soporte, facturación y retención sirven como instrucciones revisadas y versionadas. La escritura externa queda en el servicio de comandos de plataforma.
+**MCP de conocimiento** ofrece `search_knowledge` mediante `knowledge-mcp` por Streamable HTTP privado, con filtros por audiencia y vigencia. `crm-mcp` expone lecturas de contexto, servicios, tickets y elegibilidad. `billing-mcp` expone saldo, listado y detalle de factura. Los subagentes reciben herramientas acotadas al objetivo, al paso y al caso. La escritura externa queda en el servicio de comandos de plataforma. [Matriz de herramientas](../evolucion-mvp/agente-y-prompts.md#mcps-herramientas-y-autorización)
 
-Guardar el cuerpo de prompts en Langfuse con versiones fijas. La revisión publicada desde administración indica cuáles cargar. Trazar en Langfuse cada run, ruta, modelo, herramienta, retrieval, reranker, abstención, pausa y resultado. Añadir latencia, tokens, costo, versiones de prompt e índice y `prediction_id` cuando esté disponible. Enmascarar antes de exportar. Capturar motivos estructurados y evidencias, sin razonamiento privado.
+Usar el catálogo JSON para el arranque y Langfuse para editar y versionar las plantillas. La revisión publicada desde administración fija el nombre, versión y hash de los prompts que carga cada turno. Trazar en Langfuse cada run, ruta, modelo, herramienta, retrieval, reranker, abstención, pausa y resultado. Añadir latencia, tokens, costo, versiones de prompt e índice y `prediction_id` cuando esté disponible. Enmascarar antes de exportar. Capturar motivos estructurados y evidencias, sin razonamiento privado.
 
 **Gate de calidad.** Ejecutar 30 casos golden y 19 complementarios antes de publicar. Verificar herramientas, citas, ámbitos, permisos y efectos con reglas deterministas. Usar Jev como primer juez semántico fuera del camino crítico, después de las aserciones deterministas. Calibrar con etiquetas humanas y reportar abstenciones, cobertura y costo antes de activar el gate. Metas del reto ≥80 % exactitud, ≥0,85 groundedness y ≥0,90 recall@k donde aplique. Segmentar por ruta y aislar fallos de proveedores. Promover solo la revisión evaluada. [Diseño y evaluador Jev](jev-evals.md) · [Langfuse Evals](https://langfuse.com/docs/evaluation/overview)
 
@@ -54,7 +56,7 @@ Guardar el cuerpo de prompts en Langfuse con versiones fijas. La revisión publi
 
 1. Implementar puertos de runs y eventos persistidos, checkpoints de LangGraph.js y subgrafo E-202 sobre una fuente pública.
 2. Añadir ingesta v2, búsqueda híbrida, reranker y verificación de citas.
-3. Conectar stubs de plataforma y ML, autorización por ámbito, validación de herramientas y pausa/reanudación.
-4. Conectar perfiles OpenAI Direct, Jev, trazas y Evals. Evaluar delegación de lectura con Deep Agents después del corte.
+3. Verificar los clientes MCP, la autorización por ámbito y la continuidad ante fallos de la inferencia en sombra.
+4. Comprobar ejecución con OpenAI Direct y Jev, trazas en Langfuse y el gate A/B por revisión efectiva.
 
 **Criterios.** El agente entrega automáticamente factura, oferta elegible o denegación en los [tres casos del hito](../06-calidad-y-release.md#tres-casos-de-la-demo). En atención asistida todas sus sugerencias se muestran en privado. Como regresión adicional, E-202 se responde con cita válida, un caso sensible se deriva, una propuesta queda suspendida sin POST externo, la reanudación conserva estado y muestra el efecto real, y una nueva fuente cambia la respuesta según fecha. Una ejecución compuesta muestra subagentes, modelos y herramientas en Langfuse. Medir primer contenido visible por separado de los eventos de progreso y reportar p95 contra el objetivo del reto.
