@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { MigrationInterface, QueryRunner, DataSource, EntityManager } from 'typeorm';
 import { Citation } from '@claro/contracts';
-import { retrievalTerms, type KnowledgeAdapter, type KnowledgeDocument } from '@claro/agent';
+import { createKnowledgeMcpAdapter, retrievalTerms, type KnowledgeAdapter, type KnowledgeDocument } from '@claro/agent';
 
 export const Document = Citation.extend({
   url: z.url({protocol:/^https$/}).optional(), excerpt:z.string().trim().min(1).max(8000),
@@ -67,6 +67,20 @@ export class Knowledge1795260000001 implements MigrationInterface {
 
 type SearchContext = Parameters<KnowledgeAdapter['search']>[1];
 type SearchRow = { id: string; version: string; document: KnowledgeDocument };
+export function configuredKnowledge(db: Pick<DataSource,'query'>) {
+  const url=process.env.KNOWLEDGE_MCP_URL;
+  const token=process.env.KNOWLEDGE_SERVICE_TOKEN;
+  return url && token
+    ? {adapter:createKnowledgeMcpAdapter({url,token,trustedLocal:true}),transport:'mcp' as const}
+    : {adapter:databaseKnowledge(db),transport:'postgres' as const};
+}
+
+export async function hasKnowledgeEmbedding(db: Pick<DataSource,'query'>):Promise<boolean> {
+  const [{dense}]=await db.query(`SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema()
+    AND table_name='knowledge_document' AND column_name='embedding') AS dense`);
+  return dense;
+}
+
 export function databaseKnowledge(db: Pick<DataSource, 'query'>): KnowledgeAdapter {
   return {
     async search(query: string, context: SearchContext) {
@@ -76,9 +90,8 @@ export function databaseKnowledge(db: Pick<DataSource, 'query'>): KnowledgeAdapt
         AND document->>'effective_from'<=$3 AND (document->>'effective_to' IS NULL OR document->>'effective_to'>$3)
         AND (document->'channels' IS NULL OR (document->'channels') ? $4)`;
       const params = [words.join(' | '), context.audience, context.business_date, context.channel];
-      const [[{ dense }], lexical] = await Promise.all([
-        db.query(`SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema()
-          AND table_name='knowledge_document' AND column_name='embedding') AS dense`),
+      const [dense, lexical] = await Promise.all([
+        hasKnowledgeEmbedding(db),
         db.query(`SELECT id,version,document FROM knowledge_document WHERE ${filter}
           AND lexical @@ to_tsquery('spanish',$1)
           ORDER BY ts_rank_cd(lexical,to_tsquery('spanish',$1), 32) DESC,id,version LIMIT 36`, params) as Promise<SearchRow[]>

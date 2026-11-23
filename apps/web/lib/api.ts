@@ -1,4 +1,4 @@
-import type { CaseEvent, CaseSnapshot, CaseSummary, Contact, Dashboard, DashboardFilters, EvalJob, EvalStatus, PromptRevision, Viewer, BillingView, CrmView, InvoiceDetail, ManualAction, IntegrationHealth, IntegrationOperation } from '@claro/contracts';
+import type { CaseEvent, CaseSnapshot, CaseSummary, Contact, Dashboard, DashboardFilters, EvalJob, EvalStatus, PromptRevision, Viewer, BillingView, CrmView, InvoiceDetail, ManualAction, IntegrationHealth, IntegrationOperation, KnowledgeInventory, KnowledgeLabQuery, KnowledgeLabResult, KnowledgePassage } from '@claro/contracts';
 
 const fixtures = process.env.NEXT_PUBLIC_FIXTURES === 'true';
 const now = () => new Date().toISOString();
@@ -16,6 +16,8 @@ const contacts: Contact[] = [{ref:'C-1004',display_name:'Laura Martínez · C-10
 const dashboard: Dashboard = {sample:'synthetic',window_days:30,revision:'rev-1',metrics:[{id:'cases',label:'Casos atendidos',value:128,unit:'casos',denominator:128},{id:'fcr',label:'Resolución al primer contacto',value:78,unit:'%',denominator:128},{id:'aht',label:'Tiempo medio de atención',value:8.4,unit:'min',denominator:128},{id:'quality',label:'Respuestas con respaldo',value:92,unit:'%',denominator:75}],providers:[{name:'Plataforma',status:'operativo'},{name:'Agente',status:'operativo'},{name:'ML · modo sombra',status:'operativo'}]};
 async function request<T>(path:string, init?:RequestInit):Promise<T> { const response = await fetch(path,{...init,credentials:'same-origin',headers:{'Content-Type':'application/json',...init?.headers}}); if(!response.ok){let message = `No fue posible completar la solicitud (${response.status}).`; try {const data=await response.json(); if(typeof data.message==='string') message=data.message;}catch{} throw new Error(message);} return response.json() as Promise<T>; }
 const post = <T>(path:string, body:unknown={}) => request<T>(path,{method:'POST',body:JSON.stringify(body)});
+const knowledgePath='/api/v1/admin/knowledge';
+const knowledgeSource=(digest:string,source:string)=>`${knowledgePath}/publications/${encodeURIComponent(digest)}/sources/${encodeURIComponent(source)}`;
 const copy = <T,>(value:T):T => structuredClone(value);
 function getCase(id:string){const c=cases.find(x=>x.id===id); if(!c) throw new Error('No se encontró el caso.'); return c;}
 function update(id:string, fn:(c:CaseSnapshot)=>void){const c=getCase(id);fn(c);c.revision++;c.cursor++;c.updated_at=now();return copy(c);}
@@ -49,6 +51,17 @@ export const api = {
  decision:(id:string,proposalId:string,revision:number,decision:'approved'|'rejected')=>fixtures?Promise.resolve(update(id,c=>{if(c.card?.proposal){c.card.proposal.status=decision==='approved'?'confirmed':'rejected';if(decision==='approved')c.card.proposal.effect_ref='CRM-OFERTA-1004';}})):post<CaseSnapshot>(`/api/v1/proposals/${encodeURIComponent(proposalId)}/decision`,{decision,revision,idempotency_key:key()}),
  draftEvent:(id:string,run_id:string,case_revision:number,kind:'used'|'edited'|'feedback_positive'|'feedback_negative')=>post(`/api/v1/cases/${encodeURIComponent(id)}/draft-events`,{run_id,case_revision,event_id:key(),kind}),
  dashboard:(filters: DashboardFilters)=>fixtures?Promise.resolve(copy(dashboard)):request<Dashboard>('/api/v1/admin/dashboard?'+new URLSearchParams(filters)),
+ knowledgeInventory:()=>request<KnowledgeInventory>(`${knowledgePath}/publications`),
+ knowledgePassages:(digest:string,source:string,signal?:AbortSignal)=>request<KnowledgePassage[]>(`${knowledgeSource(digest,source)}/passages`,{signal}),
+ knowledgeQuery:(input:KnowledgeLabQuery)=>post<KnowledgeLabResult>(`${knowledgePath}/lab/query`,input),
+ knowledgeOriginal:async(digest:string,source:string)=>{
+   const response=await fetch(`${knowledgeSource(digest,source)}/original`,{credentials:'same-origin'});
+   if (!response.ok) {
+     const error=await response.json().catch(()=>null) as {message?:string}|null;
+     throw new Error(error?.message??'No se pudo descargar el original.');
+   }
+   return response.blob();
+ },
  prompts:()=>fixtures?Promise.resolve(copy(revisions)):request<PromptRevision[]>('/api/v1/admin/prompts'),
  savePrompts:(prompts:Record<string,string>)=>{if(!fixtures)return post<PromptRevision>('/api/v1/admin/prompts',{prompts});const r:PromptRevision={revision:`rev-${revisions.length+1}`,status:'candidate',prompts};revisions=[r,...revisions];return Promise.resolve(copy(r));},
  reviewPrompt:(revision:string,evidence:unknown)=>post(`/api/v1/admin/prompts/${encodeURIComponent(revision)}/review`,evidence),

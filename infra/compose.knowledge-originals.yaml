@@ -1,0 +1,11 @@
+services:
+  api:
+    environment:
+      KNOWLEDGE_ORIGINALS_DIR: /knowledge-originals
+    volumes:
+      - type: bind
+        source: ${KNOWLEDGE_ORIGINALS_DIR:?Set the directory of reviewed originals}
+        target: /knowledge-originals
+        read_only: true
+        bind:
+          create_host_path: false

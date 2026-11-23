@@ -11,6 +11,34 @@ export const AttentionMode = z.enum(['autoservicio', 'asistido']);
 export const Audience = z.enum(['cliente', 'asesor']);
 export const Citation = z.object({ id: Id, title: z.string(), excerpt: z.string(), version: z.string(), url: z.string().optional() });
 export type Citation = z.infer<typeof Citation>;
+export const KnowledgeDigest = z.string().regex(/^[a-f0-9]{64}$/);
+export const KnowledgeSourceKey = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
+export const KnowledgeLabQuery = z.object({
+  question: z.string().trim().min(3).max(1024),
+  audience: Audience,
+  channel: z.enum(['web','telegram']),
+  business_date: z.iso.date(),
+  mode: z.enum(['extractive','openai'])
+}).strict();
+export type KnowledgeLabQuery = z.infer<typeof KnowledgeLabQuery>;
+export type KnowledgeSourceSummary = {
+  key:string; file_name:string|null; title:string; sha256:string; version:string|null;
+  scope:'public'|'advisor'|null; type:string|null; effective_from:string|null; effective_to:string|null;
+  passage_count:number|null; original:'available'|'missing'|'mismatch';
+};
+export type KnowledgePublication = {
+  sha256:string; stage:'initial'|'current'; published_at:string; count:number; files:KnowledgeSourceSummary[];
+};
+export type KnowledgeInventory = {
+  publications:KnowledgePublication[]; business_date:string; live_available:boolean; indexed_count:number;
+};
+export type KnowledgePassage = { id:string; version:string; excerpt_sha256:string; citation:Citation|null };
+export type KnowledgeLabResult = {
+  run_id:string; revision:string|null; mode:'extractive'|'openai'|null;
+  reason:'no_evidence'|'retrieval_unavailable'|'generation_disabled'|'generation_fallback'|null;
+  transport:'mcp'|'postgres'; pgvector:boolean; latency_ms:number; retrieval_ms:number;
+  answer:string|null; retrieved:Citation[]; citations:Citation[];
+};
 export const Fact = z.object({ id: Id, label: z.string(), value: z.string() });
 export type Fact = z.infer<typeof Fact>;
 export const Message = z.object({

@@ -24,7 +24,8 @@ const norm = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').t
 const tokens = (s: string) => norm(s).match(/[a-z0-9]+/g)?.filter(x => x.length > 2) ?? [];
 const has = (s: string, re: RegExp) => re.test(norm(s));
 const defaultDocuments: KnowledgeDocument[] = [{ id: 'catalogo-2026-fibra500', title: 'Catálogo de Planes y Tarifas 2026, pág. 1', version: 'CAT-2026 v1.0', excerpt: 'Hogar Fibra 500: 500 Mbps, $109.900 mensuales, módem WiFi 6 y 1 repetidor WiFi. Los precios incluyen IVA.', scope: 'public', effective_from: '2026-11-01', status: 'ready' }];
-function allowed(doc: KnowledgeDocument, turn: AgentTurn): boolean {
+type KnowledgeTurn = Pick<AgentTurn, 'text' | 'run_id' | 'business_date' | 'audience' | 'channel'>;
+function allowed(doc: KnowledgeDocument, turn: KnowledgeTurn): boolean {
   return doc.status !== 'draft' && doc.effective_from <= turn.business_date && (!doc.effective_to || turn.business_date < doc.effective_to) && (turn.audience === 'asesor' || doc.scope === 'public') && (!doc.channels || doc.channels.includes(turn.channel));
 }
 function citation(doc: KnowledgeDocument): Citation { const { id, title, excerpt, version, url } = doc; return { id, title, excerpt, version, ...(url ? { url } : {}) }; }
@@ -104,16 +105,12 @@ function card(intent: Intent, summary: string, facts: Fact[], citations: Citatio
   return { type: 'card', route: intent, card: { intent, summary, facts, citations, pending, next_action, reason_codes, ...(proposal ? { proposal } : {}) } };
 }
 
-/** Agent decisions are bounded by server-owned ports; no tool accepts customer identifiers. */
-export function createAgent(ports: AgentPorts, options: AgentOptions = {}): AgentRunner {
-  const results = new Map<string, RunResult>();
-  const inFlight = new Map<string, Promise<RunResult>>();
-  const get = async (key: string) => (await options.checkpoints?.get(key)) ?? results.get(key);
-  const put = async (key: string, value: RunResult) => { results.set(key, value); await options.checkpoints?.put(key, value); };
-  async function retrieve(turn: AgentTurn, profile: Decision['complexity'], prompts:Record<string,string>, selectEvidence = true): Promise<KnowledgeDocument[]> {
+/** The read-only retrieval and answer path shared by attention and the admin lab. */
+export function createKnowledgePipeline(options:Pick<AgentOptions,'requireApprovedPrompts'|'documents'|'knowledge'|'rerank'|'evidenceSelector'|'writer'|'observe'>) {
+  async function retrieve(turn: KnowledgeTurn, profile: Decision['complexity'], prompts:Record<string,string>, selectEvidence = true): Promise<{ candidates: KnowledgeDocument[]; ranked: KnowledgeDocument[]; unavailable: boolean }> {
     const started = Date.now();
     let docs: KnowledgeDocument[];
-    try { docs = options.knowledge ? await options.knowledge.search(turn.text, { business_date: turn.business_date, audience: turn.audience, channel: turn.channel }) : options.documents ?? defaultDocuments; } catch { return []; }
+    try { docs = options.knowledge ? await options.knowledge.search(turn.text, { business_date: turn.business_date, audience: turn.audience, channel: turn.channel }) : options.documents ?? defaultDocuments; } catch { return { candidates:[], ranked:[], unavailable:true }; }
     docs = rankKnowledge(turn.text, docs.filter(d => allowed(d, turn)));
     if (options.rerank && docs.length) {
       try {
@@ -129,7 +126,42 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     if (turn.audience==='cliente' && selectEvidence && options.evidenceSelector && publicCandidates.length > 1 && (!options.requireApprovedPrompts || Boolean(prompts.public_evidence_selector))) {
       try { const index = await options.evidenceSelector.select(safeDecisionFeatures(turn.text), publicCandidates.map(c => ({id:'',title:safeDecisionFeatures(c.title),excerpt:safeDecisionFeatures(c.excerpt),version:''})), profile, prompts.public_evidence_selector); if (index !== null && Number.isInteger(index) && publicCandidates[index]) candidates.unshift(...candidates.splice(candidates.indexOf(publicCandidates[index]),1)); } catch { /* preserve filtered lexical order */ }
     }
-    return candidates;
+    return { candidates, ranked:docs, unavailable:false };
+  }
+  async function answer(turn:KnowledgeTurn, profile:Decision['complexity'], publicPrompt:string, documents:KnowledgeDocument[]) {
+    const citations=documents.map(citation);
+    const [top]=citations;
+    if (!top) return null;
+    // A complete contiguous procedure can be rendered verbatim.
+    const procedure=wifiConfigurationSteps(turn.text,documents);
+    if (procedure.length) {
+      const sources=procedure.map(citation);
+      return {answer:procedure.map(document=>document.excerpt).join('\n'),citations:sources,used:sources,mode:'extractive' as const};
+    }
+    const approvedEvidence=documents.filter(document=>document.scope==='public' && document.provider_approved===true).map(citation);
+    if (turn.audience==='cliente' && options.writer && approvedEvidence.length && (!options.requireApprovedPrompts || Boolean(publicPrompt))) {
+      const draft=await options.writer.write(safeKnowledgeQuery(turn.text),approvedEvidence,profile,publicPrompt,
+        observation=>options.observe?.(turn.run_id,{...observation,metadata:{...observation.metadata,agent_id:'copiloto',step_id:'draft_public_reply',prompt_ref:'public_answer'}}));
+      if (draft) return {...draft,used:draft.citations,mode:'openai' as const};
+    }
+    const multiPart=has(turn.text,/\by (cuanto|cuanta|como|que|cuando|cual)\b/);
+    const source=top.id.replace(/-\d{3}$/,'');
+    const companion=multiPart ? citations.find((item,index)=>index>0 && item.excerpt!==top.excerpt && item.version===top.version && item.id.replace(/-\d{3}$/,'')===source) : undefined;
+    const used=companion ? [top,companion] : [top];
+    return {answer:used.map(item=>item.excerpt).join('\n\n').slice(0,3900),citations,used,mode:'extractive' as const};
+  }
+  return {retrieve,answer};
+}
+
+/** Agent decisions are bounded by server-owned ports; no tool accepts customer identifiers. */
+export function createAgent(ports: AgentPorts, options: AgentOptions = {}): AgentRunner {
+  const results = new Map<string, RunResult>();
+  const inFlight = new Map<string, Promise<RunResult>>();
+  const get = async (key: string) => (await options.checkpoints?.get(key)) ?? results.get(key);
+  const put = async (key: string, value: RunResult) => { results.set(key, value); await options.checkpoints?.put(key, value); };
+  const {retrieve: retrieveKnowledge, answer: answerKnowledge} = createKnowledgePipeline(options);
+  async function retrieve(turn:AgentTurn, profile:Decision['complexity'], prompts:Record<string,string>, selectEvidence=true) {
+    return (await retrieveKnowledge(turn,profile,prompts,selectEvidence)).candidates;
   }
   type CaseState = Awaited<ReturnType<AgentPorts['readCaseForRun']>>;
   function policyText(turn:AgentTurn,state:CaseState):string {
@@ -185,27 +217,13 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     const generalPortability = intent === 'portabilidad' && policyQuestion && !state.verified;
     if (intent === 'consulta_planes' || (intent === 'soporte_tecnico' && !state.verified) || intent === 'portabilidad' || (intent === 'facturacion' && policyQuestion) || generalPortability || (advisorKnowledge && policyQuestion)) {
       const documents = await retrieve(turn, profile, prompts);
-      const citations = documents.map(citation);
-      if (!citations.length) return turn.audience === 'asesor' ? card(intent, 'No hay evidencia vigente suficiente.', [], [], ['Consultar fuente autorizada'], 'Solicitar información adicional o derivar.', ['missing_evidence']) : { type:'handoff', reason:'No encontré información vigente suficiente para responder.', pending:'Consultar fuente autorizada', route:intent };
-      // A complete contiguous procedure can be rendered verbatim without sending it to a provider.
-      const procedure=wifiConfigurationSteps(turn.text,documents);
-      if (procedure.length) {
-        const answer=procedure.map(document=>document.excerpt).join('\n');
-        const sourceCitations=procedure.map(citation);
-        return turn.audience === 'asesor' ? card(intent,answer,[],sourceCitations,[],'Compartir la información pertinente.',['knowledge']) : {type:'answer',answer,citations:sourceCitations,route:intent};
-      }
-      const approvedEvidence = documents.filter(document => document.scope === 'public' && document.provider_approved === true).map(citation);
-      if (turn.audience === 'cliente' && options.writer && approvedEvidence.length && (!options.requireApprovedPrompts || Boolean(publicPrompt))) {
-        const draft = await options.writer.write(safeKnowledgeQuery(turn.text), approvedEvidence, profile, publicPrompt,
-          observation => options.observe?.(turn.run_id, {...observation, metadata:{...observation.metadata,agent_id:'copiloto',step_id:'draft_public_reply',prompt_ref:'public_answer'}}));
-        if (draft) return { type:'answer', answer:draft.answer, citations:draft.citations, route:intent };
-      }
-      const top = citations[0];
-      const multiPart = has(turn.text,/\by (cuanto|cuanta|como|que|cuando|cual)\b/);
-      const source = top.id.replace(/-\d{3}$/,'');
-      const companion = multiPart ? citations.find((item,index)=>index>0 && item.excerpt!==top.excerpt && item.version===top.version && item.id.replace(/-\d{3}$/,'')===source) : undefined;
-      const answer = [top.excerpt,companion?.excerpt].filter(Boolean).join('\n\n').slice(0,3900);
-      return turn.audience === 'asesor' ? card(intent, answer, [], citations, [], 'Compartir la información pertinente.', ['knowledge']) : { type:'answer', answer, citations, route:intent };
+      const reply=await answerKnowledge(turn,profile,publicPrompt,documents);
+      if (!reply) return turn.audience === 'asesor'
+        ? card(intent, 'No hay evidencia vigente suficiente.', [], [], ['Consultar fuente autorizada'], 'Solicitar información adicional o derivar.', ['missing_evidence'])
+        : { type:'handoff', reason:'No encontré información vigente suficiente para responder.', pending:'Consultar fuente autorizada', route:intent };
+      return turn.audience === 'asesor'
+        ? card(intent,reply.answer,[],reply.citations,[],'Compartir la información pertinente.',['knowledge'])
+        : {type:'answer',answer:reply.answer,citations:reply.citations,route:intent};
     }
     if (!state.verified) {
       return turn.audience === 'asesor' ? card(intent, 'Se necesita verificar la titularidad antes de consultar datos de cuenta.', [], [], ['Verificar titularidad', state.pending ?? 'Consultar la solicitud'], 'Verificar titularidad.', ['verification_required']) : {type:'handoff', reason:'Para consultar tu cuenta, un asesor verificará la titularidad.', pending:'Verificar titularidad y atender la consulta', route:intent, verification_required:true};

@@ -94,6 +94,14 @@ Langfuse and MLflow bind to loopback on ports `39085` and `39086`. Configure `LA
 
 ## Evolución de la consola y prompts
 
+### Conocimiento RAG en Administración
+
+Generar `corpus.json` y `manifest.json` en un directorio privado con `packages/agent/scripts/prepare_corpus.py`. Agregar `--originals-dir /ruta/privada/originales` para copiar los archivos revisados bajo su SHA-256. Usar `--approved-public` con el artefacto de aprobación existente cuando aplique. Configurar `KNOWLEDGE_PUBLICATION_DIR` y ejecutar `publish-knowledge` con el perfil `jobs`. Publicar otra vez el mismo corpus con el manifiesto enriquecido añade fichas a la publicación existente y conserva su fecha.
+
+Para descargar originales con Docker, fijar `KNOWLEDGE_ORIGINALS_DIR` a la ruta del host y añadir `-f infra/compose.knowledge-originals.yaml` a los mismos comandos de Compose. Dar acceso de lectura al usuario del API y mantener privado el directorio padre. En ejecución nativa basta con exportar la ruta a ese proceso. La aplicación muestra el inventario y los pasajes aunque el montaje esté ausente. La descarga pasa por la autorización de Admin y comprueba el hash de los bytes que entrega.
+
+En **Conocimiento RAG → Chat de prueba**, seleccionar audiencia, canal y fecha. Cada pregunta usa la revisión activa y el mismo adaptador y reordenamiento de conocimiento que el worker. El modo extractivo está disponible de inicio. `RAG_LAB_LIVE_ENABLED=true` y `OPENAI_API_KEY` habilitan una opción explícita para audiencia cliente, con extractos públicos aprobados y el presupuesto del redactor. Los ensayos quedan en la vista actual y sus respuestas muestran la latencia, la evidencia recuperada y las citas usadas.
+
 Configurar `INTEGRATION_MCP_TOKEN` con al menos 24 caracteres y `INTEGRATION_MCP_SIGNING_KEY` con al menos 32. CRM y Facturación tienen un proceso MCP privado cada uno. Cada proceso recibe las credenciales de su propia API mock. El worker emite una capacidad firmada, acotada a una tool, el run, el caso y su revisión. El servidor revalida el titular y la asignación antes de consultar. Las escrituras pasan por NestJS y el outbox.
 
 Para ensayar traspasos y gestión, completar las parejas `DEMO_N2_*`, `DEMO_SUPERVISOR_*` y `DEMO_SUPERADMIN_*` y volver a ejecutar el seed. El admin actual conserva aprobación de facturación. Las credenciales de prueba se configuran por instancia. Los usuarios de asesor y atención N2 acceden a conversaciones por asignación.

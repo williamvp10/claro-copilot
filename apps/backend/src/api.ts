@@ -17,6 +17,7 @@ import { adjudicatePromptRevision, PromptAdjudication } from './prompt-adjudicat
 import { PlatformEvolutionController } from './platform-evolution.js';
 import { IntegrationOperations } from './integration-operations.js';
 import { observeSimulators, simulators } from './simulator-client.js';
+import { KnowledgeAdminController } from './knowledge-admin.js';
 
 const Webhook = z.object({
   update_id: z.number().int().nonnegative(),
@@ -438,7 +439,7 @@ class PlatformController {
 export class ApiModule {
   static create(auth: Auth): DynamicModule {
     return {
-      module: ApiModule, controllers: [PlatformController, PlatformEvolutionController, HealthController, WebChatController],
+      module: ApiModule, controllers: [PlatformController, PlatformEvolutionController, HealthController, WebChatController, KnowledgeAdminController],
       providers: [Cases, IntegrationOperations, PromptReleases, { provide: AUTH, useValue: auth }, {
         provide: DATABASE,
         async useFactory() {

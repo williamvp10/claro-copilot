@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { setTimeout as wait } from 'node:timers/promises';
 import { Logger, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { createAgent, createJevDecisionAdapter, createOpenAIPublicWriter, createOpenAIEvidenceSelector, createKnowledgeMcpAdapter, type AgentObservation } from '@claro/agent';
+import { createAgent, createJevDecisionAdapter, createOpenAIPublicWriter, createOpenAIEvidenceSelector, type AgentObservation } from '@claro/agent';
 import { RunResult, type AgentTurn, type RunResume } from '@claro/contracts';
 import { createClient } from 'redis';
 import type { DataSource } from 'typeorm';
@@ -13,7 +13,7 @@ import { addMessage, loadCase, saveCase, stillCurrent, latestAnalyzable } from '
 import { businessPorts, runContext } from './business.js';
 import { integrationMcpPorts } from './integration-mcp-client.js';
 import { readRunPromptConfig } from './prompt-catalog.js';
-import { databaseKnowledge } from './knowledge.js';
+import { configuredKnowledge } from './knowledge.js';
 import { exportAgentSpan } from './telemetry.js';
 import { executeAgentIntegration, executeIntegration } from './integration-operations.js';
 import { accountVerificationPrompt } from './demo-accounts.js';
@@ -35,8 +35,6 @@ if (redis) {
 const live = process.env.AGENT_PROVIDERS === 'live';
 const routerKey = process.env.OPENROUTER_API_KEY;
 const openaiKey = process.env.OPENAI_API_KEY;
-const mcpUrl = process.env.KNOWLEDGE_MCP_URL;
-const knowledgeToken = process.env.KNOWLEDGE_SERVICE_TOKEN;
 const observations = new Map<string, AgentObservation[]>();
 const basePorts = businessPorts(db);
 const ports = process.env.CRM_MCP_URL && process.env.BILLING_MCP_URL ? integrationMcpPorts(db, basePorts) : basePorts;
@@ -45,7 +43,7 @@ const runner = createAgent({
   getAgentConfig: revision => readRunPromptConfig(db, revision)
 }, {
   requireApprovedPrompts: live,
-  knowledge: mcpUrl && knowledgeToken ? createKnowledgeMcpAdapter({ url: mcpUrl, token: knowledgeToken, trustedLocal: true }) : databaseKnowledge(db),
+  knowledge: configuredKnowledge(db).adapter,
   decision: live && routerKey ? createJevDecisionAdapter({ apiKey: routerKey, model: process.env.JEV_MODEL || 'typesafe/jev-1.14' }) : undefined,
   writer: live && openaiKey ? createOpenAIPublicWriter({apiKey:openaiKey}) : undefined,
   evidenceSelector: live && openaiKey ? createOpenAIEvidenceSelector({apiKey:openaiKey,models:{economico:'gpt-6-luna',intermedio:'gpt-6.1-terra',complejo:'gpt-6.2-sol'}}) : undefined,

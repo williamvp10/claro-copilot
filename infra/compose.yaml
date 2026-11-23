@@ -139,6 +139,7 @@ services:
       <<: *app-env
       HOST: 0.0.0.0
       PORT: '3000'
+      RAG_LAB_LIVE_ENABLED: ${RAG_LAB_LIVE_ENABLED:-false}
     depends_on:
       migrate: {condition: service_completed_successfully}
     healthcheck:

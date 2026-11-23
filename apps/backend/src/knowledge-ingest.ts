@@ -1,23 +1,22 @@
 import 'reflect-metadata';
-import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { createDatabase } from './database.js';
 import { Document, writeDocument } from './knowledge.js';
+import { KnowledgeManifest, knowledgeHash, validatePublicationFiles } from './knowledge-publication.js';
 
 const [source,manifestPath] = process.argv.slice(2);
 if (!source || (await stat(source)).size > 5_000_000) throw new Error('Pass a reviewed JSON array up to 5 MB');
 const raw = await readFile(source);
 const documents = z.array(Document).min(1).max(5000).parse(JSON.parse(raw.toString('utf8')));
 const detectedAt = new Date().toISOString();
-const checksum = createHash('sha256').update(raw).digest('hex');
-const digest = z.string().regex(/^[a-f0-9]{64}$/);
-const manifest = manifestPath ? z.object({
-  sha256:digest, stage:z.enum(['initial','current']), sources:z.record(z.string(),digest), count:z.number().int()
-}).parse(JSON.parse(await readFile(manifestPath,'utf8'))) : null;
+const checksum = knowledgeHash(raw);
+const manifest = manifestPath ? KnowledgeManifest.parse(JSON.parse(await readFile(manifestPath,'utf8'))) : null;
 if (manifest) {
   if (checksum!==manifest.sha256 || documents.length!==manifest.count) throw new Error('Publication does not match manifest');
   if (documents.some(d=>d.provider_approved && d.scope!=='public')) throw new Error('Provider approval requires public scope');
+  validatePublicationFiles(manifest,documents);
   const v1=documents.filter(d=>d.id.startsWith('catalogo-v1-'));
   const v2=documents.filter(d=>d.id.startsWith('catalogo-v2-'));
   const initial=manifest.stage==='initial';
@@ -30,8 +29,16 @@ try {
   const published = await db.transaction(async tx => {
     await tx.query("SELECT pg_advisory_xact_lock(hashtext('knowledge-publication'))");
     if (manifest) {
-      const [existing]=await tx.query('SELECT 1 FROM knowledge_publication WHERE sha256=$1',[checksum]);
-      if (existing) return false;
+      const [existing]=await tx.query('SELECT manifest FROM knowledge_publication WHERE sha256=$1',[checksum]);
+      if (existing) {
+        const previous=KnowledgeManifest.parse(existing.manifest);
+        if (previous.stage!==manifest.stage || previous.count!==manifest.count || !isDeepStrictEqual(previous.sources,manifest.sources) ||
+          (previous.files && manifest.files && !isDeepStrictEqual(previous.files,manifest.files))) throw new Error('Existing publication has different source metadata');
+        if (!previous.files && manifest.files) {
+          await tx.query('UPDATE knowledge_publication SET manifest=manifest || $2::jsonb WHERE sha256=$1',[checksum,{files:manifest.files}]);
+        }
+        return false;
+      }
       const [current]=await tx.query("SELECT 1 FROM knowledge_publication WHERE manifest->>'stage'='current' LIMIT 1");
       if (current && manifest.stage==='initial') throw new Error('Initial snapshot cannot replace a published catalog update');
     }

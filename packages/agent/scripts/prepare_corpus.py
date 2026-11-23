@@ -192,6 +192,7 @@ def main() -> int:
     parser.add_argument('--input', type=Path, required=True, help='Root of Insumos_Prueba_Consultor_IA')
     parser.add_argument('--output', type=Path, required=True, help='New private JSON file outside the repository and source tree')
     parser.add_argument('--manifest', type=Path, help='Write the publication manifest alongside the bundle')
+    parser.add_argument('--originals-dir', type=Path, help='Stage only reviewed originals by SHA-256 in a private directory')
     parser.add_argument('--initial', action='store_true', help='Publish the first catalog snapshot for an isolated replay')
     parser.add_argument('--approved-public', type=Path, help='Previously approved public passages, matched by identity and excerpt')
     args = parser.parse_args()
@@ -202,6 +203,9 @@ def main() -> int:
     manifest_target = args.manifest.resolve() if args.manifest else None
     if manifest_target and (manifest_target.is_relative_to(root) or manifest_target.is_relative_to(repo) or manifest_target == target):
         parser.error('Manifest must be a distinct private file')
+    originals = args.originals_dir.resolve() if args.originals_dir else None
+    if originals and (not manifest_target or originals.is_relative_to(root) or originals.is_relative_to(repo)):
+        parser.error('Originals need a manifest and a directory outside the source tree and repository')
     records = prepare(root, args.initial)
     if args.approved_public:
         approved = json.loads(args.approved_public.read_text(encoding='utf-8'))
@@ -210,6 +214,36 @@ def main() -> int:
         for record in records:
             if record['scope'] == 'public' and (record['id'], record['version'], record['excerpt']) in fingerprints:
                 record['provider_approved'] = True
+    files = {}
+    if manifest_target:
+        if originals:
+            originals.mkdir(mode=0o700, parents=True, exist_ok=True)
+        for source in SOURCES:
+            if args.initial and source.key == 'catalogo-v2':
+                continue
+            path = root / source.path
+            raw = path.read_bytes()
+            if len(raw) > 10_485_760:
+                raise ValueError(f'Original exceeds 10 MiB: {path.name}')
+            checksum = sha256(raw).hexdigest()
+            passages = [row for row in records if row['id'].rsplit('-', 1)[0] == source.key]
+            files[source.key] = {
+                'file_name': path.name, 'title': source.title, 'sha256': checksum, 'size_bytes': len(raw),
+                'version': source.version, 'scope': source.scope, 'type': source.kind,
+                'effective_from': source.effective_from, 'effective_to': passages[0].get('effective_to'),
+                'passages': [{'id': row['id'], 'excerpt_sha256': sha256(row['excerpt'].strip().encode('utf-8')).hexdigest()}
+                             for row in passages],
+            }
+            if originals:
+                stored = originals / checksum
+                try:
+                    fd = os.open(stored, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                except FileExistsError:
+                    if stored.is_symlink() or stored.read_bytes() != raw:
+                        raise ValueError(f'File already staged with inconsistent content: {path.name}')
+                else:
+                    with os.fdopen(fd, 'wb') as file:
+                        file.write(raw)
     # Exclusive creation prevents overwriting existing data or following an existing symlink.
     fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
@@ -224,8 +258,8 @@ def main() -> int:
             with os.fdopen(os.open(manifest_target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w', encoding='utf-8') as file:
                 json.dump({'sha256': sha256(target.read_bytes()).hexdigest(),
                            'stage': 'initial' if args.initial else 'current',
-                           'sources': {source.key: sha256((root / source.path).read_bytes()).hexdigest()
-                                       for source in SOURCES if not args.initial or source.key != 'catalogo-v2'},
+                           'sources': {key: value['sha256'] for key,value in files.items()},
+                           'files': files,
                            'count': len(records)}, file, ensure_ascii=False, indent=2)
                 file.write('\n')
         except BaseException:
