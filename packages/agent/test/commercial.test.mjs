@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createAgent, catalogComparison, catalogPlans} from '../dist/index.js';
+import {createAgent, catalogComparison, catalogPlans, evolveContext, platformBillingContext, traceConversation} from '../dist/index.js';
 
 const digest='a'.repeat(64);
 const makeDocument=(id,title,excerpt,version='CAT-2026 v1.0',date='2026-11-01')=>({
@@ -13,13 +13,13 @@ const standard=[
  makeDocument('prepaid','Telefonía móvil prepago','Paquete Día 1 GB 24 horas $3.000\nPaquete Semanal 5 GB 7 días $15.000\nPaquete Mensual 20 GB 30 días $40.000')
 ];
 
-function session(documents=standard){
+function session(documents=standard, sharedContext=false){
  const messages=[];
  const calls=[];
  const observations=[];
- let conversation_memory, pending=null, seq=0, sources=documents;
+ let conversation_memory, conversation_context, intake, pending=null, seq=0, sources=documents;
  const noPrivate=()=>{throw Error('Commercial guidance must not read an account');};
- const agent=createAgent({readCaseForRun:async()=>({verified:false,messages,pending,conversation_memory}),
+ const agent=createAgent({readCaseForRun:async()=>({verified:false,messages,pending,conversation_memory,conversation_context,intake}),
   getAgentConfig:async()=>({revision:'candidate',prompts:{agent_objectives:'Decide con evidencia.',handoff_summary:'{{reason}}\n{{pending_steps}}'}}),
   getCustomerContext:noPrivate,getBilling:noPrivate,getTickets:noPrivate,evaluateRetention:noPrivate,createProposal:noPrivate
  },{observe:(_,observation)=>observations.push(observation),knowledge:{
@@ -29,6 +29,7 @@ function session(documents=standard){
  async function send(text, business_date='2026-11-24', audience='cliente', observed_context) {
   const id='turn-'+(++seq);
   messages.push({id,turn_seq:seq,actor:'cliente',text,created_at:'2026-11-24T12:00:00.000Z'});
+  if (sharedContext) intake=evolveContext(text,intake);
   const result=await agent.run({run_id:'run-'+seq,case_id:'catalogue-test',conversation_id:'catalogue-test',turn_id:id,turn_seq:seq,case_revision:seq,
    channel:'web',actor:'cliente',audience,attention_mode:audience==='asesor'?'asistido':'autoservicio',scope_ref:'unverified',config_revision:'candidate',business_date,text,observed_context});
   if(result.type==='answer') {
@@ -39,10 +40,58 @@ function session(documents=standard){
    pending=result.pending;
    if(result.commercial_plan) conversation_memory={selected_plan:result.commercial_plan};
   }
+  if(sharedContext&&result.conversation_context) {
+   conversation_context=result.conversation_context;
+   intake=conversation_context.frames[conversation_context.active]?.intake;
+  }
   return result;
  }
- return {send,calls,observations,replaceDocuments(next){sources=next;}};
+ return {send,calls,observations,replaceDocuments(next){sources=next;}, recordBilling(){
+   conversation_memory=undefined;
+   conversation_context=platformBillingContext(conversation_context,'Mi factura',++seq,{channel:'web',business_date:'2026-11-24',
+    config_revision:'candidate',verified:true,awaiting_advisor:false},'invoice');
+ }};
 }
+
+test('retoma el catálogo tras soporte y facturación, resuelve ordinales y conserva la elección al corregir el foco', async()=>{
+ const {send,recordBilling}=session(standard,true);
+ await send('¿Qué planes ofrecen?');
+ await send('Para mi celular');
+ const detail=await send('¿Cuánto cuesta el segundo?');
+ assert.match(detail.answer,/Claro Max 60 GB.*69\.900/);
+ const chosen=await send('Me quedo con ese');
+ assert.equal(chosen.conversation_context.frames.consulta_planes.slots.plan_elegido.value,'Claro Max 60 GB');
+ const issue=await send('Mi decodificador tiene un error');
+ assert.equal(issue.conversation_context.transition,'cambiar');
+ assert.equal(issue.conversation_context.frames.soporte_tecnico.slots.codigo.status,'pendiente');
+ recordBilling();
+ const ambiguous=await send('Retomemos lo anterior');
+ assert.equal(ambiguous.route,'indeterminada');
+ assert.equal(ambiguous.conversation_context,undefined);
+ const continued=await send('Volvamos al móvil, ¿incluye Claro Video?');
+ assert.match(continued.answer,/Claro Max 60 GB incluye Claro Video/);
+ assert.equal(continued.conversation_context.transition,'retomar');
+ assert.equal(continued.conversation_context.frames.facturacion.slots.consulta_cuenta.value,'invoice');
+ const corrected=await send('Perdón, era el de 25 GB');
+ assert.match(corrected.answer,/Claro Max 25 GB.*49\.900/);
+ assert.equal(corrected.conversation_context.transition,'corregir');
+ assert.equal(corrected.conversation_context.frames.consulta_planes.slots.plan_elegido.value,'Claro Max 60 GB');
+ const resumed=await send('Retomemos soporte, el error es E-202');
+ assert.equal(resumed.conversation_context.transition,'retomar');
+ assert.equal(resumed.conversation_context.frames.soporte_tecnico.slots.codigo.value,'E-202');
+ const trace=JSON.stringify(traceConversation(resumed.conversation_context));
+ assert.match(trace,/"codigo":\{"status":"confirmado"/);
+ assert.doesNotMatch(trace,/E-202|invoice|Decodificador/);
+});
+
+test('la consulta de Facturación conserva el objetivo pendiente sin acreditar titularidad',()=>{
+ const variables={channel:'web',business_date:'2026-11-24',config_revision:'candidate',verified:false,awaiting_advisor:false};
+ const pending=platformBillingContext(undefined,'Quiero consultar mi factura',1,variables,'invoice');
+ assert.deepEqual(pending.frames.facturacion.slots.consulta_cuenta,{value:'invoice',status:'pendiente',source:'plataforma',turn:1});
+ const completed=platformBillingContext(pending,'Quiero consultar mi factura',1,{...variables,verified:true},'invoice');
+ assert.equal(completed.frames.facturacion.slots.consulta_cuenta.status,'confirmado');
+ assert.doesNotMatch(JSON.stringify(traceConversation(completed)),/invoice/);
+});
 
 test('COM-01 lista las dos modalidades y conserva la elección hasta la ficha del asesor', async()=>{
  const {send,calls,observations}=session();

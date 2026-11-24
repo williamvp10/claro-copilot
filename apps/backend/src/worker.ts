@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { setTimeout as wait } from 'node:timers/promises';
 import { Logger, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { createAgent, isModelObservation, recordQuestion, type AgentObservation } from '@claro/agent';
+import { createAgent, isModelObservation, recordQuestion, traceConversation, type AgentObservation } from '@claro/agent';
 import { Intent, RunResult, type AgentTurn, type Citation, type RunResume } from '@claro/contracts';
 import { createClient } from 'redis';
 import type { DataSource } from 'typeorm';
@@ -98,6 +98,7 @@ async function project(turn: AgentTurn, result: RunResult) {
       WHERE case_id=$1 AND kind='agent_completed' AND metadata->>'run_id'=$2) AS published`, [row.id, turn.run_id]);
     if (published) return;
     if (result.type === 'failed') throw new Error('agent_failed');
+    const contextBefore=row.snapshot.conversation_context;
     let exchange;
     if (turn.audience === 'cliente' && (result.type === 'answer' || result.type === 'handoff')) {
       const conversationalVerification = process.env.DEMO_MODE === 'true' && result.type === 'handoff' &&
@@ -154,6 +155,14 @@ async function project(turn: AgentTurn, result: RunResult) {
       }
       row.intent_hint = result.card.intent;
     }
+    let context;
+    if (result.conversation_context) {
+      const updated = result.conversation_context;
+      updated.variables = {...updated.variables,verified:row.snapshot.verified,awaiting_advisor:!!row.handoff_pending};
+      row.snapshot.conversation_context=updated;
+      row.snapshot.intake=updated.frames[updated.active]?.intake;
+      context={before:JSON.stringify(traceConversation(contextBefore)),after:JSON.stringify(traceConversation(updated))};
+    }
     const unavailable = result.type === 'card' && result.card.facts.some(f => f.id.endsWith('-unavailable'));
     const clarification = result.type==='answer' && result.needs_clarification===true;
     const terminal = result.type === 'answer' && !clarification && result.citations.length > 0 && turn.channel !== 'telegram' ? (result.route === 'consulta_planes' ? 'catalog_answer_published' : result.route === 'portabilidad' ? 'portability_guidance_published' : 'guidance_published') : result.type === 'card' && result.card.reason_codes.includes('retention_ineligible') && !unavailable ? 'ineligible_explained' : 'pending';
@@ -166,8 +175,12 @@ async function project(turn: AgentTurn, result: RunResult) {
     }
     await audit(tx, row.id, 'agent_completed', { run_id: turn.run_id, route: result.route, clarification, runtime_sha256:runtimeSha256 });
     await saveCase(tx, row);
-    return exchange;
+    return {exchange,context};
   });
+}
+
+function contextObservation(context: {before:string;after:string}, at=Date.now()):AgentObservation {
+  return {name:'conversation_context',started:at,ended:at,metadata:{step_id:'conversation_context',...context}};
 }
 
 async function resume(result: RunResume) {
@@ -259,14 +272,15 @@ async function handle(job: CaseJob) {
       const spans: AgentObservation[] = [];
       observations.set(job.payload.run_id, spans);
       const result = await runner.run(job.payload).finally(() => observations.delete(job.payload.run_id));
-      const exchange = await project(job.payload, result);
+      const publication = await project(job.payload, result);
+      if (publication?.context) spans.push(contextObservation(publication.context));
       await audit(db.manager, job.case_id, 'agent_latency', { ms: Date.now() - started, run_id:job.payload.run_id, route:result.route });
       for (const item of spans) {
         if (isModelObservation(item.name) || item.name.startsWith('tool.')) {
           await audit(db.manager, job.case_id, item.name, { ...item.metadata, route:result.route, run_id:job.payload.run_id, ms: item.ended - item.started });
         }
       }
-      const traceSha = await exportAgentSpan(job.payload, started, result.route, result.type, spans, promptConfig.prompt_metadata,subject,exchange);
+      const traceSha = await exportAgentSpan(job.payload, started, result.route, result.type, spans, promptConfig.prompt_metadata,subject,publication?.exchange);
       if (traceSha) {
         await audit(db.manager, job.case_id, 'langfuse_exported', {run_id:job.payload.run_id,trace_sha256:traceSha});
       }
@@ -281,10 +295,11 @@ async function handle(job: CaseJob) {
       const output = row.snapshot.messages.find(message=>message.id===job.payload.output_id);
       if (!input || !output) return;
       const exchange = publicDemoChatPair(row,input,output);
-      if (!exchange) return;
+      if (!exchange && !job.payload.context) return;
+      const spans=job.payload.context ? [contextObservation(job.payload.context,Date.parse(output.created_at))] : [];
       const traceSha = await exportAgentSpan({run_id:output.id,conversation_id:row.snapshot.conversation_id,
         channel:row.snapshot.channel,audience:'cliente',config_revision:'platform'},Date.parse(input.created_at),
-        'platform','answer',[],{},row.web_visitor_ref ?? row.contact_ref,exchange);
+        'platform','answer',spans,{},row.web_visitor_ref ?? row.contact_ref,exchange);
       if (!traceSha) throw new Error('langfuse_chat_export_failed');
       await audit(db.manager,job.case_id,'langfuse_exported',{run_id:output.id,trace_sha256:traceSha});
       break;

@@ -37,6 +37,7 @@ export const ConversationMemory = z.object({
   preference: z.literal('lower_price').optional(), pending: z.literal('compare_prices').optional(), package_validity: PackageValidity.optional(),
   selected_plan: CatalogPlan.optional(),
   focused_plan: CatalogPlan.pick({name:true,segment:true}).optional(),
+  presented_plans: z.array(CatalogPlan.pick({name:true,segment:true})).max(32).optional(),
   purchase_confirmation: z.boolean().optional()
 });
 export type ConversationMemory = z.infer<typeof ConversationMemory>;
@@ -84,6 +85,29 @@ export const CaseIntake = z.object({
   asked: z.array(Id).max(12), pending: Id.optional(), skip: z.boolean().optional()
 });
 export type CaseIntake = z.infer<typeof CaseIntake>;
+export const ContextDomain = z.enum(['consulta_planes','soporte_tecnico','facturacion']);
+export type ContextDomain = z.infer<typeof ContextDomain>;
+const ContextAction = z.enum(['consultar','listar','comparar','detallar','elegir','contratar','descargar','diagnosticar','confirmar','aclarar']);
+const ContextSlot = z.object({
+  value: z.string().min(1).max(120).optional(), status: z.enum(['pendiente','inferido','confirmado']),
+  source: z.enum(['cliente','catalogo','plataforma']), turn: z.number().int().positive()
+});
+const ContextFrame = z.object({
+  intent: ContextDomain, action: ContextAction, last_turn: z.number().int().positive(),
+  entities: z.object({
+    plan: CatalogPlan.pick({name:true,segment:true}).optional(),
+    options: z.array(CatalogPlan.pick({name:true,segment:true})).max(32).optional(),
+    equipment: z.string().max(120).optional()
+  }),
+  slots: z.record(Id,ContextSlot), intake: CaseIntake.optional(), catalogue: ConversationMemory.optional()
+});
+export const ConversationContext = z.object({
+  version: z.literal(1), active: ContextDomain, transition: z.enum(['iniciar','continuar','cambiar','retomar','corregir']),
+  frames: z.partialRecord(ContextDomain,ContextFrame),
+  variables: z.object({channel:Channel,business_date:z.iso.date(),config_revision:Id,
+    verified:z.boolean(),awaiting_advisor:z.boolean(),catalogue_version:z.string().max(128).optional()})
+});
+export type ConversationContext = z.infer<typeof ConversationContext>;
 export const Message = z.object({
   id: Id, turn_seq: z.number().int().positive(), actor: Actor, text: Text,
   created_at: z.iso.datetime(), citations: z.array(Citation).optional(), verification_input: z.literal(true).optional()
@@ -142,6 +166,7 @@ export const CaseSnapshot = CaseSummary.extend({
   handoff_reason: z.string().max(300).optional(),
   intake: CaseIntake.optional(),
   conversation_memory: ConversationMemory.optional(),
+  conversation_context: ConversationContext.optional(),
   public_route: Intent.optional(),
   messages: z.array(Message), card: AdvisorCard.nullable(), cursor: z.number().int().nonnegative()
 });
@@ -179,10 +204,10 @@ export const AgentTurn = z.object({
 export type AgentTurn = z.infer<typeof AgentTurn>;
 export const RunResult = z.discriminatedUnion('type', [
   z.object({ type: z.literal('answer'), answer: Text, citations: z.array(Citation), route: Id, needs_clarification: z.literal(true).optional(), context_question: ContextQuestion.optional(),
-    conversation_memory: ConversationMemory.optional(), catalog_answer: z.literal(true).optional() }),
+    conversation_memory: ConversationMemory.optional(), conversation_context: ConversationContext.optional(), catalog_answer: z.literal(true).optional() }),
   z.object({ type: z.literal('handoff'), reason: Text, pending: Text, route: Id, verification_required: z.literal(true).optional(),
-    commercial_plan: CatalogPlan.optional() }),
-  z.object({ type: z.literal('card'), card: AdvisorCard, route: Id }),
+    commercial_plan: CatalogPlan.optional(), conversation_context: ConversationContext.optional() }),
+  z.object({ type: z.literal('card'), card: AdvisorCard, route: Id, conversation_context: ConversationContext.optional() }),
   z.object({ type: z.literal('failed'), reason: Id, route: Id })
 ]);
 export type RunResult = z.infer<typeof RunResult>;
@@ -202,7 +227,7 @@ export class TransientReadError extends Error {
   constructor() { super('Read source temporarily unavailable'); }
 }
 export interface AgentPorts {
-  readCaseForRun(runId: string): Promise<{ messages: Message[]; verified: boolean; pending: string | null; intake?: CaseIntake; conversation_memory?: ConversationMemory; public_route?: Intent; confirmed_receipts?: ConfirmedReceipt[]; pending_support_handoff?: boolean }>;
+  readCaseForRun(runId: string): Promise<{ messages: Message[]; verified: boolean; pending: string | null; intake?: CaseIntake; conversation_memory?: ConversationMemory; conversation_context?: ConversationContext; public_route?: Intent; confirmed_receipts?: ConfirmedReceipt[]; pending_support_handoff?: boolean }>;
   getAgentConfig(revision: string): Promise<AgentConfig>;
   getCustomerContext(runId: string): Promise<Fact[]>;
   listServices?(runId: string): Promise<Fact[]>;

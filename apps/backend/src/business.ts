@@ -61,6 +61,7 @@ export function businessPorts(db: DataSource): AgentPorts {
         messages: row.snapshot.messages.filter(m => !m.verification_input).map(m => ({ ...m, text: clearPersonalData(m.text) })),
         verified: row.snapshot.verified, pending: row.handoff_pending, intake: row.snapshot.intake, conversation_memory: row.snapshot.conversation_memory,
         public_route: row.snapshot.public_route,
+        conversation_context: row.snapshot.conversation_context,
         pending_support_handoff:support?.pending===true,
         confirmed_receipts: turn.audience === 'asesor' && row.snapshot.verified ? await confirmedCaseReceipts(tx,row.id) : []
       };

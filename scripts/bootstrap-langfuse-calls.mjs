@@ -12,10 +12,15 @@ const args = process.argv.slice(2);
 const datasetOnly = args.includes('--dataset-only');
 const namedManifest = args.includes('--manifest-evaluator');
 const catalogue = args.includes('--catalogue');
-if (args.length !== Number(datasetOnly)+Number(namedManifest)+Number(catalogue) || datasetOnly && namedManifest) {
-  throw new Error('Uso: bootstrap-langfuse-calls.mjs [--catalogue] [--dataset-only | --manifest-evaluator]');
+const context = args.includes('--context');
+if (args.length !== Number(datasetOnly)+Number(namedManifest)+Number(catalogue)+Number(context) ||
+    datasetOnly && namedManifest || catalogue && context) {
+  throw new Error('Uso: bootstrap-langfuse-calls.mjs [--catalogue | --context] [--dataset-only | --manifest-evaluator]');
 }
-const dataset = catalogue ? {
+const dataset = context ? {
+  name:'claro-contexto-conversacional-v1',description:'Cambios de tema y retomadas en chats largos del demo',
+  source:'contexto-conversacional-evals.v1.jsonl',items:2
+} : catalogue ? {
   name:'claro-catalogo-contratacion-v1',description:'Consultas comerciales por chat y traspaso para contratación',
   source:'catalogo-contratacion-evals.v1.jsonl',items:10
 } : manifest.dataset;
@@ -39,14 +44,15 @@ const items = suite.toString('utf8').trim().split(/\r?\n/).map(line => {
   const { id, turns, intent, required, forbidden, sources, fixture } = JSON.parse(line);
   const nonEmptyStrings = values => Array.isArray(values) && values.length > 0 &&
     values.every(value => typeof value === 'string' && value.trim());
-  if (!(catalogue ? /^COM-\d{2}$/ : /^TRX-\d{4}$/).test(id) || typeof intent !== 'string' || !intent.trim() ||
+  if (!(context ? /^CTX-\d{2}$/ : catalogue ? /^COM-\d{2}$/ : /^TRX-\d{4}$/).test(id) || typeof intent !== 'string' || !intent.trim() ||
+      context && fixture!=='standard' ||
       catalogue && !['standard','edition-change','conflict','reserved'].includes(fixture) ||
       ![turns, required, forbidden, sources].every(nonEmptyStrings)) {
     throw new Error('La suite contiene un caso inválido.');
   }
   return {
     id: `${dataset.name}-${id}`, datasetName: dataset.name, input: { turns },
-    expectedOutput: { intent, required, forbidden }, metadata: { sources, suite_sha256: sha256, ...(catalogue ? {fixture} : {}) }
+    expectedOutput: { intent, required, forbidden }, metadata: { sources, suite_sha256: sha256, ...(context || catalogue ? {fixture} : {}) }
   };
 });
 if (items.length !== dataset.items || new Set(items.map(({ id }) => id)).size !== items.length) {

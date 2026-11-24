@@ -107,7 +107,8 @@ export function answerCommercial(request: CatalogRequest, plans: CatalogPlan[], 
     answer:text, citations:citations(used), conversation_memory:next, ...(used.length ? {catalog_answer:true} : {}) });
   const focusOn = (plan: CatalogPlan): ConversationMemory => ({...memory,focused_plan:{name:plan.name,segment:plan.segment}});
   const remember = (plan: CatalogPlan, confirmation = false): ConversationMemory => ({
-    segment:plan.segment, anchor_plan:clean(plan.name), selected_plan:plan, purchase_confirmation:confirmation
+    ...memory,segment:plan.segment, anchor_plan:clean(plan.name), selected_plan:plan,
+    focused_plan:{name:plan.name,segment:plan.segment},purchase_confirmation:confirmation
   });
   const unavailable = 'No puedo confirmar una oferta vigente para esa consulta. ¿Quieres hablar con un asesor?';
   if (action === 'list') {
@@ -127,6 +128,8 @@ export function answerCommercial(request: CatalogRequest, plans: CatalogPlan[], 
     const summary = `Encontré ${headings.map(group=>labels[group]).join(' y ')} en el catálogo.${note} ¿De qué plan quieres conocer el precio?`;
     return answer(listing.length <= 4000 ? listing : summary, scoped, {
       offered_segments:headings, ...(headings.length === 1 ? {segment:headings[0]} : {}),
+      ...(listing.length <= 4000 && scoped.length <= 32 ? {presented_plans:headings.flatMap(group=>scoped
+        .filter(plan=>plan.segment===group).map(({name,segment})=>({name,segment})))} : {}),
       ...(scoped.length === 1 ? {anchor_plan:clean(scoped[0]!.name)} : {})
     });
   }

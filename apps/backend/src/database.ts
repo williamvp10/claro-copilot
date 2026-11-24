@@ -308,7 +308,7 @@ export type DraftPublication = {
 };
 export type JobPayloads = {
   run: AgentTurn;
-  chat_trace: { input_id: string; output_id: string };
+  chat_trace: { input_id: string; output_id: string; context?: { before: string; after: string } };
   resume: RunResume;
   deliver: { text: string; sender: 'agente' | 'asesor' | 'sistema'; revision: number; turn_seq?: number; feedback_case_id?: string; draft_publication?: DraftPublication };
   effect: { proposal_id: string };

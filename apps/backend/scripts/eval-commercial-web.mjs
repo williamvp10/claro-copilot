@@ -4,21 +4,23 @@ import {readFile, writeFile} from 'node:fs/promises';
 import {setTimeout as delay} from 'node:timers/promises';
 import pg from 'pg';
 
-const datasetName='claro-catalogo-contratacion-v1';
-const bytes=await readFile(new URL('../../../docs/agente/catalogo-contratacion-evals.v1.jsonl',import.meta.url));
+const [targetFile,outputFile,...flags]=process.argv.slice(2);
+const sharedContext=flags.includes('--context');
+const datasetName=sharedContext?'claro-contexto-conversacional-v1':'claro-catalogo-contratacion-v1';
+const suiteFile=sharedContext?'contexto-conversacional-evals.v1.jsonl':'catalogo-contratacion-evals.v1.jsonl';
+const bytes=await readFile(new URL('../../../docs/agente/'+suiteFile,import.meta.url));
 const sha=value=>createHash('sha256').update(value).digest('hex');
 const suiteSha=sha(bytes);
 const suite=bytes.toString('utf8').trim().split(/\r?\n/).map(JSON.parse);
-const [targetFile,outputFile,...flags]=process.argv.slice(2);
 const publish=flags.includes('--publish');
 const cases=flags.filter(flag=>flag.startsWith('--case=')).flatMap(flag=>flag.slice(7).split(','));
-assert.ok(targetFile&&outputFile&&flags.every(arg=>['--publish','--require-pass'].includes(arg)||arg.startsWith('--case=')),
- 'Usage: eval-commercial-web.mjs TARGETS.json REPORT.json [--case=COM-01,COM-02] [--publish] [--require-pass]');
-assert.ok(cases.every(id=>suite.some(item=>item.id===id)),'Unknown commercial case');
+assert.ok(targetFile&&outputFile&&flags.every(arg=>['--context','--publish','--require-pass'].includes(arg)||arg.startsWith('--case=')),
+ 'Usage: eval-commercial-web.mjs TARGETS.json REPORT.json [--context] [--case=...] [--publish] [--require-pass]');
+assert.ok(cases.every(id=>suite.some(item=>item.id===id)),'Unknown web chat case');
 assert.equal(process.env.DEMO_MODE,'true','Use an isolated synthetic demo');
 const targets=JSON.parse(await readFile(targetFile,'utf8'));
 const advisor=targets.advisor;
-assert.ok(advisor?.email&&advisor?.password,'Supply a synthetic advisor in the private target file');
+if(!sharedContext) assert.ok(advisor?.email&&advisor?.password,'Supply a synthetic advisor in the private target file');
 function loopback(value,protocols) {
   const url=new URL(value);
   assert.ok(['localhost','127.0.0.1','[::1]'].includes(url.hostname)&&protocols.includes(url.protocol),'Use a loopback target');
@@ -27,9 +29,15 @@ function loopback(value,protocols) {
 const cookie=response=>response.headers.getSetCookie().map(value=>value.split(';')[0]).join('; ');
 const chatPath='/api/v1/web-chat/';
 async function api(origin,path,data,session) {
-  const response=await fetch(new URL(path,origin), {method:data===undefined?'GET':'POST',redirect:'error',signal:AbortSignal.timeout(8000),
+  const send=()=>fetch(new URL(path,origin), {method:data===undefined?'GET':'POST',redirect:'error',signal:AbortSignal.timeout(8000),
     headers:{Origin:origin,...session?{Cookie:session}:{},...data===undefined?{}:{'Content-Type':'application/json'}},
     body:data===undefined?undefined:JSON.stringify(data)});
+  let response=await send();
+  if(sharedContext&&path===chatPath+'messages'&&response.status===429) {
+    await response.body?.cancel();
+    await delay(60_000-Date.now()%60_000+500);
+    response=await send();
+  }
   if(!response.ok) throw Error(`${path} HTTP ${response.status}`);
   return response;
 }
@@ -91,6 +99,46 @@ function verifyTurns(id,turns) {
 const handoffs=new Map([['COM-01','Claro Max 60 GB'],['COM-04','Claro Max Ilimitado'],['COM-05',null],
   ['COM-06','Claro Max 60 GB'],['COM-07',null],['COM-10','Conecta 42 GB']]);
 
+function verifyContextTurns(id,turns) {
+  const assertAnswer=(index,pattern)=>assert.match(turns[index].answer,pattern,`${id} turn ${index+1}`);
+  const imageRecovered=/imagen.*volvi[oó]|(?:volvi[oó]|vuelto).*imagen|imagen.*restableci[oó]/i;
+  assert.ok(turns.every(turn=>!turn.awaiting_advisor),'Topic changes must preserve self-service');
+  if(id==='CTX-01') {
+    assertAnswer(2,/Pospago.*Prepago/s);
+    assertAnswer(3,/Claro Max 60 GB.*69\.900/);
+    assert.equal(turns[4].selection?.name,'Claro Max 60 GB');
+    assertAnswer(5,/c[oó]digo.*error/i);
+    assertAnswer(6,/Mi Claro/i);
+    assertAnswer(7,/verifica/i);
+    assert.equal(turns[7].verified,false);
+    assert.equal(turns[9].verified,true);
+    assertAnswer(10,/retomar.*planes.*soporte.*facturaci[oó]n/i);
+    assertAnswer(11,imageRecovered);
+    assertAnswer(12,/venc|fecha l[ií]mite/i);
+    assert.deepEqual(turns.slice(11,14).map(turn=>turn.context?.active),['soporte_tecnico','facturacion','consulta_planes']);
+    assert.ok(turns.slice(11,14).every(turn=>turn.context?.transition==='retomar'));
+    assertAnswer(13,/Claro Max 60 GB incluye Claro Video/i);
+    assert.equal(turns[14].citations[0]?.version,'CAT-2026 v1.0');
+    assertAnswer(15,/Claro Max 60 GB.*69\.900/);
+  } else {
+    assertAnswer(2,/Hogar Fibra 300/i);
+    assertAnswer(3,/c[oó]digo.*error/i);
+    assertAnswer(4,/Mi Claro/i);
+    assertAnswer(5,/Pospago.*Prepago/s);
+    assertAnswer(6,/Claro Max 60 GB/);
+    assertAnswer(8,imageRecovered);
+    assertAnswer(9,/Claro Max 60 GB incluye Claro Video/i);
+    assertAnswer(10,/Claro Max 25 GB.*49\.900/);
+    assert.equal(turns[10].context?.transition,'corregir');
+    assert.equal(turns[10].selection?.name,'Claro Max 60 GB');
+    assertAnswer(12,/quieres contratar.*Claro Max 25 GB.*Claro Max 60 GB/i);
+  }
+}
+
+function redactFixtureInvoice(answer) {
+  return answer.replace(/\bF-\d+\b|\$\s*\d[\d.,]*|\b\d{1,2} de \w+ de \d{4}\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{4}-\d{2}\b/g,'[dato protegido]');
+}
+
 async function replay(item,target) {
   const origin=loopback(target.origin,['http:']).origin;
   const later=target.laterOrigin ? loopback(target.laterOrigin,['http:']).origin : origin;
@@ -105,7 +153,8 @@ async function replay(item,target) {
     assert.ok(session&&seed.conversation_id&&seed.messages.length===0,'Expected a fresh public conversation');
     const turns=[];
     let previous=seed;
-    for(const [index,text] of item.turns.entries()) {
+    for(const [index,utterance] of item.turns.entries()) {
+      const text=utterance==='[alias sintético del titular]'?'11111':utterance==='[código sintético de verificación]'?'135790':utterance;
       const endpoint=item.fixture==='edition-change'&&index>=2?later:origin;
       const after=await (await api(endpoint,chatPath+'messages',{text,idempotency_key:randomUUID()},session)).json();
       assert.equal(after.conversation_id,seed.conversation_id,'The edition transition must share platform state');
@@ -116,8 +165,12 @@ async function replay(item,target) {
       },'commercial response');
       previous=visible.current;
       const {rows:[state]}=await db.query("SELECT snapshot FROM attention_case WHERE snapshot->>'conversation_id'=$1",[seed.conversation_id]);
-      const selected=state?.snapshot?.conversation_memory?.selected_plan;
-      turns.push({turn:index+1,answer:visible.answer?.text??'',awaiting_advisor:previous.awaiting_advisor,
+      const context=state?.snapshot?.conversation_context;
+      const selected=(sharedContext ? context?.frames?.consulta_planes?.catalogue : state?.snapshot?.conversation_memory)?.selected_plan;
+      const answer=visible.answer?.text??'';
+      turns.push({turn:index+1,answer:item.id==='CTX-01'&&[9,12].includes(index)?redactFixtureInvoice(answer):answer,
+        awaiting_advisor:previous.awaiting_advisor,...sharedContext?{verified:previous.verification.stage==='verified',
+          context:context ? {active:context.active,transition:context.transition} : undefined}: {},
         citations:visible.answer?.citations?.map(item=>({id:item.id,version:item.version,source:item.source}))??[],
         selection:selected?{name:selected.name,price:selected.price,version:selected.citation.version}:undefined});
     }
@@ -127,11 +180,12 @@ async function replay(item,target) {
     const errors=[];
     let pdf=null, taken=false;
     try {
-      verifyTurns(item.id,turns);
+      if(sharedContext) verifyContextTurns(item.id,turns);
+      else verifyTurns(item.id,turns);
       assert.equal(before.waits,handoffs.has(item.id)?1:0);
       assert.equal(previous.awaiting_advisor,handoffs.has(item.id));
-      if(item.id==='COM-01'||item.id==='COM-03') {
-        const citation=turns[item.id==='COM-01'?5:0].citations[0];
+      if(['COM-01','COM-03','CTX-01'].includes(item.id)) {
+        const citation=turns[item.id==='COM-01'?5:item.id==='CTX-01'?14:0].citations[0];
         pdf=await checkPdf(origin,citation?.source,db);
         assert.equal(pdf.edition,'CAT-2026 v1.0');
       }
@@ -158,7 +212,15 @@ async function replay(item,target) {
       (SELECT count(*)::int FROM attention_event WHERE case_id=$1 AND (
         kind IN ('crm_read','crm_services_read','billing_read','billing_invoice_read','billing_invoice_detail_read','tickets_read','retention_read') OR
         kind LIKE 'tool.crm.%' OR kind LIKE 'tool.billing.%')) AS private_reads`,[row.id]);
-    assert.deepEqual(safety,{effects:0,private_reads:0},'Public commercial replay crossed the authorized boundary');
+    if(sharedContext) {
+      const {rows:[{before_verification}]}=await db.query(`SELECT COUNT(*)::int AS before_verification FROM attention_event event
+        WHERE event.case_id=$1 AND event.kind='billing_read' AND NOT EXISTS(
+        SELECT 1 FROM attention_event verified WHERE verified.case_id=event.case_id
+        AND verified.kind='holder_verified' AND verified.created_at<=event.created_at)`,[row.id]);
+      if(before_verification || safety.effects || safety.private_reads!==(item.id==='CTX-01' ? 2 : 0)) {
+        errors.push('Unexpected account reads or effects');
+      }
+    } else assert.deepEqual(safety,{effects:0,private_reads:0},'Unexpected account reads or effects');
     const {rows:runtime}=await db.query(`SELECT DISTINCT metadata->>'runtime_sha256' AS hash FROM attention_event
       WHERE case_id=$1 AND kind='agent_completed' AND metadata ? 'runtime_sha256'`,[row.id]);
     assert.ok(runtime.length<=1,'App switches must keep the same code build');
@@ -209,8 +271,8 @@ if(publish) {
     assert.deepEqual(stored.input,{turns:item.turns});
     assert.deepEqual(stored.expectedOutput,{intent:item.intent,required:item.required,forbidden:item.forbidden});
     const attributes=Object.entries({
-      'langfuse.environment':'demo-catalogue', 'langfuse.experiment.id':experiment,
-      'langfuse.experiment.name':`catalogo-web-${experiment.slice(0,8)}`, 'langfuse.experiment.dataset.id':dataset.id,
+      'langfuse.environment':sharedContext?'demo-context':'demo-catalogue', 'langfuse.experiment.id':experiment,
+      'langfuse.experiment.name':`${sharedContext?'contexto':'catalogo'}-web-${experiment.slice(0,8)}`, 'langfuse.experiment.dataset.id':dataset.id,
       'langfuse.experiment.item.id':itemId, 'langfuse.observation.type':'agent',
       'langfuse.experiment.metadata.runtime_sha256':row.runtime, 'langfuse.experiment.metadata.suite_sha256':suiteSha,
       'langfuse.experiment.metadata.prompt_revision':row.revision, 'langfuse.experiment.metadata.prompt_manifest_sha256':row.manifest_sha256,
@@ -224,7 +286,7 @@ if(publish) {
     attributes.push({key:'langfuse.experiment.item.root_observation_id',value:{stringValue:spanId}});
     const now=BigInt(Date.now())*1000000n;
     const result=await lf('otel/v1/traces',{resourceSpans:[{scopeSpans:[{scope:{name:'claro-catalogue-web'},spans:[{
-      traceId,spanId,name:`catalogue.${row.id}`,kind:1,startTimeUnixNano:String(now),endTimeUnixNano:String(now+1000000n),attributes
+      traceId,spanId,name:`${sharedContext?'context':'catalogue'}.${row.id}`,kind:1,startTimeUnixNano:String(now),endTimeUnixNano:String(now+1000000n),attributes
     }]}]}]});
     assert.equal(Number(result.partialSuccess?.rejectedSpans??result.partial_success?.rejected_spans??0),0,'Langfuse rejected spans');
   }

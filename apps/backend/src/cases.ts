@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { asksToChangeMobilePlan, catalogComparison, changesCancellationToPlan, claimedBillingAccount, commercialHandoff, contextIntent, evolveContext, mandatoryPolicyRoute, nextContextQuestion, recordQuestion, renderCaseSummary } from '@claro/agent';
+import { asksToChangeMobilePlan, catalogComparison, changesCancellationToPlan, claimedBillingAccount, commercialHandoff, contextIntent, evolveContext, interpretConversation, mandatoryPolicyRoute, nextContextQuestion, platformBillingContext, recordQuestion, renderCaseSummary, traceConversation } from '@claro/agent';
 import { ConflictException, ForbiddenException, ServiceUnavailableException, Inject, Injectable, NotFoundException, UnauthorizedException, HttpException, UnprocessableEntityException } from '@nestjs/common';
 import { type z } from 'zod';
 import {
@@ -169,6 +169,10 @@ async function revisionForTurn(tx: EntityManager, row: CaseRow): Promise<{revisi
   return {revision:candidate.revision,scenario};
 }
 
+function businessDate() {
+  return process.env.DEMO_MODE === 'true' ? (process.env.DEMO_BUSINESS_DATE || '2026-11-18') : new Date().toISOString().slice(0, 10);
+}
+
 export async function queueRun(tx: EntityManager, row: CaseRow, message = latestAnalyzable(row.snapshot), shadow = false,
   observedContext?:AgentTurn['observed_context']) {
   if (!message || message.actor === 'agente') return;
@@ -178,7 +182,7 @@ export async function queueRun(tx: EntityManager, row: CaseRow, message = latest
     run_id: randomUUID(), case_id: row.id, conversation_id: row.snapshot.conversation_id, turn_id: message.id,
     channel: row.snapshot.channel, actor: message.actor, turn_seq: message.turn_seq, case_revision: row.snapshot.revision,
     attention_mode: row.snapshot.attention_mode, audience: row.snapshot.attention_mode === 'asistido' ? 'asesor' : 'cliente',
-    scope_ref: scope, config_revision: revision, business_date: process.env.DEMO_MODE === 'true' ? (process.env.DEMO_BUSINESS_DATE || '2026-11-18') : new Date().toISOString().slice(0, 10),
+    scope_ref: scope, config_revision: revision, business_date: businessDate(),
     text: clearPersonalData(message.text), observed_context:observedContext
   });
   await tx.query('INSERT INTO agent_run VALUES ($1,$2,$3)', [turn.run_id, row.id, turn]);
@@ -595,7 +599,21 @@ export class Cases {
 
   private async customerTurn(tx: EntityManager, row: CaseRow, text: string) {
     const demo = process.env.DEMO_MODE === 'true';
+    const context=row.snapshot.conversation_context;
+    const reading=demo ? interpretConversation(text,context) : undefined;
     let requested = demo ? accountInquiry(text) : null;
+    let contextualBilling = false;
+    if (reading && !requested) {
+      const billingResumed=reading.resuming && reading.domain==='facturacion';
+      const billingActive=!reading.domain && context?.active==='facturacion';
+      const resumed=billingResumed ? accountInquiry(reading.text) : null;
+      if (resumed==='invoice' || resumed==='balance') requested=resumed;
+      const dueDate=/^[¿¡]?(?:y )?(?:cu[aá]ndo vence|(?:cu[aá]l es )?el vencimiento|hasta cu[aá]ndo (?:tengo|puedo) pagar)[.?!]*$/i;
+      if (!requested && (billingResumed || billingActive) && context?.frames.facturacion?.slots.consulta_cuenta && dueDate.test(reading.text)) {
+        requested='invoice';
+      }
+      contextualBilling=!!requested;
+    }
     let pending = demo ? this.pendingInquiry(row) : null;
     const lastMessage = row.snapshot.messages.at(-1);
     const handoff = requestedAdvisor(text) || (
@@ -609,7 +627,10 @@ export class Cases {
       requested='assistance';
       row.snapshot.handoff_reason='El cliente solicita cambiar su plan móvil.';
     }
-    if (pending==='identify' && !codes.length && !aliases.length && !isGreeting(text) && (requested || contextIntent(text))) {
+    const leavingBilling=(pending==='invoice' || pending==='balance') && !requested &&
+      (reading?.domain==='consulta_planes' || reading?.domain==='soporte_tecnico');
+    const leavingIdentification=pending==='identify' && (requested || contextIntent(text));
+    if ((leavingBilling || leavingIdentification) && !codes.length && !aliases.length && !isGreeting(text)) {
       pending=null;
       row.account_inquiry=null;
       this.clearChallenge(row);
@@ -681,7 +702,7 @@ export class Cases {
       return;
     }
     const intake=row.snapshot.intake;
-    if (demo && !pending && !handoff && row.snapshot.attention_mode==='autoservicio' && intake?.intent==='facturacion' && intake.facts.objetivo) {
+    if (demo && !pending && !handoff && !contextualBilling && row.snapshot.attention_mode==='autoservicio' && intake?.intent==='facturacion' && intake.facts.objetivo) {
       if (nextContextQuestion(intake) && !aliases.length) {
         await queueRun(tx,row,message,true);
         return;
@@ -722,6 +743,8 @@ export class Cases {
 
     if (requested && !pending) await queueIntentOnly(tx,row,message);
     row.account_inquiry = requested ?? pending;
+    const billingContext=!pending && !verificationTurn && (requested==='invoice'||requested==='balance')
+      ? this.recordBillingContext(row,message,(await revisionForTurn(tx,row)).revision,requested) : undefined;
     if (requested && requested !== 'assistance' && requested !== 'identify') row.intent_hint = requested === 'plans' ? 'consulta_planes' : requested === 'tickets' ? 'soporte_tecnico' : 'facturacion';
     const replaceContact = aliases.some(alias => alias.includes('@') || alias.length >= 10) ||
       (aliases.length > 0 && /\b(correo|tel[eé]fono|celular|contacto|mi n[uú]mero)\b/i.test(text) &&
@@ -734,7 +757,7 @@ export class Cases {
     this.clearChallenge(row);
     if (aliases.length !== 1) {
       await this.channelReply(tx,row,aliases.length > 1 ? 'Indícame un solo correo o teléfono de prueba.' :
-        accountVerificationPrompt);
+        accountVerificationPrompt,billingContext);
       return;
     }
     try {
@@ -747,14 +770,14 @@ export class Cases {
       row.account_challenge_id = randomUUID();
       row.account_challenge_expires_at = new Date(Date.now()+5*60*1000);
       await audit(tx,row.id,'demo_challenge_started',{channel:row.snapshot.channel});
-      await this.channelReply(tx,row,'Simulé el envío de un código. En modo demo, escribe cualquier número de seis dígitos.');
+      await this.channelReply(tx,row,'Simulé el envío de un código. En modo demo, escribe cualquier número de seis dígitos.',billingContext);
     } catch (error) {
       if (!(error instanceof SimulatorFailure)) throw error;
       await this.channelReply(tx,row,error.status === 404
         ? row.snapshot.channel === 'telegram'
           ? 'No encontré una coincidencia para este chat. Escribe el contacto de prueba asociado.'
           : 'No encontré ese contacto de prueba. Escribe de nuevo tu correo o número.'
-        : 'La verificación está temporalmente indisponible. Vuelve a escribir tu contacto en unos segundos.');
+        : 'La verificación está temporalmente indisponible. Vuelve a escribir tu contacto en unos segundos.',billingContext);
     }
   }
 
@@ -810,11 +833,11 @@ export class Cases {
     await this.channelReply(tx,row,reply);
   }
 
-  private async channelReply(tx: EntityManager,row: CaseRow,text: string) {
+  private async channelReply(tx: EntityManager,row: CaseRow,text: string, context?:{before:string;after:string}) {
     const previous = row.snapshot.messages.at(-1);
     const message = addMessage(row,'agente',text);
-    if (previous && publicDemoChatPair(row, previous, message)) {
-      await enqueue(tx,`chat-trace:${message.id}`,row.id,'chat_trace',{input_id:previous.id,output_id:message.id});
+    if (previous && (context || publicDemoChatPair(row, previous, message))) {
+      await enqueue(tx,`chat-trace:${message.id}`,row.id,'chat_trace',{input_id:previous.id,output_id:message.id,context});
     }
     if (row.snapshot.channel === 'telegram') {
       await enqueue(tx,`deliver:${message.id}`,row.id,'deliver',{
@@ -834,11 +857,24 @@ export class Cases {
       await audit(tx,row.id,inquiry === 'plans' ? 'crm_read' : inquiry === 'tickets' ? 'tickets_read' : 'billing_read',{
         scope:'demo_chat_account', ...(rendered ? {config_revision:active.revision,prompt_sha256:config?.prompt_metadata.account_answer?.sha256} : {})
       });
-      await this.channelReply(tx,row,prefix + (rendered || reply));
+      const input=latestAnalyzable(row.snapshot);
+      const context=input?.actor==='cliente' && (inquiry==='invoice' || inquiry==='balance')
+        ? this.recordBillingContext(row,input,config?.revision ?? 'platform',inquiry) : undefined;
+      await this.channelReply(tx,row,prefix + (rendered || reply),context);
     } catch (error) {
       if (!(error instanceof SimulatorFailure)) throw error;
       await this.channelReply(tx,row,prefix + 'La API de esta consulta está temporalmente indisponible. Puedes volver a preguntar o solicitar un asesor.');
     }
+  }
+
+  private recordBillingContext(row:CaseRow,input:Message,revision:string,inquiry:'invoice'|'balance') {
+    const before=row.snapshot.conversation_context;
+    const after=platformBillingContext(before,input.text,input.turn_seq,{channel:row.snapshot.channel,
+      business_date:businessDate(),config_revision:revision,verified:row.snapshot.verified,
+      awaiting_advisor:!!row.handoff_pending},inquiry);
+    row.snapshot.conversation_context=after;
+    row.snapshot.intake=after.frames.facturacion?.intake;
+    return {before:JSON.stringify(traceConversation(before)),after:JSON.stringify(traceConversation(after))};
   }
 
   private requireWebDemo() {

@@ -26,6 +26,22 @@ El worker NestJS consume el turno desde el outbox y publica eventos del run en P
 
 LangGraph determina el propósito con el turno, la memoria del caso y las reglas del dominio. Ante ambigüedad, pide una aclaración o deriva según la política. El clasificador clásico conserva su rol en sombra. Jev de TypeSafe actúa como juez de las evaluaciones.
 
+### Contexto compartido por sesión
+
+El orquestador recibe el historial anterior apto para análisis y el estado `conversation_context` del caso. Cada subgrafo recibe el mismo estado de LangGraph. Los turnos de verificación se excluyen del historial analizable. La plataforma guarda la versión 1 del contexto al publicar el turno vigente en PostgreSQL. Las conversaciones abiertas sin ese campo lo adquieren después de una respuesta de un dominio admitido.
+
+| Dominio | Qué puede conservar |
+| --- | --- |
+| Comercial | Modalidad, orden de las opciones mostradas, plan en consulta, plan elegido y edición de la fuente. El agente vuelve a consultar el catálogo vigente para confirmar condiciones y contratación. |
+| Soporte técnico | Equipo, código, síntoma, comprobaciones, pregunta pendiente y recuperación del servicio. Un síntoma o código nuevo reemplaza el diagnóstico anterior. |
+| Facturación | Tipo de consulta, objetivo y estados de los datos requeridos. El vencimiento de una factura se lee bajo la verificación de la plataforma. |
+
+Cada tema registra su intención, acción y entidades. Los slots se marcan como pendientes, inferidos o confirmados e indican su origen y turno. Los datos de verificación, espera de asesor, canal, fecha de negocio y revisión de configuración proceden de la plataforma. Al cambiar de tema, el orquestador actualiza el marco correspondiente. Al retomar uno, recupera su última pregunta o referencia. Si el cliente pide volver y hay varios temas posibles, formula una pregunta de aclaración. El cliente puede pasar a una consulta de catálogo o soporte mientras la verificación está pendiente. Al volver a la consulta de cuenta, se solicita la verificación necesaria.
+
+En Langfuse, abre **Sessions**, selecciona la conversación y busca la observación `conversation_context` en la traza del turno. **Input** muestra el estado anterior y **Output** el estado publicado. La vista incluye los temas guardados, transiciones, nombres de planes públicos, y estado, origen y turno de los slots. Los valores privados de facturación, códigos y alias de verificación quedan fuera de esa observación.
+
+La suite [`claro-contexto-conversacional-v1`](contexto-conversacional-evals.v1.jsonl) cubre 29 turnos en dos chats, referencias ordinales, cambio de tema, correcciones, retomadas y verificación. Usa el mismo juez nativo que las 15 llamadas y las 10 conversaciones de contratación. Importa la suite con `node --env-file=.env.demo.local scripts/bootstrap-langfuse-calls.mjs --context --dataset-only` y ejecuta `node apps/backend/scripts/eval-commercial-web.mjs TARGETS.json REPORT.json --context --publish --require-pass` con un demo sintético y su fixture `standard`. El reporte comprueba también la elección, las esperas, la edición del PDF y las lecturas autorizadas. Los dos puntajes nativos de Jev se consultan en el experimento publicado.
+
 La generación, el análisis de casos y los subagentes usan **OpenAI Responses API directamente**. Seleccionar perfiles por dificultad, calidad esperada, presupuesto y latencia. OpenRouter se usa solo para Jev. El lanzamiento fija modelos y límites en el manifiesto y registra ruta, proveedor, consumo y resultado en Langfuse. El cambio de modelo durante un turno respeta el presupuesto y el contexto autorizado. [Perfiles, límites y re-ranking](enrutamiento-y-reranking.md) · [TypeSafe en OpenRouter](https://openrouter.ai/typesafe) · [Modelos OpenAI](https://developers.openai.com/api/docs/models)
 
 ## Memoria y persistencia

@@ -68,10 +68,10 @@ const citationKey = ({ id, version }) => JSON.stringify([id, version]);
 
 async function replay(item, knowledge, config, approvedEvidence) {
   const messages = [], observations = [], outputs = [], evidence = [], calls = [];
-  let intake, conversation_memory, turnIndex = 0;
+  let intake, conversation_memory, conversation_context, turnIndex = 0;
   const privateRead = name => async () => { calls.push(name); return []; };
   const agent = createAgent({
-    readCaseForRun: async () => ({ verified: false, messages, pending: null, intake, conversation_memory }),
+    readCaseForRun: async () => ({ verified: false, messages, pending: null, intake, conversation_memory, conversation_context }),
     getAgentConfig: async () => config,
     getCustomerContext: privateRead('crm'), listServices: privateRead('services'),
     getBilling: privateRead('billing'), listInvoices: privateRead('invoices'),
@@ -95,6 +95,10 @@ async function replay(item, knowledge, config, approvedEvidence) {
     const citations = result.type === 'answer' ? result.citations : [];
     outputs.push({ route: result.route, type: result.type, answer, citations: citations.map(c => c.id) });
     evidence.push(...citations.filter(c => approvedEvidence.has(citationKey(c))).map(c => c.excerpt));
+    if (result.conversation_context) {
+      conversation_context = result.conversation_context;
+      intake = conversation_context.frames[conversation_context.active]?.intake;
+    }
     if (result.type === 'answer') {
       conversation_memory = result.route === 'consulta_planes' ? result.conversation_memory ?? conversation_memory : undefined;
       if (intake && result.context_question) recordQuestion(intake, result.context_question);

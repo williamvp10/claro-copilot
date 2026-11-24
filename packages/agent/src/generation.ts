@@ -3,7 +3,7 @@ import { publicReplyLimit } from './public-reply.js';
 
 export type Profile = 'economico' | 'intermedio' | 'complejo';
 export type AgentObservation = {
-  name: 'retrieval' | 'context' | 'decision.objectives' | 'decision.evidence' | 'generation.openai' | 'catalogue.selection' | 'advisor.handoff_summary' | 'effect' | `tool.${string}`;
+  name: 'retrieval' | 'context' | 'conversation_context' | 'decision.objectives' | 'decision.evidence' | 'generation.openai' | 'catalogue.selection' | 'advisor.handoff_summary' | 'effect' | `tool.${string}`;
   started: number;
   ended: number;
   metadata: Record<string, string | number>;

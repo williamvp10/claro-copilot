@@ -16,6 +16,8 @@ import { billingCycleReply, esimCompatibilityFilter, homePlanReply, mobilePlanTo
 import { advisorEscalationReply, advisorPromotionReply, mobileCommitmentQuestion, mobileCommitmentReply, portabilityTimingQuestion, retentionOptionsReply } from './policy-reply.js';
 import { catalogComparison, catalogComparisonAfterWithdrawal, catalogMemoryFromReply, catalogPlans, compareCatalog } from './catalogue.js';
 import { answerCommercial, commercialHandoff, commercialRequest, confirmCommercialPurchase, offerPrice } from './commercial.js';
+import { finishConversation, prepareConversation } from './conversation-context.js';
+export { interpretConversation, platformBillingContext, traceConversation } from './conversation-context.js';
 export { commercialHandoff } from './commercial.js';
 export { catalogComparison, catalogPlans } from './catalogue.js';
 export { asksToChangeMobilePlan, mobilePlanTopic } from './public-reply.js';
@@ -433,7 +435,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     return budget ? await budget.read({tool:'list_catalog_plans',agent:'comercial',step:'compare_catalogue',purpose,read}) ?? []
       : await withinDeadline(deadline,()=>read().catch(()=>[]),[]);
   }
-  const GraphState = Annotation.Root({ turn: Annotation<AgentTurn>(), caseState: Annotation<CaseState>(), intent: Annotation<Intent>(), profile: Annotation<Profile>(), publicPrompt: Annotation<string>(), prompts: Annotation<Record<string,string>>(), result: Annotation<RunResult>(), historyOnly:Annotation<boolean>(), objectives:Annotation<Intent[]>(), supportingCards:Annotation<Extract<RunResult,{type:'card'}>[]>(), deadline:Annotation<number>() });
+  const GraphState = Annotation.Root({ turn: Annotation<AgentTurn>(), caseState: Annotation<CaseState>(), context: Annotation<ReturnType<typeof prepareConversation>>(), intent: Annotation<Intent>(), profile: Annotation<Profile>(), publicPrompt: Annotation<string>(), prompts: Annotation<Record<string,string>>(), result: Annotation<RunResult>(), historyOnly:Annotation<boolean>(), objectives:Annotation<Intent[]>(), supportingCards:Annotation<Extract<RunResult,{type:'card'}>[]>(), deadline:Annotation<number>() });
   type Domain = 'soporte' | 'facturacion' | 'comercial';
   type CaseRead = 'crm.get_customer_context' | 'crm.list_services' | 'crm.list_recent_tickets' | 'crm.evaluate_retention'
     | 'billing.get_balance' | 'billing.list_invoices' | 'billing.get_invoice_detail';
@@ -761,13 +763,15 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
         agent_id:'copiloto',step_id:'load_case',history_count:history.length,
         first_turn_seq:history[0]?.turn_seq ?? 0,last_turn_seq:history.at(-1)?.turn_seq ?? 0
       }});
-      return { caseState, prompts:config.prompts, publicPrompt: config.prompts.public_answer ?? '', intent: recentPurpose(caseState.messages, turn) };
+      const context=prepareConversation(turn,caseState);
+      return {turn:context.turn,caseState:context.state,context,prompts:config.prompts,publicPrompt:config.prompts.public_answer ?? '',
+        intent:context.domain ?? recentPurpose(caseState.messages,turn)};
     })
-    .addNode('resolve_turn', ({ turn, caseState, prompts }) => {
+    .addNode('resolve_turn', ({ turn, caseState, prompts, context }) => {
       const started = Date.now();
       let intent = recentPurpose(caseState.messages, turn);
       const explicitIntent=contextIntent(turn.text);
-      const continuation=!explicitIntent && isPublicContinuation(turn) ? caseState.public_route : undefined;
+      const continuation=!explicitIntent ? context.domain ?? (isPublicContinuation(turn) ? caseState.public_route : undefined) : undefined;
       if (continuation) intent=continuation;
       if (turn.actor === 'cliente' && !accepted(turn.text) && tokens(turn.text).length > 2) {
         const activeOffer = intent === 'cancelacion' && !explicitIntent && has(turn.text,/\b(?:descuento|oferta)\b/);
@@ -833,6 +837,9 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
         ? card('soporte_tecnico','Falta precisar la necesidad del cliente.',[],[],['Objetivo de atención'],'Precisar qué desea resolver.',['unknown_objective'])
         : {type:'answer',answer:'¿Qué necesitas resolver sobre tus servicios de Claro?',citations:[],route:'indeterminada',needs_clarification:true} as RunResult
     }))
+    .addNode('clarify_context', ({context}) => ({result:{type:'answer',route:context.reading.ambiguous ? 'indeterminada' : 'consulta_planes',
+      answer:context.reading.ambiguous ? '¿Quieres retomar la consulta de planes, soporte o facturación?' : '¿Cuál de las opciones del catálogo quieres revisar?',
+      needs_clarification:true,citations:[]} as RunResult}))
     .addNode('catalogue_advice', async ({turn,caseState,deadline,prompts}) => {
       const comparison = comparisonFor(turn,caseState,Boolean(prompts.agent_objectives));
       if (!comparison) throw new Error('missing catalogue comparison');
@@ -941,11 +948,12 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       return {result:{type:'answer',answer,citations:[],route:intent,needs_clarification:true,context_question:next} as RunResult};
     })
     .addEdge(START, 'load_case')
-    .addConditionalEdges('load_case', ({ turn,caseState,prompts }) => {
+    .addConditionalEdges('load_case', ({ turn,caseState,prompts,context }) => {
       if (mandatoryPolicyRoute(policyText(turn,caseState)) || /hablar con (un |una )?(humano|asesor|persona)/.test(norm(turn.text))) return 'priority_handoff';
       if (turn.audience==='asesor' && turn.observed_context?.decision==='prepare_commercial_handoff') return 'priority_handoff';
       if (prompts.agent_objectives && turn.actor==='cliente' && caseState.pending_support_handoff && waitingForSupportVisit(turn.text)) return 'support_followup';
       if (needsLosDuration(turn.text)) return 'clarify_duration';
+      if (context.unresolved) return 'clarify_context';
       const commercial=commercialFor(turn,caseState);
       if (commercial && ['purchase','download','select'].includes(commercial.action)) return 'commercial_catalogue';
       if (comparisonFor(turn,caseState,Boolean(prompts.agent_objectives))) return 'catalogue_advice';
@@ -986,6 +994,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     .addEdge('support_followup', 'render_private_draft')
     .addEdge('clarify_duration', 'render_private_draft')
     .addEdge('context_question', END)
+    .addEdge('clarify_context', END)
     .addEdge('unresolved_objective', 'render_private_draft')
     .addConditionalEdges('catalogue_advice', ({result})=>result.type==='card' ? 'render_private_draft' : END)
     .addConditionalEdges('commercial_catalogue', ({result})=>result ? END : 'commercial')
@@ -1000,7 +1009,15 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const turn = TurnSchema.parse(input); const key = `run:${turn.run_id}`;
       const cached = await get(key); if (cached) return cached;
       const existing = inFlight.get(key); if (existing) return existing;
-      const task = (async () => { try { const result = ResultSchema.parse((await graph.invoke({turn,deadline:Date.now()+turnTimeoutMs})).result); await put(key, result); return result; } catch { return {type:'failed', reason:'agent_unavailable', route:'error'} as RunResult; } })();
+      const task = (async () => {
+        try {
+          const state=await graph.invoke({turn,deadline:Date.now()+turnTimeoutMs});
+          const context=finishConversation(state.context,state.result,turn);
+          const result=ResultSchema.parse({...state.result,...(context ? {conversation_context:context} : {})});
+          await put(key,result);
+          return result;
+        } catch { return {type:'failed',reason:'agent_unavailable',route:'error'} as RunResult; }
+      })();
       inFlight.set(key, task); try { return await task; } finally { inFlight.delete(key); readBudgets.delete(turn.run_id); }
     },
     async resume(input: RunResume) {

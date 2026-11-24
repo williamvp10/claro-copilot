@@ -23,6 +23,8 @@ function stepExchange({name,metadata}: AgentObservation): Record<string,string> 
   const io = (input:object, output:object) => ({
     'langfuse.observation.input':JSON.stringify(input), 'langfuse.observation.output':JSON.stringify(output)
   });
+  if (name==='conversation_context') return {'langfuse.observation.input':String(metadata.before),
+    'langfuse.observation.output':String(metadata.after)};
   if (metadata.step_id==='load_case') return io({source:'case_history'},
     {messages:metadata.history_count,first_turn:metadata.first_turn_seq,last_turn:metadata.last_turn_seq});
   if (metadata.step_id==='resolve_turn') return io({decision:metadata.decision,context_route:metadata.context_route},
@@ -88,7 +90,8 @@ export async function exportAgentSpan(turn: TraceTurn, started: number, route: s
       const metadata: Record<string,string|number> = {
         'langfuse.observation.type': externalModel ? 'generation'
           : item.name.startsWith('tool.') ? 'tool' : item.name === 'retrieval' ? 'retriever' : 'span',
-        ...Object.fromEntries(Object.entries(item.metadata).map(([key,value]) => [`claro.${key}`,value])),
+        ...Object.fromEntries(Object.entries(item.metadata).filter(([key])=>item.name!=='conversation_context' || key==='step_id')
+          .map(([key,value]) => [`claro.${key}`,value])),
         ...stepExchange(item)
       };
       if (item.name === 'tool.list_catalog_plans' || item.name === 'catalogue.selection') {
