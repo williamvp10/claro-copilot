@@ -100,6 +100,29 @@ test('a question about another row does not transfer its benefits to the selecte
  assert.match((await send('¿Qué incluye?')).answer,/Claro Max 60 GB.*Claro Video/);
 });
 
+test('continúa el catálogo desde las opciones mostradas y recuerda el plan consultado sin seleccionarlo', async()=>{
+ const mobile=makeDocument('mobile','Telefonía móvil pospago',standard[1].excerpt.replace('Ilimitados* $99.900 Música',
+  'Ilimitados* $99.900 Todo lo anterior + Claro Música + 10 GB de\nroaming en las Américas.\n* Plan Ilimitado: tras consumir 150 GB, la velocidad baja a 1 Mbps.'));
+ const {send,calls}=session([standard[0],mobile,standard[2]]);
+ await send('que planes ofrecen?');
+ await send('movil');
+ const detail=await send('que incluye el ilimitado?');
+ assert.equal(detail.route,'consulta_planes');
+ assert.match(detail.answer,/Claro Max Ilimitado.*99\.900.*Claro Video.*10 GB de roaming.*150 GB.*1 Mbps/s);
+ assert.deepEqual(detail.citations.map(x=>x.id),['mobile']);
+ assert.equal(detail.conversation_memory.selected_plan,undefined);
+ assert.equal(detail.conversation_memory.focused_plan.name,'Claro Max Ilimitado');
+ assert.match((await send('¿Y el roaming?')).answer,/Claro Max Ilimitado.*10 GB de roaming/);
+ assert.match((await send('¿Cuánto cuesta?')).answer,/Claro Max Ilimitado cuesta \$99\.900/);
+ assert.match((await send('Quiero contratarlo')).answer,/Cuál plan/);
+ assert.equal((await send('Me quedo con ese')).conversation_memory.selected_plan.name,'Claro Max Ilimitado');
+ assert.ok(calls.every(call=>call==='catalogue'));
+ const priceFirst=session();
+ await priceFirst.send('planes móviles');
+ await priceFirst.send('¿Cuánto cuesta el de 60 GB?');
+ assert.match((await priceFirst.send('¿Qué incluye?')).answer,/Claro Max 60 GB.*Claro Video/);
+});
+
 test('revalida una elección al cambiar la edición y pide una nueva confirmación', async()=>{
  const {send,replaceDocuments}=session();
  await send('Planes móviles');

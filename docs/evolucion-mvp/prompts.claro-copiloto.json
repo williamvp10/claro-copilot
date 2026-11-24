@@ -9,7 +9,7 @@
     "steps": [
       { "id": "load_case", "kind": "step", "mode": "code", "prompt_refs": [], "purpose": "Carga el turno, modo, titularidad, revisión del caso y manifiesto de prompts." },
       { "id": "apply_policy", "kind": "step", "mode": "code", "prompt_refs": [], "purpose": "Aplica reglas obligatorias de derivación, verificación de titularidad y elegibilidad de herramientas." },
-      { "id": "classify_turn", "kind": "step", "mode": "code", "prompt_refs": [], "purpose": "El orquestador determina la intención y el perfil a partir del turno, el contexto y las reglas de atención." },
+      { "id": "resolve_turn", "kind": "step", "mode": "code", "prompt_refs": [], "purpose": "El orquestador conserva la ruta del asunto activo en un seguimiento o elige una nueva cuando cambia la necesidad." },
       { "id": "route_turn", "kind": "step", "mode": "code", "prompt_refs": [], "purpose": "Valida la decisión y elige un subagente, una aclaración o una derivación." },
       { "id": "plan_objectives", "kind": "step", "mode": "openai_optional", "prompt_refs": ["agent_objectives"], "purpose": "Ordena objetivos a partir de señales categóricas. El grafo controla el acceso a evidencia y ejecuta las decisiones autorizadas." },
       { "id": "select_public_evidence", "kind": "step", "mode": "openai_optional", "prompt_refs": ["public_evidence_selector"], "purpose": "Puede desempatar entre pasajes públicos ya filtrados. La evidencia recuperada sigue siendo la fuente de la respuesta." },

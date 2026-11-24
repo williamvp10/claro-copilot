@@ -57,9 +57,25 @@ test('the orchestrator routes a billing turn using the case context',async()=>{
  const result=await createAgent(ports,{observe:(_,span)=>spans.push(span)}).run(turn({text:'¿Cuál es mi saldo pendiente?'}));
  assert.equal(result.route,'facturacion');
  assert.deepEqual(calls,['billing']);
- const step=spans.find(span=>span.metadata.step_id==='classify_turn');
+ const step=spans.find(span=>span.metadata.step_id==='resolve_turn');
  assert.equal(step?.metadata.decision,'orchestrator');
  assert.equal(step?.metadata.intent,'facturacion');
+});
+test('a public follow-up keeps the grounded subagent and a new domain can take over',async()=>{
+ const {ports}=fixture({verified:false});
+ ports.readCaseForRun=async()=>({messages:[],verified:false,pending:null,public_route:'portabilidad'});
+ ports.getAgentConfig=async()=>({revision:'v1',prompts:{agent_objectives:'Ordena los objetivos confirmados.'}});
+ const spans=[];
+ const run=createAgent(ports,{documents:[],observe:(_,span)=>spans.push(span)});
+ const context={audience:'cliente',attention_mode:'autoservicio'};
+ const followUp=await run.run(turn({...context,text:'¿Y cómo sigo con eso?'}));
+ assert.equal(followUp.route,'portabilidad');
+ assert.equal(followUp.needs_clarification,true);
+ assert.doesNotMatch(followUp.answer,/asesor/i);
+ const step=spans.find(span=>span.metadata.step_id==='resolve_turn');
+ assert.equal(step?.metadata.continuation,'yes');
+ const change=await run.run(turn({...context,run_id:'new-run',text:'Mi decodificador muestra E-202'}));
+ assert.equal(change.route,'soporte_tecnico');
 });
 test('OpenAI selector sends only signals and accepts only an authorized index',async()=>{
  const {createOpenAIEvidenceSelector}=await import('../dist/index.js');let body;
@@ -74,7 +90,7 @@ test('semantic evaluation blocks failed deterministic checks and does not promot
 test('priority handoff bypasses the orchestrator classification step',async()=>{
  const f=fixture();const spans=[];
  await createAgent(f.ports,{observe:(_,span)=>spans.push(span)}).run(turn({text:'Quiero hablar con un supervisor'}));
- assert.ok(!spans.some(span=>span.metadata.step_id==='classify_turn'));
+ assert.ok(!spans.some(span=>span.metadata.step_id==='resolve_turn'));
 });
 test('MCP read-only adapter sends a minimized query and accepts structured documents',async()=>{
  const {createKnowledgeMcpAdapter}=await import('../dist/index.js');const requests=[];
@@ -237,7 +253,7 @@ test('mandatory escalation is suggested before any model, tool or effect', async
   const agent=createAgent(f.ports,{observe:(_,span)=>spans.push(span)});
   const out=await agent.run(turn({text}));
   assert.equal(out.type,'card',text);assert.deepEqual(out.card.suggested_escalation,{destination,reason_code:reason},text);
-  assert.ok(!spans.some(span=>span.metadata.step_id==='classify_turn'),text);assert.deepEqual(f.calls,[],text);
+  assert.ok(!spans.some(span=>span.metadata.step_id==='resolve_turn'),text);assert.deepEqual(f.calls,[],text);
  }
 });
 test('LOS at ten minutes or without a duration does not assert the >10 minute policy', async () => {
@@ -251,7 +267,7 @@ test('duration supplied in the next turn completes the LOS escalation condition'
  const f=fixture({messages:[msg('La luz LOS está roja','cliente',1),msg('¿Cuántos minutos lleva roja?','asesor',2),msg('Hace 15 minutos','cliente',3)]});
  const spans=[];
  const out=await createAgent(f.ports,{observe:(_,span)=>spans.push(span)}).run(turn({turn_seq:3,text:'Hace 15 minutos'}));
- assert.equal(out.type,'card');assert.equal(out.card.suggested_escalation?.reason_code,'los_rojo_mas_de_10_minutos');assert.ok(!spans.some(span=>span.metadata.step_id==='classify_turn'));assert.deepEqual(f.calls,[]);
+ assert.equal(out.type,'card');assert.equal(out.card.suggested_escalation?.reason_code,'los_rojo_mas_de_10_minutos');assert.ok(!spans.some(span=>span.metadata.step_id==='resolve_turn'));assert.deepEqual(f.calls,[]);
 });
 
 test('WiFi change uses the three contiguous manual steps with their original citations',async()=>{

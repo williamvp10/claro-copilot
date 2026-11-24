@@ -23,11 +23,12 @@ function stepExchange({name,metadata}: AgentObservation): Record<string,string> 
   const io = (input:object, output:object) => ({
     'langfuse.observation.input':JSON.stringify(input), 'langfuse.observation.output':JSON.stringify(output)
   });
-  if (metadata.step_id==='classify_turn') return io({decision:metadata.decision}, {intent:metadata.intent,profile:metadata.profile});
+  if (metadata.step_id==='resolve_turn') return io({decision:metadata.decision,context_route:metadata.context_route},
+    {intent:metadata.intent,profile:metadata.profile,continuation:metadata.continuation});
   if (metadata.step_id==='plan_objectives') return io({primary:metadata.primary}, {objectives:metadata.objectives,investigated:metadata.investigated});
   if (name==='retrieval' && metadata.step_id==='retrieve_knowledge') return io({source:metadata.source,tags:metadata.tags,index:metadata.index_revision},
     {count:metadata.count,passages:metadata.top_5,attempts:metadata.attempts});
-  if (name==='catalogue.selection') return io({request:metadata.reference_resolution},
+  if (name==='catalogue.selection') return io({request:metadata.reference_resolution,context_route:metadata.context_route,focused:metadata.focused},
     {version:metadata.catalog_version,decision:metadata.decision,reason:metadata.reason});
   return {};
 }

@@ -667,7 +667,10 @@ export class Cases {
         : `${demoWelcome}${demo ? ` ${demoVerifyInvitation}` : ''} ¿En qué te puedo ayudar?`);
       return;
     }
-    if (requested && requested!=='identify' && !verificationTurn && !handoff) delete row.snapshot.conversation_memory;
+    if (requested && requested!=='identify' && !verificationTurn && !handoff) {
+      delete row.snapshot.conversation_memory;
+      delete row.snapshot.public_route;
+    }
     if (!verificationTurn && !(collectingCancellation && previousIntake && aliases.length)) {
       row.snapshot.intake=evolveContext(safeText,previousIntake);
     }

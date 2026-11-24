@@ -52,7 +52,7 @@ function citation(doc: KnowledgeDocument): Citation {
   const {id,title,excerpt,version,url,source}=doc;
   return {id,title,excerpt,version,...(url?{url}:{}),...(doc.scope==='public' && source?{source}:{})};
 }
-function classify(text: string): Intent {
+function classify(text: string): Intent | undefined {
   if (changesCancellationToPlan(text)) return 'consulta_planes';
   if (retentionPolicyQuery(text) || has(text, cancellationRequest)) return 'cancelacion';
   if (has(text, /convergencia|convergente|\b(telefonia|linea|movil) pospago\b/) && has(text, /hogar|plan|combinar|paquete/)) return 'consulta_planes';
@@ -61,7 +61,6 @@ function classify(text: string): Intent {
   if (has(text, /descuento|oferta/)) return 'consulta_planes';
   if (has(text, /\b(e-202|se cae|intermitencia|sin (?:internet|senal)|luces? del modem|fallas?)\b/)) return 'soporte_tecnico';
   if (has(text, /plan|fibra|precio|velocidad/)) return 'consulta_planes';
-  return 'soporte_tecnico';
 }
 function planConversation(turn: AgentTurn, messages: Message[]): AgentTurn & KnowledgeTurn {
   if (turn.audience !== 'cliente' || turn.actor !== 'cliente') return turn;
@@ -90,7 +89,12 @@ function planConversation(turn: AgentTurn, messages: Message[]): AgentTurn & Kno
 function recentPurpose(messages: Message[], turn: AgentTurn): Intent {
   const meaningful = messages.filter(m => m.actor === 'cliente' && m.turn_seq < turn.turn_seq).reverse()
     .find(m => !accepted(m.text) && (contextIntent(m.text) || has(m.text,alternativePlan)));
-  return classify(meaningful?.text ?? turn.text);
+  return classify(meaningful?.text ?? turn.text) ?? 'soporte_tecnico';
+}
+
+function isPublicContinuation(turn: AgentTurn) {
+  return turn.actor==='cliente' && turn.audience==='cliente' && turn.attention_mode==='autoservicio' &&
+    has(turn.text,/^\s*[¿¡]?(?:y\b|eso\b|(?:ese|esa|este|esta)\b|que (?:incluye|trae|hago|sigue)\b|como (?:funciona|lo hago|sigo)\b|cuanto (?:cuesta|tarda|dura)\b)/);
 }
 /** Sends only fixed categorical signals, never customer-authored text. */
 export function safeDecisionFeatures(text: string): string {
@@ -418,7 +422,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     const request=commercialRequest(turn.text,query.text,memory?.purchase_confirmation
       ? {...memory,purchase_confirmation:!!previous && previous.actor==='agente' && previous.text.includes(confirmCommercialPurchase)} : memory);
     // Legacy fixtures with prose-only catalogues still use the knowledge path.
-    if (request?.action==='list' && !options.knowledge?.catalog && !catalogPlans(options.documents ?? [],turn).length) return;
+    if (request && (request.action==='list' || request.action==='detail') && !options.knowledge?.catalog && !catalogPlans(options.documents ?? [],turn).length) return;
     return request;
   }
   async function readCatalogue(turn:AgentTurn, deadline:number, purpose:string) {
@@ -522,17 +526,17 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
         return {type:'answer',answer:'Entiendo que la imagen sigue sin volver. Si ya pasó el tiempo de espera indicado, puedo comunicarte con un asesor. ¿Quieres hablar con uno?',citations:[],route:intent};
       }
       const resolved=planConversation(turn,state.messages);
-      const selection=state.conversation_memory?.selected_plan;
-      const selectedDetail=selection && commercialFor(turn,state)?.action==='detail';
-      const query={...resolved,text:selectedDetail ? `${selection.name}. ${turn.text}` : resolved.text,intake:state.intake,deadline};
+      const detailFocus=state.conversation_memory?.focused_plan ?? state.conversation_memory?.selected_plan;
+      const scopedDetail=intent==='consulta_planes' && detailFocus && commercialFor(turn,state)?.action==='detail';
+      const query={...resolved,text:scopedDetail ? `${detailFocus.name}. ${turn.text}` : resolved.text,intake:state.intake,deadline};
       const objectives=Boolean(prompts.agent_objectives);
       const documents = await retrieve(query, profile, prompts, !objectives);
       const timing=prompts.agent_objectives && intent==='portabilidad' && portabilityTimingQuestion(turn.text);
       const compatibility = prompts.agent_objectives ? esimCompatibilityFilter(turn.text) : undefined;
       const applicable = documents.filter(doc => {
         if (compatibility) return compatibility(doc);
-        if (selectedDetail) return doc.type!=='catalogo' && !/^CAT-/.test(doc.version) &&
-          norm(doc.title+' '+doc.excerpt).includes(norm(selection.name));
+        if (scopedDetail) return doc.type!=='catalogo' && !/^CAT-/.test(doc.version) &&
+          norm(doc.title+' '+doc.excerpt).includes(norm(detailFocus.name));
         if (reconnectionCharge) return has(doc.excerpt,/\bcargo de reconexion\b/);
         if (intent !== 'portabilidad') return true;
         if (timing) return /^crc-portabilidad-\d+$/.test(doc.id) && has(doc.excerpt,/\bplazos\b.+\bvigencia del nip\b/);
@@ -543,6 +547,12 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
         return true;
       });
       const reply=await answerKnowledge(query,profile,publicPrompt,applicable,objectives,objectives ? prompts.public_evidence_selector ?? '' : undefined);
+      const continuing=intent===state.public_route && isPublicContinuation(turn) && !contextIntent(turn.text);
+      if ((scopedDetail || continuing) && (!reply || 'needsClarification' in reply && reply.needsClarification && !('contextField' in reply))) {
+        const answer=scopedDetail ? `No puedo confirmar ese detalle para ${detailFocus.name} con las fuentes vigentes. ¿Qué otra condición quieres revisar?`
+          : '¿Qué parte de lo que estábamos revisando quieres aclarar?';
+        return {type:'answer',answer,citations:[],route:intent,needs_clarification:true};
+      }
       if (!reply) return turn.audience === 'asesor'
         ? card(intent, 'No hay evidencia vigente suficiente.', [], [], ['Consultar fuente autorizada'], 'Solicitar información adicional o derivar.', ['missing_evidence'])
         : retentionPolicyQuery(turn.text)
@@ -747,12 +757,15 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       }
       return { caseState, prompts:config.prompts, publicPrompt: config.prompts.public_answer ?? '', intent: recentPurpose(caseState.messages, turn) };
     })
-    .addNode('classify', ({ turn, caseState, prompts }) => {
+    .addNode('resolve_turn', ({ turn, caseState, prompts }) => {
       const started = Date.now();
       let intent = recentPurpose(caseState.messages, turn);
+      const explicitIntent=contextIntent(turn.text);
+      const continuation=!explicitIntent && isPublicContinuation(turn) ? caseState.public_route : undefined;
+      if (continuation) intent=continuation;
       if (turn.actor === 'cliente' && !accepted(turn.text) && tokens(turn.text).length > 2) {
-        const activeOffer = intent === 'cancelacion' && !contextIntent(turn.text) && has(turn.text,/\b(?:descuento|oferta)\b/);
-        if (!activeOffer) intent = classify(turn.text);
+        const activeOffer = intent === 'cancelacion' && !explicitIntent && has(turn.text,/\b(?:descuento|oferta)\b/);
+        if (!activeOffer && !continuation) intent = classify(turn.text) ?? explicitIntent ?? intent;
       }
       const newPlan = changesCancellationToPlan(turn.text);
       if (newPlan) intent='consulta_planes';
@@ -769,7 +782,8 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       else if (caseState.intake?.intent==='soporte_tecnico' && ['Lentitud','E-202','Luz LOS roja','Cortes en videollamadas'].includes(caseState.intake.facts.sintoma ?? '')) intent='soporte_tecnico';
       const profile: Profile = caseState.verified && turn.audience==='asesor' ? 'intermedio' : 'economico';
       options.observe?.(turn.run_id,{name:'context',started,ended:Date.now(),metadata:{
-        agent_id:'copiloto',step_id:'classify_turn',decision:'orchestrator',intent,profile
+        agent_id:'copiloto',step_id:'resolve_turn',decision:'orchestrator',intent,profile,
+        context_route:caseState.public_route ?? '',continuation:continuation===intent ? 'yes' : 'no'
       }});
       return { intent, profile };
     })
@@ -843,6 +857,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const result=answerCommercial(request,plans,caseState.conversation_memory);
       options.observe?.(turn.run_id,{name:'catalogue.selection',started,ended:Date.now(),metadata:{
         agent_id:'comercial',step_id:'compare_catalogue',tool_id:'list_catalog_plans',reference_resolution:request.action,
+        context_route:caseState.public_route ?? '',focused:caseState.conversation_memory?.focused_plan ? 'yes' : 'no',
         catalog_version:result?.type==='answer' ? result.citations[0]?.version ?? 'unavailable' : 'unavailable',
         decision:result?.type ?? 'documentary_fallback',reason:plans.length ? 'reviewed_catalogue' : 'unconfirmed_catalogue'
       }});
@@ -910,7 +925,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     .addNode('billing', billingGraph)
     .addNode('commercial', commercialGraph)
     .addNode('context_question', async ({turn,intent,caseState,prompts})=>{
-      const next=nextContextQuestion(caseState.intake);
+      const next=caseState.intake?.intent===intent ? nextContextQuestion(caseState.intake) : undefined;
       if (!next) throw new Error('missing context question');
       const at=Date.now();
       options.observe?.(turn.run_id,{name:'context',started:at,ended:at,metadata:{decision:'ask',question_id:next.id,agent_id:'copiloto'}});
@@ -928,16 +943,17 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const commercial=commercialFor(turn,caseState);
       if (commercial && ['purchase','download','select'].includes(commercial.action)) return 'commercial_catalogue';
       if (comparisonFor(turn,caseState,Boolean(prompts.agent_objectives))) return 'catalogue_advice';
-      return commercial ? 'commercial_catalogue' : 'classify';
+      return commercial ? 'commercial_catalogue' : 'resolve_turn';
     })
-    .addEdge('classify', 'plan_objectives')
+    .addEdge('resolve_turn', 'plan_objectives')
     .addConditionalEdges('plan_objectives', ({turn,intent,caseState,prompts}) => {
       const publicPolicy=prompts.agent_objectives && (asksReconnectionCharge(turn.text) || portabilityTimingQuestion(turn.text) ||
         !caseState.verified && turn.channel==='telegram' && intent==='facturacion' && claimedBillingAccount(turn.text));
       if (prompts.agent_objectives && !publicPolicy && !retentionPolicyQuery(turn.text) && !caseState.intake && !contextIntent(turn.text)
+          && !(caseState.public_route===intent && isPublicContinuation(turn))
           && !has(turn.text,/\b(?:declarar renta|declaracion de renta|cotizacion bursatil|bolsa de valores|criptomoneda)\b/)
           && !has(turn.text,/\b(?:plan|fibra|precio|empresa|servicio|contrato|e-?sim|roaming|descuento|oferta|portabilidad|pqr|reclamo|velocidad|internet|senal|factur\w*)\b/)) return 'unresolved_objective';
-      const next=nextContextQuestion(caseState.intake);
+      const next=caseState.intake?.intent===intent ? nextContextQuestion(caseState.intake) : undefined;
       if (turn.audience==='cliente' && !publicPolicy && next && ['codigo','medio','cable','cargo','pago','direccion','tramite'].includes(next.id)) return 'context_question';
       return intent === 'facturacion' ? 'billing' : intent === 'soporte_tecnico' ? 'support' : 'commercial';
     })

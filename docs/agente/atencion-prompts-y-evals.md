@@ -209,6 +209,8 @@ El recorrido pregunta qué incluye Claro Max Ilimitado, consulta si puede cambia
 
 ## Catálogo y contratación por chat
 
+El orquestador conserva la ruta de la última respuesta pública respaldada o aclaración del caso. Una pregunta de seguimiento usa ese contexto y una solicitud explícita de otro dominio cambia la ruta. En catálogo, el plan consultado sirve de referencia para preguntas posteriores. La elección de compra se guarda cuando el cliente selecciona el plan. Si falta un dato para seguir, el subagente pide una aclaración sobre el asunto en curso.
+
 El flujo comercial distingue exploración, listado, detalle, comparación, selección, descarga y contratación. LangGraph usa `list_catalog_plans` para responder a partir de las filas públicas vigentes. Para una pregunta sobre condiciones, busca información aplicable al plan seleccionado. La memoria guarda la elección y su cita hasta que cambie el objetivo. El consentimiento para seguir con un asesor tras un cambio de edición exige la confirmación del turno correspondiente. El worker publica una espera y la toma del caso genera una ficha privada para completar el trámite. [Prompts candidatos](../evolucion-mvp/prompts.candidata-catalogo.json)
 
 ### Suite COM y datos de prueba

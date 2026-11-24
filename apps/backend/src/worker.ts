@@ -5,7 +5,7 @@ import { setTimeout as wait } from 'node:timers/promises';
 import { Logger, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { createAgent, isModelObservation, recordQuestion, type AgentObservation } from '@claro/agent';
-import { RunResult, type AgentTurn, type Citation, type RunResume } from '@claro/contracts';
+import { Intent, RunResult, type AgentTurn, type Citation, type RunResume } from '@claro/contracts';
 import { createClient } from 'redis';
 import type { DataSource } from 'typeorm';
 import { audit, createDatabase, enqueue, type CaseJob } from './database.js';
@@ -115,6 +115,12 @@ async function project(turn: AgentTurn, result: RunResult) {
       }
       if (result.type==='answer' && result.conversation_memory) row.snapshot.conversation_memory=result.conversation_memory;
       if (result.route!=='consulta_planes') delete row.snapshot.conversation_memory;
+      const publicRoute=Intent.safeParse(result.route);
+      if (result.type==='answer' && publicRoute.success && (result.citations.length || result.context_question)) {
+        row.snapshot.public_route=publicRoute.data;
+      } else if (result.type==='handoff' || row.snapshot.public_route!==result.route) {
+        delete row.snapshot.public_route;
+      }
       if (result.type==='answer' && result.catalog_answer && result.citations.length && isLegacyKnowledgeWait(row)) {
         row.handoff_pending=null;
         delete row.snapshot.handoff_reason;

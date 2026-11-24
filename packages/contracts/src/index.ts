@@ -36,6 +36,7 @@ export const ConversationMemory = z.object({
   offered_segments: z.array(CatalogSegment).min(1).max(3).optional(),
   preference: z.literal('lower_price').optional(), pending: z.literal('compare_prices').optional(), package_validity: PackageValidity.optional(),
   selected_plan: CatalogPlan.optional(),
+  focused_plan: CatalogPlan.pick({name:true,segment:true}).optional(),
   purchase_confirmation: z.boolean().optional()
 });
 export type ConversationMemory = z.infer<typeof ConversationMemory>;
@@ -141,6 +142,7 @@ export const CaseSnapshot = CaseSummary.extend({
   handoff_reason: z.string().max(300).optional(),
   intake: CaseIntake.optional(),
   conversation_memory: ConversationMemory.optional(),
+  public_route: Intent.optional(),
   messages: z.array(Message), card: AdvisorCard.nullable(), cursor: z.number().int().nonnegative()
 });
 export type CaseSnapshot = z.infer<typeof CaseSnapshot>;
@@ -200,7 +202,7 @@ export class TransientReadError extends Error {
   constructor() { super('Read source temporarily unavailable'); }
 }
 export interface AgentPorts {
-  readCaseForRun(runId: string): Promise<{ messages: Message[]; verified: boolean; pending: string | null; intake?: CaseIntake; conversation_memory?: ConversationMemory; confirmed_receipts?: ConfirmedReceipt[]; pending_support_handoff?: boolean }>;
+  readCaseForRun(runId: string): Promise<{ messages: Message[]; verified: boolean; pending: string | null; intake?: CaseIntake; conversation_memory?: ConversationMemory; public_route?: Intent; confirmed_receipts?: ConfirmedReceipt[]; pending_support_handoff?: boolean }>;
   getAgentConfig(revision: string): Promise<AgentConfig>;
   getCustomerContext(runId: string): Promise<Fact[]>;
   listServices?(runId: string): Promise<Fact[]>;

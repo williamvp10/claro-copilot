@@ -11,11 +11,16 @@ type Action = 'list' | 'select' | 'price' | 'detail' | 'download' | 'purchase';
 export type CatalogRequest = { action: Action; query: string; groups: CatalogSegment[] };
 
 const categoryReply = /^(?:(?:me interesa |prefiero |quiero (?:ver )?|busco |opciones (?:de|para) ))?(?:(?:el|la|los|las|un|una) )?(?:planes? )?(?:(?:de|para) )?(?:(?:mi|el|la) )?(?:(?:telefonia |linea )?movil(?:es)?(?: (?:pospago|prepago))?|celular(?:es)?|(?:internet (?:para (?:el |la |mi )?)?)?(?:hogar|casa)|(?:internet de )?fibra|pospago|prepago|recargas?)(?:,? por favor)?$/;
+const overview = /^(?:y )?(?:(?:dime|cuentame) )?que (?:incluye|trae|tiene|beneficios (?:incluye|tiene))\b\s*(.*)$/;
+const featureQuestion = /^(?:(.*?) )?(?:incluye|trae|tiene|cuenta con) (.+)$/;
+const detailFollowUp = /^(?:y )?(?:(?:el|la|los|las) )?(roaming|velocidad|vigencia|condiciones|beneficios)$/;
+const detailAlias = /^(?:(?:el|la) )?(?:(?:plan|paquete) )?(?:de )?(?:ilimitad[oa]|\d+\s*(?:gb|mbps)|semanal|mensual|diario)$/;
 
 export function commercialRequest(text: string, contextualText: string, memory?: ConversationMemory): CatalogRequest | undefined {
   const query = clean(text);
   const reply = clean(contextualText);
   if (/\b(?:mi saldo|mi mora|mis? facturas?|mi plan actual|mis servicios|que plan tengo|plan contratado)\b/.test(query)) return;
+  if (/\b(?:e-?202|no funciona|se cae|sin senal|sin internet|quiero cancelar|dar de baja)\b/.test(query)) return;
   const mobile = /\b(?:movil(?:es)?|celular(?:es)?|pospago|prepago|recargas?)\b/;
   const home = /\b(?:hogar|casa|fibra)\b/;
   const prepaid = /\b(?:prepago|recargas?)\b/.test(reply);
@@ -37,17 +42,41 @@ export function commercialRequest(text: string, contextualText: string, memory?:
     !/\b(?:saber|conocer|comparar)\b/.test(query) &&
     /^(?:(?:si,? )?me (?:quedo con|interesa|gusta) |elijo |prefiero |escojo |selecciono |(?:el|la) de |(?:ese|esa|este|esta)(?: plan| paquete)?$)/.test(query)) return request('select');
   const price = /\b(?:precio|cuesta|cuestan|cuanto vale|cuanto valen|valor mensual)\b/;
-  const hasCommercialSubject = memory?.selected_plan || groups.length || /\b(?:plan|paquete|catalogo|gb|mbps)\b/.test(query);
+  const hasCommercialSubject = memory?.focused_plan || memory?.selected_plan || memory?.offered_segments?.length || groups.length ||
+    /\b(?:plan|paquete|catalogo|gb|mbps|ilimitad[oa])\b/.test(query);
   if (hasCommercialSubject && price.test(query)) return request('price');
-  if (memory?.selected_plan && /\b(?:incluy\w*|trae|benefici\w*|tiene|vigencia|dura)\b/.test(query)) return request('detail');
+  if (hasCommercialSubject && (overview.test(query) || featureQuestion.test(query) || detailFollowUp.test(query))) return request('detail');
 }
 
 const money = (price: number) => '$' + new Intl.NumberFormat('es-CO').format(price);
 export const offerPrice = (plan: CatalogPlan) => plan.validity ? `${money(plan.price)} por ${plan.validity}` : `${money(plan.price)} al mes`;
 const reference = (plan: CatalogPlan) => `${plan.citation.id}\0${plan.citation.version}`;
 const citations = (plans: CatalogPlan[]): Citation[] => [...new Map(plans.map(plan => [reference(plan), plan.citation])).values()];
-function sameProduct(left: CatalogPlan, right: CatalogPlan) {
+function sameProduct(left: CatalogPlan, right: Pick<CatalogPlan,'name'|'segment'>) {
   return left.segment === right.segment && clean(left.name) === clean(right.name);
+}
+
+function publishedDetails(plan: CatalogPlan, plans: CatalogPlan[]) {
+  const rows = plan.citation.excerpt.split('\n');
+  const boundaries = rows.map((line,index)=>({line:line.trim(),index}));
+  const entries = plans.filter(item=>item.segment===plan.segment && reference(item)===reference(plan))
+    .map(item=>({item,index:rows.findIndex(line=>clean(line).startsWith(clean(item.name)+' '))}))
+    .filter(item=>item.index>=0).sort((a,b)=>a.index-b.index);
+  const benefits: string[] = [];
+  for (const entry of entries) {
+    const end = boundaries.find(({line,index})=>index>entry.index && (/\$[\d.]+|^(?:[•*]|\d+\.)/.test(line) || !line))?.index ?? rows.length;
+    const row = rows.slice(entry.index,end).join(' ').replace(/\s+/g,' ');
+    const description = row.replace(/^.*?\$[\d.]+\s*/, '').trim();
+    if (!/^Todo lo anterior\b/i.test(description)) benefits.length = 0;
+    benefits.push(...description.replace(/^Todo lo anterior\s*\+\s*/i,'').split(/\s+\+\s+|\.\s+/).map(text=>text.replace(/[.!?]$/u,'').trim()).filter(Boolean));
+    if (!sameProduct(entry.item,plan)) continue;
+    const starred = entries.filter(item=>rows[item.index]?.includes('*'));
+    const notes = boundaries.filter(({line})=>line.startsWith('*'));
+    const noteIndex = starred.length===1 && starred[0]?.index===entry.index && notes.length===1 ? notes[0]?.index : undefined;
+    const condition = noteIndex===undefined ? '' : rows.slice(noteIndex).join(' ').replace(/^\*\s*[^:]{1,80}:\s*/,'').match(/^[^.]+\./)?.[0] ?? '';
+    return {benefits,condition};
+  }
+  return {benefits:[],condition:''};
 }
 
 function matchingDescription(query: string, plans: CatalogPlan[]) {
@@ -76,6 +105,7 @@ export function answerCommercial(request: CatalogRequest, plans: CatalogPlan[], 
   const scoped = plans.filter(plan => !groups.length || groups.includes(plan.segment));
   const answer = (text: string, used: CatalogPlan[], next = memory): RunResult => ({ type:'answer', route:'consulta_planes',
     answer:text, citations:citations(used), conversation_memory:next, ...(used.length ? {catalog_answer:true} : {}) });
+  const focusOn = (plan: CatalogPlan): ConversationMemory => ({...memory,focused_plan:{name:plan.name,segment:plan.segment}});
   const remember = (plan: CatalogPlan, confirmation = false): ConversationMemory => ({
     segment:plan.segment, anchor_plan:clean(plan.name), selected_plan:plan, purchase_confirmation:confirmation
   });
@@ -110,18 +140,27 @@ export function answerCommercial(request: CatalogRequest, plans: CatalogPlan[], 
       : answer('El PDF del catálogo no está disponible para esta consulta.', []);
   }
   // A full published name can change the topic. Short descriptions refer to the options shown.
-  const named = action === 'detail' ? [] : scoped.filter(plan => (` ${words(query)} `).includes(` ${words(plan.name)} `));
+  const overviewQuestion = action==='detail' ? query.match(overview) : null;
+  const feature = action==='detail' && !overviewQuestion ? query.match(featureQuestion) : null;
+  const target = action==='detail' ? overviewQuestion?.[1] ?? (feature?.[1]==='y' ? '' : feature?.[1] ?? '') : query;
+  const named = scoped.filter(plan => (` ${words(target)} `).includes(` ${words(plan.name)} `));
   const offered = !groups.length ? memory?.offered_segments : undefined;
   const references = offered ? scoped.filter(plan=>offered.includes(plan.segment)) : scoped;
-  const options = named.length || action === 'detail' ? named : matchingDescription(query, references);
+  const options = named.length || action==='detail' && !detailAlias.test(target) ? named : matchingDescription(target, references);
   const currentSelection = selected && scoped.find(plan => sameProduct(plan, selected));
+  const focus = memory?.focused_plan;
+  const currentFocus = focus && scoped.find(plan=>sameProduct(plan,focus));
   const refersToOne = /\b(?:ese|esa|este|esta)\b/.test(query);
   const anchor = refersToOne && memory?.anchor_plan ? references.find(plan=>clean(plan.name)===memory.anchor_plan) : undefined;
   const current = options.length === 1 ? options[0] : options.length ? undefined
-    : action === 'select' ? refersToOne ? currentSelection ?? anchor : undefined
-      : action === 'detail' || !/\b(?:\d+\s*(?:gb|mbps)|ilimitad[oa])\b/.test(query) ? currentSelection : undefined;
+    : action === 'select' ? refersToOne ? currentFocus ?? currentSelection ?? anchor : undefined
+      : action === 'detail' ? !target || /^(?:ese|esa|este|esta)(?: plan| paquete)?$/.test(target) ? currentFocus ?? currentSelection : undefined
+      : !/\b(?:\d+\s*(?:gb|mbps)|ilimitad[oa])\b/.test(query) ? action==='price' ? currentFocus ?? currentSelection : currentSelection : undefined;
   if (options.length > 1) return answer(`Encontré más de una opción. ¿Te refieres a ${options.slice(0,4).map(plan=>plan.name).join(' o ')}?`, options);
   if (action === 'purchase') {
+    if (!options.length && currentFocus && currentSelection && !sameProduct(currentFocus,currentSelection)) {
+      return answer(`¿Quieres contratar ${currentFocus.name} o ${currentSelection.name}?`, [currentFocus,currentSelection]);
+    }
     if (!current && selected) {
       const alternatives = scoped.filter(plan => plan.segment === selected.segment);
       return answer(`Ya no puedo confirmar ${selected.name} en el catálogo vigente. ¿Quieres elegir otra opción o hablar con un asesor?`, alternatives, {});
@@ -137,20 +176,22 @@ export function answerCommercial(request: CatalogRequest, plans: CatalogPlan[], 
     return current ? answer(`Elegiste ${current.name}, por ${offerPrice(current)}. Puedes preguntarme por sus condiciones o decirme si quieres contratarlo.`, [current], remember(current))
       : answer('¿Cuál es el nombre del plan que te interesa?', scoped);
   }
-  if (action === 'price') return current ? answer(`${current.name} cuesta ${offerPrice(current)}.`, [current]) : undefined;
-  if (action === 'detail' && current) {
-    const feature = query.match(/^(?:incluye|trae|tiene)\s+([\p{L}\p{N}][\p{L}\p{N} +\-]{1,60})$/u)?.[1];
-    const rows = current.citation.excerpt.split('\n');
-    const row = rows.findIndex(line=>clean(line).startsWith(clean(current.name)+' '));
-    if (row >= 0) {
-      const following = rows.slice(row + 1).findIndex(line => /\$[\d.]+|^\s*(?:[•*]|\d+\.)/.test(line));
-      const details = rows.slice(row, following >= 0 ? row + following + 1 : row + 4).join(' ').replace(/\s+/g,' ');
-      const index = feature ? normalize(details).indexOf(feature) : -1;
-      if (feature && index >= 0) return answer(`Sí. ${current.name} incluye ${details.slice(index,index+feature.length)} según el catálogo vigente.`, [current]);
-      const included = details.replace(/^.*?\$[\d.]+\s*/, '').replace(/^Todo lo anterior\s*\+\s*/i,'').trim();
-      if (/^(?:que|cuales son los|dime que)\s+(?:incluye|trae|tiene|beneficios)\b/.test(query) && included && included.length<=220) {
-        return answer(`Entre los beneficios de ${current.name}, el catálogo menciona ${included.replace(/[.!?]$/u,'')}.`, [current]);
-      }
+  if (action === 'price') return current ? answer(`${current.name} cuesta ${offerPrice(current)}.`, [current], focusOn(current)) : undefined;
+  if (action === 'detail') {
+    if (!current) return memory?.offered_segments?.length ? answer('¿De cuál de los planes que te mostré quieres conocer los detalles?', []) : undefined;
+    const next = focusOn(current);
+    const {benefits,condition} = publishedDetails(current,plans);
+    const subject = feature?.[2] ?? query.match(detailFollowUp)?.[1];
+    if (subject && !/^(?:beneficios|condiciones)$/.test(subject)) {
+      const included = benefits.find(part=>normalize(part).includes(subject));
+      if (included) return answer(`Sí. ${current.name} incluye ${included} según el catálogo vigente.`, [current], next);
+      if (condition && normalize(condition).includes(subject)) return answer(`${current.name}. ${condition}`, [current], next);
+      if (subject==='vigencia' && current.validity) return answer(`${current.name} tiene una vigencia de ${current.validity}.`, [current], next);
+      return undefined;
     }
+    const included = benefits.join(', ');
+    const allowance = /^ilimitados?$/i.test(current.allowance) ? 'datos ilimitados' : current.allowance;
+    const details = `${current.name} cuesta ${offerPrice(current)} y ofrece ${allowance}.${included ? ` Incluye ${included}.` : ''}${condition ? ` ${condition}` : ''}`;
+    return answer(details, [current], next);
   }
 }
