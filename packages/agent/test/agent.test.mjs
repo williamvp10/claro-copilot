@@ -53,11 +53,38 @@ test('plans guidance uses the active catalogue and follows the prior question on
 
 test('Jev receives only fixed categorical features and rejects uncertain decisions',async()=>{
  const {createJevDecisionAdapter}=await import('../dist/index.js');let body;
+ const observed=[];
  const probabilities={soporte_tecnico:0.01,facturacion:0.9,consulta_planes:0.01,cancelacion:0.02,portabilidad:0.02,fuera_de_alcance:0.02,indeterminada:0.02};
- const fake=async(_url,init)=>{body=JSON.parse(init.body);return new Response(JSON.stringify({model:'typesafe/jev-1.14-20261101',answers:{intencion:{type:'choice',choice:'facturacion',probabilities},complejidad:{type:'choice',choice:'simple',probabilities:{simple:0.85,intermedia:0.05,compuesta:0.05,indeterminada:0.05}}}}),{status:200})};
- const adapter=createJevDecisionAdapter({apiKey:'test',model:'typesafe/jev-1.14',fetch:fake});const result=await adapter.classify('Mi factura de María 3101234567 maria@example.com');
+ const fake=async(_url,init)=>{body=JSON.parse(init.body);return Response.json({
+   id:'gen-dec-opaque',model:'typesafe/jev-1.14-20261101',usage:{input_tokens:476,output_tokens:70,cost:0.000019992},
+   answers:{intencion:{type:'choice',choice:'facturacion',probabilities,confidence:0.67},
+     complejidad:{type:'choice',choice:'simple',probabilities:{simple:0.85,intermedia:0.05,compuesta:0.05,indeterminada:0.05}}}
+ });};
+ const adapter=createJevDecisionAdapter({apiKey:'test',model:'typesafe/jev-1.14',fetch:fake});
+ const result=await adapter.classify('Mi factura de María 3101234567 maria@example.com',undefined,metadata=>observed.push(metadata));
  assert.equal(result.intent,'facturacion');assert.equal(body.state.senales,'facturacion');assert.doesNotMatch(JSON.stringify(body),/María|3101234567|example.com/);
- const uncertain=createJevDecisionAdapter({apiKey:'test',model:'typesafe/jev-1.14',fetch:async()=>new Response(JSON.stringify({model:'typesafe/jev-1.14',answers:{intencion:{type:'choice',choice:'facturacion',probabilities:{...probabilities,facturacion:0.3}}}}))});assert.equal(await uncertain.classify('factura'),null);
+ const [call]=observed;
+ assert.equal(call.provider_request_id,'gen-dec-opaque');
+ assert.equal(call.model,'typesafe/jev-1.14-20261101');
+ assert.equal(call.cost_usd,0.000019992);
+ assert.equal(call.input_tokens,476);
+ assert.equal(call.output_tokens,70);
+ assert.equal(call.intent_confidence,0.67);
+ assert.equal(call.intent_probability,0.9);
+ assert.deepEqual(JSON.parse(call.intent_probabilities),probabilities);
+ assert.doesNotMatch(JSON.stringify(call),/María|3101234567|example.com/);
+ const uncertain=createJevDecisionAdapter({apiKey:'test',model:'typesafe/jev-1.14',fetch:async()=>Response.json({
+   model:'typesafe/jev-1.14',usage:{cost:0.000021},answers:{intencion:{type:'choice',choice:'facturacion',
+     probabilities:{...probabilities,soporte_tecnico:0.30,facturacion:0.61}}}
+ })});
+ assert.equal(await uncertain.classify('factura',undefined,metadata=>observed.push(metadata)),null);
+ assert.equal(observed[1].provider_status,'abstained');
+ assert.equal(observed[1].cost_usd,0.000021);
+ assert.equal(observed[1].input_tokens,undefined);
+ const throttled=createJevDecisionAdapter({apiKey:'test',model:'typesafe/jev-1.14',fetch:async()=>new Response(null,{status:429})});
+ assert.equal(await throttled.classify('factura',undefined,metadata=>observed.push(metadata)),null);
+ assert.equal(observed[2].provider_status,'http_429');
+ assert.equal(observed[2].cost_usd,undefined);
 });
 test('OpenAI selector sends only signals and accepts only an authorized index',async()=>{
  const {createOpenAIEvidenceSelector}=await import('../dist/index.js');let body;

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { bootstrapManifest, manifestDigest, presentRevision, promptEntry, runPromptConfig, validPrompt } from '../dist/prompt-catalog.js';
+import { bootstrapManifest, hasCompleteManifest, manifestDigest, presentRevision, promptEntry, runPromptConfig, validPrompt } from '../dist/prompt-catalog.js';
+import { readFileSync } from 'node:fs';
 import { createLangfusePromptClient } from '../dist/langfuse-prompts.js';
 
 test('an empty historical profile resolves all instructions with its bootstrap source', () => {
@@ -45,4 +46,19 @@ test('candidate preserves variables and Jev decision keys', () => {
   delete value.criteria.cancelacion;
   assert.equal(validPrompt('intent_decision',JSON.stringify(value)),false);
   assert.equal(validPrompt('intent_decision',original),true);
+});
+test('the optional objective planner supports candidate and prior release manifests', () => {
+  const file = new URL('../../../docs/evolucion-mvp/prompts.candidata-objetivos.json',import.meta.url);
+  const {prompts} = JSON.parse(readFileSync(file,'utf8'));
+  const base = {revision:'base',prompts:{},manifest:bootstrapManifest()};
+  const candidate = {...base,revision:'candidate',manifest:{...base.manifest,
+    agent_objectives:promptEntry('agent_objectives',prompts.agent_objectives,'langfuse',1),
+    public_answer:promptEntry('public_answer',prompts.public_answer,'langfuse',2)
+  }};
+  assert.ok(hasCompleteManifest(base));
+  assert.equal(runPromptConfig(base).prompts.agent_objectives,undefined);
+  assert.ok(hasCompleteManifest(candidate));
+  assert.equal(runPromptConfig(candidate).prompt_metadata.agent_objectives.version,1);
+  candidate.manifest.agent_objectives.sha256 = 'wrong';
+  assert.equal(hasCompleteManifest(candidate),false);
 });

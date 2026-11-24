@@ -12,7 +12,7 @@ const statusText:Record<string,string>={active:'Activa',candidate:'Candidata',pa
 const promptLabels:Record<string,string>={
   public_answer:'Respuesta pública con OpenAI',account_answer:'Respuesta con datos de cuenta',
   advisor_reply:'Borrador privado del asesor',advisor_empathy:'Reconocer un inconveniente',
-  handoff_summary:'Resumen privado del traspaso'
+  handoff_summary:'Resumen privado del traspaso',agent_objectives:'Objetivos de atención'
 };
 
 export function AdminEvaluations() {
@@ -84,7 +84,7 @@ export function AdminEvaluations() {
     <div className="ops-grid">
       <form className="ops-plot ops-prompt" onSubmit={save}>
         <h3>Editar plantilla</h3>
-        <label>Plantilla<select value={promptKey} onChange={event=>{const name=event.target.value;setPromptKey(name);setPrompt(active?.prompts[name]??'');}}>{Object.keys(active?.prompts??{public_answer:''}).map(name=><option key={name} value={name}>{promptLabels[name]??name}</option>)}</select></label>
+        <label>Plantilla<select value={promptKey} onChange={event=>{const name=event.target.value;setPromptKey(name);setPrompt(active?.prompts[name]??'');}}>{Array.from(new Set([...Object.keys(active?.prompts??{public_answer:''}),'agent_objectives'])).map(name=><option key={name} value={name}>{promptLabels[name]??name}</option>)}</select></label>
         {promptKey==='public_answer'&&<p>Se usa cuando OpenAI está habilitado y hay evidencia pública aprobada. El flujo de verificación y las preguntas guiadas de planes se controlan en el backend.</p>}
         <label htmlFor="public-prompt">Contenido efectivo de la plantilla</label>
         <textarea id="public-prompt" disabled={loading} rows={10} maxLength={4000} value={prompt} onChange={event=>setPrompt(event.target.value)}/>

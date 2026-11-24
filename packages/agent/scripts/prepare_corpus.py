@@ -34,6 +34,7 @@ class Source:
     scope: str
     kind: str
     effective_from: str = '2026-11-18'
+    official_url: str | None = None
 
 SOURCES = (
     Source('01_documentos/catalogo/Catalogo_Planes_Claro_2026.pdf','catalogo-v1','Catálogo de planes y tarifas','CAT-2026 v1.0','public','catalogo','2026-11-01'),
@@ -50,7 +51,11 @@ SOURCES = (
     Source('01_documentos/correos/01_recordatorio_promo_fibra500.eml','boletin-promo','Alcance de la Promoción Fibra 500','boletin-2026-11-09','advisor','boletin','2026-11-09'),
     Source('01_documentos/correos/02_incidente_masivo_chapinero.eml','boletin-incidente','Incidente de fibra en Chapinero y compensación','boletin-2026-11-13','advisor','boletin','2026-11-13'),
     Source('01_documentos/correos/03_nuevo_refresco_senal_app.eml','boletin-refresco','Refrescar señal de TV desde Mi Claro','boletin-2026-11-03','advisor','boletin','2026-11-03'),
+    Source('docs/agente/fuentes-publicas/portabilidad-movil-crc.md','crc-portabilidad','CRC · Guía de portabilidad móvil',
+           'CRC 5050 · revisión 2026-11-18','public','politica',
+           official_url='https://normograma.crcom.gov.co/crc/compilacion/docs/resolucion_crc_5050_2016.htm'),
 )
+REPO = Path(__file__).resolve().parents[3]
 VIEWABLE = {'catalogo-v1', 'catalogo-v2', 'faq', 'deco', 'modem'}
 MAX_CHUNK = 1800
 WORD = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
@@ -211,7 +216,7 @@ def prepare(root: Path, initial: bool = False, contextual: bool = False) -> list
     for source in SOURCES:
         if initial and source.key == 'catalogo-v2':
             continue
-        path = root / source.path
+        path = (REPO if source.official_url else root) / source.path
         if not path.is_file():
             raise FileNotFoundError(f'Missing required source: {source.path}')
         if path.suffix == '.pdf':
@@ -238,6 +243,8 @@ def prepare(root: Path, initial: bool = False, contextual: bool = False) -> list
             row = {'id':f'{source.key}-{count:03d}', 'title':f'{source.title} · {section}', 'excerpt':excerpt,
                    'version':source.version, 'scope':source.scope, 'effective_from':source.effective_from,
                    'status':'ready', 'type':source.kind}
+            if source.official_url:
+                row['url'] = source.official_url
             if source.key == 'catalogo-v1' and not initial:
                 row['effective_to'] = v2_date
             if contextual:
@@ -261,7 +268,7 @@ def main() -> int:
     if args.contextual and not (args.manifest and args.originals_dir):
         parser.error('A contextual publication requires its manifest and original files directory')
     root, target = args.input.resolve(strict=True), args.output.resolve()
-    repo = Path(__file__).resolve().parents[3]
+    repo = REPO
     if not root.is_dir() or target.is_relative_to(root) or target.is_relative_to(repo):
         parser.error('Output must be outside the source tree and repository')
     manifest_target = args.manifest.resolve() if args.manifest else None
@@ -285,7 +292,7 @@ def main() -> int:
         for source in SOURCES:
             if args.initial and source.key == 'catalogo-v2':
                 continue
-            path = root / source.path
+            path = (REPO if source.official_url else root) / source.path
             raw = path.read_bytes()
             if len(raw) > 10_485_760:
                 raise ValueError(f'Original exceeds 10 MiB: {path.name}')

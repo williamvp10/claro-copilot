@@ -1,13 +1,14 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import type { AgentObservation } from '@claro/agent';
+import { isModelObservation, type AgentObservation } from '@claro/agent';
 import type { AgentTurn } from '@claro/contracts';
 import type { RunPromptConfig } from './prompt-catalog.js';
 import { activeKnowledgeRevision } from './knowledge.js';
+import { runtimeSha256 } from './runtime-revision.js';
 
 export const traceIdentifier = (runId: string) => createHash('sha256').update(runId).digest('hex').slice(0,32);
 
-export async function exportAgentSpan(turn: AgentTurn, started: number, route: string, result: string, observations: AgentObservation[] = [], promptMetadata: RunPromptConfig['prompt_metadata'] = {}) {
+export async function exportAgentSpan(turn: AgentTurn, started: number, route: string, result: string, observations: AgentObservation[] = [], promptMetadata: RunPromptConfig['prompt_metadata'] = {}): Promise<string | false> {
   const publicKey = process.env.LANGFUSE_PUBLIC_KEY;
   const secret = process.env.LANGFUSE_SECRET_KEY;
   const base = process.env.LANGFUSE_BASE_URL;
@@ -26,7 +27,8 @@ export async function exportAgentSpan(turn: AgentTurn, started: number, route: s
       'claro.audience': turn.audience,
       'claro.result': result,
       'claro.config_revision': turn.config_revision,
-      'claro.index_revision': activeKnowledgeRevision()
+      'claro.index_revision': activeKnowledgeRevision(),
+      'claro.runtime_sha256': runtimeSha256
     };
     const root = createHash('sha256').update(`root:${turn.run_id}`).digest('hex').slice(0,16);
     const span = (spanId: string, name: string, from: number, to: number, metadata: Record<string,string|number>, parentSpanId?: string) => ({
@@ -43,12 +45,14 @@ export async function exportAgentSpan(turn: AgentTurn, started: number, route: s
       span(root, 'attention.run', started, Date.now(), { ...attributes, 'langfuse.trace.metadata.run_id':turn.run_id })
     ];
     const steps = observations.map(item => {
+      const externalModel = isModelObservation(item.name) &&
+        (item.name!=='decision.jev' || item.metadata.provider_attempted==='yes');
       const metadata: Record<string,string|number> = {
-        'langfuse.observation.type': item.name === 'generation.openai' ? 'generation'
+        'langfuse.observation.type': externalModel ? 'generation'
           : item.name.startsWith('tool.') ? 'tool' : item.name === 'retrieval' ? 'retriever' : 'span',
         ...Object.fromEntries(Object.entries(item.metadata).map(([key,value]) => [`claro.${key}`,value]))
       };
-      if (item.name === 'tool.list_catalog_plans') {
+      if (item.name === 'tool.list_catalog_plans' || item.name === 'catalogue.selection') {
         for (const key of ['reference_resolution','catalog_version','decision','reason'] as const) {
           const value = item.metadata[key];
           if (typeof value==='string') metadata[`langfuse.observation.metadata.${key}`] = value;
@@ -66,32 +70,36 @@ export async function exportAgentSpan(turn: AgentTurn, started: number, route: s
           metadata['langfuse.observation.prompt.version'] = prompt.version;
         }
       }
-      if (item.name === 'generation.openai') {
-        metadata['langfuse.observation.model.name'] = String(item.metadata.model ?? '');
-        metadata['langfuse.observation.usage_details'] = JSON.stringify({input:item.metadata.input_tokens ?? 0,output:item.metadata.output_tokens ?? 0});
-        metadata['langfuse.observation.cost_details'] = JSON.stringify({total:item.metadata.cost_usd ?? 0});
+      if (externalModel) {
+        const {model,input_tokens,output_tokens,cost_usd}=item.metadata;
+        if (typeof model==='string') metadata['langfuse.observation.model.name']=model;
+        if (typeof input_tokens==='number' || typeof output_tokens==='number') {
+          metadata['langfuse.observation.usage_details']=JSON.stringify({input:input_tokens,output:output_tokens});
+        }
+        if (typeof cost_usd==='number') metadata['langfuse.observation.cost_details']=JSON.stringify({total:cost_usd});
       }
       return span(randomBytes(8).toString('hex'), item.name, item.started, item.ended, metadata, root);
     });
+    const payload = JSON.stringify({resourceSpans:[{
+      resource:{attributes:[{key:'service.name',value:{stringValue:'claro-worker'}}]},
+      scopeSpans:[{scope:{name:'claro-attention'},spans:[...rootSpans,...steps]}]
+    }]});
     const response = await fetch(endpoint, {
       method: 'POST', signal: AbortSignal.timeout(1500), redirect: 'error',
       headers: { 'Content-Type': 'application/json', 'X-Langfuse-Ingestion-Version': '4',
         Authorization: `Basic ${Buffer.from(`${publicKey}:${secret}`).toString('base64')}` },
-      body: JSON.stringify({resourceSpans:[{
-        resource:{attributes:[{key:'service.name',value:{stringValue:'claro-worker'}}]},
-        scopeSpans:[{scope:{name:'claro-attention'},spans:[...rootSpans,...steps]}]
-      }]})
+      body: payload
     });
     if (!response.ok) return false;
     const body = (await response.text()).trim();
-    if (!body) return true;
-    const ack = JSON.parse(body) as {
+    const ack = (body ? JSON.parse(body) : {}) as {
       partialSuccess?: { rejectedSpans?: number | string };
       partial_success?: { rejected_spans?: number | string };
     };
     if (!ack || typeof ack !== 'object' || Array.isArray(ack)) return false;
     const rejected = ack.partialSuccess?.rejectedSpans ?? ack.partial_success?.rejected_spans;
-    return rejected === undefined || rejected === 0 || rejected === '0';
+    return rejected === undefined || rejected === 0 || rejected === '0'
+      ? createHash('sha256').update(payload).digest('hex') : false;
   } catch {
     return false;
   }

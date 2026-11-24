@@ -34,7 +34,7 @@ const Webhook = z.object({
 const Synthetic = z.object({ contact_ref: Id, text: Text, idempotency_key: Id, channel: z.literal('whatsapp').optional() });
 const PromptKey = z.string().regex(/^[a-z][a-z0-9_]{0,39}$/);
 const Prompts = z.object({ prompts: z.record(PromptKey, z.string().min(1).max(4000)) })
-  .refine(({ prompts }) => Object.keys(prompts).length > 0 && Object.keys(prompts).length <= 12);
+  .refine(({ prompts }) => Object.keys(prompts).length > 0 && Object.keys(prompts).length <= 13);
 const DraftEvent = z.object({run_id:Id,case_revision:z.number().int().positive(),event_id:Id,
   kind:z.enum(['used','edited','feedback_positive','feedback_negative'])});
 const PromptImport = z.object({ key: PromptKey, version: z.number().int().positive().safe() });

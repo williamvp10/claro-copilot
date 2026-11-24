@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { type DataSource, type EntityManager } from 'typeorm';
-import { type AgentPorts, type AgentTurn, type Fact, type Proposal, type Retention } from '@claro/contracts';
-import { clearPersonalData, loadCase, stillCurrent, customerReference } from './cases.js';
+import { TransientReadError, type AgentPorts, type AgentTurn, type Fact, type Proposal, type Retention } from '@claro/contracts';
+import { waitingForSupportVisit } from '@claro/agent';
+import { clearPersonalData, confirmedCaseReceipts, loadCase, stillCurrent, customerReference } from './cases.js';
 import { audit, type CaseRow } from './database.js';
 import { fact, planFacts } from './demo-accounts.js';
-import { SimulatorFailure, simulators } from './simulator-client.js';
+import { isTransientSimulatorRead, SimulatorFailure, simulators } from './simulator-client.js';
 
 const policy = {
   id: 'retention-policy-2026', title: 'Política de retención y descuentos', version: 'POL-RET-2026 v3.1',
@@ -26,6 +27,7 @@ async function availableFacts(service: string, read: () => Promise<Fact[]>) {
     return await read();
   } catch (error) {
     if (!(error instanceof SimulatorFailure)) throw error;
+    if (isTransientSimulatorRead(error)) throw new TransientReadError();
     return [fact(service.toLowerCase()+'-unavailable',service,'API temporalmente indisponible')];
   }
 }
@@ -52,10 +54,16 @@ export function businessPorts(db: DataSource): AgentPorts {
     return read(db.manager,row,turn);
   }
   return {
-    readCaseForRun: (runId) => scoped(runId, false, async (_tx, row) => ({
-      messages: row.snapshot.messages.filter(m => !m.verification_input).map(m => ({ ...m, text: clearPersonalData(m.text) })),
-      verified: row.snapshot.verified, pending: row.handoff_pending, intake: row.snapshot.intake, conversation_memory: row.snapshot.conversation_memory
-    })),
+    readCaseForRun: (runId) => scoped(runId, false, async (tx, row, turn) => {
+      const [support]=turn.actor==='cliente' && waitingForSupportVisit(turn.text) ? await tx.query(`SELECT EXISTS(SELECT 1 FROM escalation WHERE case_id=$1
+        AND destination='soporte_tecnico' AND status IN ('en_cola','tomado')) AS pending`,[row.id]) : [];
+      return {
+        messages: row.snapshot.messages.filter(m => !m.verification_input).map(m => ({ ...m, text: clearPersonalData(m.text) })),
+        verified: row.snapshot.verified, pending: row.handoff_pending, intake: row.snapshot.intake, conversation_memory: row.snapshot.conversation_memory,
+        pending_support_handoff:support?.pending===true,
+        confirmed_receipts: turn.audience === 'asesor' && row.snapshot.verified ? await confirmedCaseReceipts(tx,row.id) : []
+      };
+    }),
     async getAgentConfig(revision) {
       const [row] = await db.query('SELECT revision,prompts FROM prompt_revision WHERE revision=$1', [revision]);
       if (!row) throw new Error('unknown config');
@@ -85,9 +93,12 @@ export function businessPorts(db: DataSource): AgentPorts {
     }),
     getInvoiceDetail: (runId,id) => scoped(runId,true,async (tx,row) => {
       const ref=customerReference(row); if (!ref || !/^F-\d{4,10}$/.test(id)) throw new Error('scope denied');
-      const invoices=await simulators.invoices(ref); if (!invoices.some(invoice=>invoice.factura_id===id)) throw new Error('scope denied');
-      await audit(tx,row.id,'billing_invoice_detail_read',{run_id:runId});
-      return availableFacts('Facturación',async()=> (await simulators.invoice(id)).detalle.map((item,index)=>fact(`${id}-item-${index}`,item.concepto,new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(item.valor))));
+      return availableFacts('Facturación',async()=> {
+        const invoices=await simulators.invoices(ref);
+        if (!invoices.some(invoice=>invoice.factura_id===id)) throw new Error('scope denied');
+        await audit(tx,row.id,'billing_invoice_detail_read',{run_id:runId});
+        return (await simulators.invoice(id)).detalle.map((item,index)=>fact(`${id}-item-${index}`,item.concepto,new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(item.valor)));
+      });
     }),
     getTickets: (runId) => scoped(runId, true, async (tx, row) => {
       const ref = customerReference(row);
@@ -100,7 +111,9 @@ export function businessPorts(db: DataSource): AgentPorts {
       await audit(tx,row.id,'retention_read',{run_id:runId});
       return retention(customerReference(row)).catch(error => {
         if (!(error instanceof SimulatorFailure)) throw error;
-        return {eligible:false,reason:'CRM temporalmente indisponible. Verifica la elegibilidad antes de ofrecer beneficios.',facts:[],policy,options:[]};
+        if (isTransientSimulatorRead(error)) throw new TransientReadError();
+        return {eligible:false,reason:'CRM temporalmente indisponible. Verifica la elegibilidad antes de ofrecer beneficios.',
+          facts:[fact('crm-unavailable','CRM','API temporalmente indisponible')],policy,options:[]};
       });
     }),
     createProposal: (runId, input) => scoped(runId, true, async (_tx, row, turn) => {

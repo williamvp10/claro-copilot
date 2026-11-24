@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { PromptReleases } from '../dist/prompt-releases.js';
 import { bootstrapManifest, digestText, manifestDigest, promptEntry } from '../dist/prompt-catalog.js';
+import { runtimeSha256 } from '../dist/runtime-revision.js';
 
 function fixture() {
   const base = {revision:'base',manifest:bootstrapManifest(),prompts:{},activated:true,status:'active',
@@ -9,7 +10,7 @@ function fixture() {
   const target = {revision:'candidate',manifest:{...base.manifest,public_answer:promptEntry('public_answer','Respuesta desde las fuentes.','langfuse',3)},
     prompts:{},activated:false,status:'passed',approved_at:null,base_revision:'base',created_at:new Date()};
   const audit = [];
-  const report = {gate:'passed',evidence:{provider_mode:'live',golden_count:30,complementary_count:19,
+  const report = {gate:'passed',evidence:{provider_mode:'live',runtime_sha256:runtimeSha256,golden_count:30,complementary_count:19,
     corpus_sha256:digestText('[]'),baseline_manifest_sha256:manifestDigest(base.manifest),candidate_manifest_sha256:manifestDigest(target.manifest)},
     proposed:{metrics:{accuracy:0.85,groundedness:0.9,recall_at_5:0.92,unresolved_critical:0,remote_generation_cases:10}}};
   const rows = [base,target];
@@ -59,4 +60,14 @@ test('a score for other bytes and a rollback to an unpublished candidate are bot
   await assert.rejects(release.activate('operator',target.revision,true),error=>error.getStatus()===403);
   assert.equal(base.activated,true);
   assert.deepEqual(audit,[]);
+});
+
+test('activating a candidate requires a report for the running build',async()=>{
+  for (const runtime of [undefined,'f'.repeat(64)]) {
+    const {release,base,target,report,audit}=fixture();
+    report.evidence.runtime_sha256=runtime;
+    await assert.rejects(release.activate('operator',target.revision),error=>error.getStatus()===403);
+    assert.equal(base.activated,true);
+    assert.deepEqual(audit,[]);
+  }
 });

@@ -5,7 +5,7 @@ import { readModelMetrics, traceIdentifier } from './telemetry.js';
 const TZ = 'America/Bogota';
 type ReviewEntries<T> = Record<string,T> | ({id:string} & T)[];
 type Report = {
-  gate?: string; evidence?: { date?: string; rubric?: string; provider_mode?: string; golden_sha256?: string; scenarios_sha256?: string; corpus_sha256?: string };
+  gate?: string; evidence?: EvalComparison['evidence'] & {date?:string;rubric?:string;provider_mode?:string};
   baseline?: Side; proposed?: Side;
   review?: { metrics?: EvalMetrics; golden?: ReviewEntries<{correct:boolean}>; critical?: ReviewEntries<{passed:boolean}>;
     platform_verified_ids?: string[]; platform_verified_golden_ids?: string[]; unresolved_critical_ids?: string[] };
@@ -44,7 +44,8 @@ export function projectComparison(report: Report | undefined, detailed = true): 
     candidate:{ ...report.proposed.metrics, ...report.review?.metrics },
     ...report.evidence && {
       date:report.evidence.date,rubric:report.evidence.rubric,provider_mode:report.evidence.provider_mode,
-      evidence:{golden_sha256:report.evidence.golden_sha256,scenarios_sha256:report.evidence.scenarios_sha256,corpus_sha256:report.evidence.corpus_sha256}
+      evidence:{golden_sha256:report.evidence.golden_sha256,scenarios_sha256:report.evidence.scenarios_sha256,
+        corpus_sha256:report.evidence.corpus_sha256,runtime_sha256:report.evidence.runtime_sha256}
     },
     cases: detailed ? [
       ...report.proposed.questions.map(q => ({

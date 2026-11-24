@@ -11,6 +11,22 @@ export function isExtractiveAnswer(answer, citations) {
  if (excerpts.includes(complete) || excerpts.join(' ')===complete) return true;
  return answer.split(/\r?\n\s*\r?\n/).map(quote).filter(Boolean).every(paragraph=>excerpts.includes(paragraph));
 }
+
+/** Verify the date arithmetic from the question and cited policy, not from the target answer. */
+export function verifiesBillingDeadline(question, answer, citations) {
+ const cutoff=normalizeEvidence(question).match(/\bfecha de corte (?:de un cliente )?(?:es )?(?:del? |el )?(?:dia )?(\d{1,2})\b/)?.[1];
+ const reply=normalizeEvidence(answer).match(/^puede pagar hasta el dia (\d{1,2}) del mismo mes (\d{1,2}) dias calendario despues del corte$/);
+ if (!cutoff || !reply || Number(cutoff)<1) return false;
+ const segmenter=new Intl.Segmenter('es',{granularity:'sentence'});
+ const offsets=new Set(citations.flatMap(({excerpt})=>[...segmenter.segment(excerpt)].flatMap(({segment})=>{
+  const rule=normalizeEvidence(segment).match(/^la fecha limite de pago es (\d{1,2}) dias calendario despues de (?:su |la )?fecha de corte(?: dia ([\do ]+) segun su ciclo)?$/);
+  if (!rule || (rule[2] && !rule[2].match(/\d+/g)?.map(Number).includes(Number(cutoff)))) return [];
+  return [Number(rule[1])];
+ })));
+ if (offsets.size!==1 || !offsets.has(Number(reply[2])) || Number(reply[2])<1) return false;
+ const due=Number(cutoff)+Number(reply[2]);
+ return due<=28 && Number(reply[1])===due;
+}
 const aliases = {
   search_public_kb:['search_public_kb'], obtenerCliente:['obtenerCliente'], obtenerSaldo:['obtenerSaldo'],
   listarFacturas:['listarFacturas'], obtenerFactura:['obtenerFactura'], listarTickets:['listarTickets'],
@@ -31,7 +47,8 @@ function observedRoute(expected,result) {
   case 'retencion': return result.type==='card' && result.route==='cancelacion';
   case 'consulta_cuenta': case 'consulta_cuenta_degradada': return result.type==='card' && result.route==='facturacion';
   case 'esperar_aprobacion': return result.type==='card' && result.card.proposal?.status==='pending_approval';
-  case 'accion_confirmada': case 'seguimiento': return null;
+  case 'seguimiento': return result.route==='seguimiento';
+  case 'accion_confirmada': return null;
   default:return null;
  }
 }

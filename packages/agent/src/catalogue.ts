@@ -1,5 +1,6 @@
 import type { CatalogPlan, CatalogSegment, ConversationMemory, Message } from '@claro/contracts';
 import type { KnowledgeDocument } from './index.js';
+import { cancellationRequest, changesCancellationToPlan } from './objectives.js';
 
 const normalize = (text: string) => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const pricePreference = /\b(?:barat\w*|economic[oa]s?|menor precio|precio (?:mas bajo|menor)|ahorrar|pagar menos)\b/;
@@ -9,9 +10,12 @@ const advisor = /\b(?:asesor[a]?|atencion humana|hablar con (?:una? )?(?:persona
 const catalogVersion = /^CAT-2026\s+v\d+(?:\.\d+)+$/i;
 
 const tableRows = [
-  {segment:'hogar', row:/^(Hogar Fibra \d+|Triple Play \d+)\s+(\d+ Mbps)\s+\$([\d.]+)(?=\s|$)/i},
-  {segment:'movil_pospago', row:/^(Claro Max (?:\d+ GB|Ilimitado))\s+(\d+ GB|Ilimitados?\*?)\s+\$([\d.]+)(?=\s|$)/i},
-  {segment:'movil_prepago', row:/^(Paquete (?:Día|Semanal|Mensual))\s+(\d+ GB)\s+(?:(24 horas|7 días|30 días))\s+\$([\d.]+)(?=\s|$)/i}
+  {segment:'hogar', heading:/internet hogar|triple play/, standard:/^(?:Hogar Fibra|Triple Play) /i,
+    row:/^([\p{L}][^$]{1,79}?)\s+(\d+\s+Mbps)\s+\$([\d.]+)(?=\s|$)/iu},
+  {segment:'movil_pospago', heading:/telefonia movil pospago/, standard:/^Claro Max /i,
+    row:/^([\p{L}][^$]{1,79}?)\s+(\d+\s+GB|Ilimitados?\*?)\s+\$([\d.]+)(?=\s|$)/iu},
+  {segment:'movil_prepago', heading:/telefonia movil prepago/, standard:/^Paquete /i,
+    row:/^([\p{L}][^$]{1,79}?)\s+(\d+\s+GB)\s+(24 horas|7 días|30 días)\s+\$([\d.]+)(?=\s|$)/iu}
 ] as const;
 
 export function catalogPlans(documents: KnowledgeDocument[], context: {business_date:string; channel:string}): CatalogPlan[] {
@@ -22,9 +26,14 @@ export function catalogPlans(documents: KnowledgeDocument[], context: {business_
         doc.effective_from > context.business_date || (doc.effective_to && context.business_date >= doc.effective_to) ||
         (doc.channels && !doc.channels.includes(context.channel))) continue;
     const {id,title,excerpt,version,source,url} = doc;
-    for (const line of excerpt.split(/\r?\n/)) {
-      for (const {segment,row} of tableRows) {
-        const match = line.trim().match(row);
+    let section = tableRows.find(group=>group.heading.test(normalize(doc.metadata?.section ?? title)))?.segment;
+    for (const rawLine of excerpt.split(/\r?\n/)) {
+      const line=rawLine.trim();
+      const heading=tableRows.find(group=>group.heading.test(normalize(line)));
+      if (heading && !line.includes('$')) section=heading.segment;
+      for (const {segment,row,standard} of tableRows) {
+        if (section!==segment && !standard.test(line)) continue;
+        const match = line.match(row);
         if (!match) continue;
         const [,name,allowance,amountOrValidity,packageAmount] = match;
         const validity = packageAmount ? amountOrValidity as CatalogPlan['validity'] : undefined;
@@ -33,7 +42,7 @@ export function catalogPlans(documents: KnowledgeDocument[], context: {business_
         const price = Number(amount.replaceAll('.',''));
         if (!Number.isSafeInteger(price) || price <= 0) continue;
         const values = groups.get(segment) ?? [];
-        values.push({name,segment,price,allowance:allowance.replace(/\*$/,''),validity,citation:{id,title,excerpt,version,source,url}});
+        values.push({name,segment,price,allowance:allowance.replace(/\*$/,'').replace(/\s+/g,' '),validity,citation:{id,title,excerpt,version,source,url}});
         groups.set(segment,values);
       }
     }
@@ -42,7 +51,10 @@ export function catalogPlans(documents: KnowledgeDocument[], context: {business_
   return [...groups.values()].flatMap(plans => {
     const unique = new Map(plans.map(plan=>[normalize(plan.name),plan]));
     if (new Set(plans.map(plan=>plan.citation.version)).size !== 1 ||
-        plans.some(plan=>unique.get(normalize(plan.name))?.price!==plan.price)) return [];
+        plans.some(plan=>{
+          const matching=unique.get(normalize(plan.name));
+          return matching?.price!==plan.price || matching.allowance!==plan.allowance || matching.validity!==plan.validity;
+        })) return [];
     return [...unique.values()].sort((a,b)=>a.price-b.price || a.name.localeCompare(b.name,'es'));
   });
 }
@@ -77,6 +89,18 @@ function namedPlanLine(excerpt: string, name: string) {
 }
 
 type Comparison = {segment?:CatalogSegment; anchor?:string; resolution:'explicit'|'memory'|'history'|'unscoped'; validity?:CatalogPlan['validity']};
+
+export function catalogComparisonAfterWithdrawal(text:string, messages:Message[], before:number):Comparison|undefined {
+  const query=normalize(text);
+  if (!changesCancellationToPlan(query) || !pricePreference.test(query)) return;
+  const explicit=explicitSegment(query);
+  if (explicit) return {segment:explicit,resolution:'explicit'};
+  const previous=messages.filter(message=>message.actor==='cliente' && !message.verification_input && message.turn_seq<before &&
+    !/^\s*(?:si[ ,.]*)?(?:acepto|de acuerdo|l[oa] acepto)\b/.test(normalize(message.text))).at(-1);
+  const prior=previous && normalize(previous.text);
+  const segment=prior && cancellationRequest.test(prior) ? explicitSegment(prior) : undefined;
+  return {segment,resolution:segment ? 'history' : 'unscoped'};
+}
 
 export function catalogComparison(text: string, messages: Message[], memory?: ConversationMemory, before=Infinity): Comparison | undefined {
   const query = normalize(text).trim().replace(/^[¿¡]+/,'');

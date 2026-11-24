@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, Get, Header, Inject, NotFoundException, Param, Post, Req, Res, BadRequestException, ConflictException } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Header, Inject, NotFoundException, Param, Post, Query, Req, Res, BadRequestException, ConflictException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
@@ -169,20 +169,20 @@ export class KnowledgeSourceController {
   async view(@Param('digest') digest:string,@Param('key') key:string) {
     const file=await this.lookup(digest,key);
     const pdf=await indexedOriginal(process.env.KNOWLEDGE_ORIGINALS_DIR,file.derivative_pdf ?? file,true);
-    if (!pdf.bytes) throw new NotFoundException();
     const sections=key==='faq' ? await this.db.query(`SELECT d.id,d.document->>'title' AS title,d.document->>'excerpt' AS text
       FROM knowledge_contextual_document d WHERE revision=$1 AND version=$2 AND id=ANY($3::text[])
         AND document->>'scope'='public' AND document->>'status'='ready' ORDER BY id`,[digest,file.version,file.passages.map(item=>item.id)]) : [];
     return {title:file.title,version:file.version,archived:!!file.effective_to && file.effective_to<=businessDate(),
+      pdf_available:pdf.bytes?.subarray(0,5).equals(Buffer.from('%PDF-')) === true,
       passages:file.passages.map(passage=>({id:passage.id,page:passage.metadata?.page})),sections};
   }
 
   @Get(':digest/:key/document')
-  async pdf(@Param('digest') digest:string,@Param('key') key:string,@Res() res:Response) {
+  async pdf(@Param('digest') digest:string,@Param('key') key:string,@Res() res:Response,@Query('download') download?:string) {
     const file=await this.lookup(digest,key);
     const result=await indexedOriginal(process.env.KNOWLEDGE_ORIGINALS_DIR,file.derivative_pdf ?? file,true);
     if (!result.bytes || !result.bytes.subarray(0,5).equals(Buffer.from('%PDF-'))) throw new NotFoundException();
-    res.set({'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Disposition':'inline',
+    res.set({'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Disposition':download==='1' ? `attachment; filename="${key}.pdf"` : 'inline',
       'Content-Security-Policy':"default-src 'none'; frame-ancestors 'self'"})
       .type('application/pdf').send(result.bytes);
   }

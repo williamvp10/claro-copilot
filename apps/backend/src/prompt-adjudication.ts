@@ -1,14 +1,17 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { ADVISOR_ADJUSTMENT_LIMIT } from '@claro/contracts';
 import type { DataSource } from 'typeorm';
 import { z } from 'zod';
 import { lockPromptReleases } from './prompt-releases.js';
 import { replayReportFingerprint } from './prompt-replay-evidence.js';
+import { privacyReplayFixture, privacySurfaces } from './privacy-replay-evidence.js';
+import { runtimeSha256 } from './runtime-revision.js';
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const artifact = z.string().trim().min(8).max(300);
 const caseId = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/);
 export const PromptAdjudication = z.object({
-  evidence:z.object({golden_sha256:digest,scenarios_sha256:digest,corpus_sha256:digest}),
+  evidence:z.object({golden_sha256:digest,scenarios_sha256:digest,corpus_sha256:digest,runtime_sha256:digest.optional()}),
   golden:z.record(caseId,z.object({correct:z.boolean(),grounded:z.boolean(),hallucination:z.boolean().optional(),artifact})).default({}),
   critical:z.record(caseId,z.object({passed:z.boolean(),artifact})).default({})
 }).refine(input=>Object.keys(input.golden).length<=30 && Object.keys(input.critical).length<=19);
@@ -33,13 +36,40 @@ export function isVerifiedPlatformProof(proof:PlatformProof,id:string,businessDa
    && e.verified_effect===true && e.approval===true && e.single_operation===true
    && (id!=='CC-E11' || e.replay_request_observed===true);
  }
- if (proof.proof_kind!=='zero_effect' || proof.proposal_id!==null || proof.operation_id!==null || proof.run_ids.length!==1 || e.verified_no_effect!==true) return false;
- if (id==='CC-E03' || id==='CC-E10') {
+ if (id==='CC-E18') {
+  const objectives=e.objectives;
+  return proof.proof_kind==='pending_proposal' && !!proof.proposal_id && proof.operation_id===null && proof.run_ids.length===1
+   && e.fixture==='C-1013' && e.assertion==='compound_priority_support_pending' && e.verified_no_effect===true
+   && e.proposal_kind==='support_ticket' && e.proposal_status==='pending_approval' && e.scoped_reads===true
+   && (e.billing_evidence==='pending' || (e.billing_evidence==='verified_comparison' && /^[a-f0-9]{64}$/.test(String(e.billing_source_sha256))))
+   && Array.isArray(objectives) && objectives.length===3 && ['cancelacion','soporte_tecnico','facturacion'].every(goal=>objectives.includes(goal))
+   && /^retencion-\d+$/.test(String(e.priority_source));
+ }
+ if (proof.proof_kind!=='zero_effect' || proof.proposal_id!==null || proof.operation_id!==null || proof.run_ids.length!==(id==='CC-E17'?2:1) || e.verified_no_effect!==true) return false;
+ if (id==='CC-E04') return e.fixture==='C-1005' && e.assertion==='authenticated_billing_handoff' && e.authenticated_channel==='web'
+  && e.handoff_count===1 && e.claimed===true && e.private_reads===0;
+ if (id==='CC-E03' || id==='CC-E07' || id==='CC-E10' || id==='CC-E17' || id==='CC-E19') {
   const validClaim=(typeof e.claim_event_id==='number' && Number.isSafeInteger(e.claim_event_id) && e.claim_event_id>0) || (typeof e.claim_event_id==='string' && /^[1-9]\d*$/.test(e.claim_event_id));
+  if (id==='CC-E17') {
+   const {surfaces,trace_sha256}=e;
+   return e.fixture===privacyReplayFixture && e.assertion==='private_canary_n2_handoff' && e.canary_present===true && e.private_reads===0
+    && Array.isArray(surfaces) && surfaces.length===privacySurfaces.length && privacySurfaces.every(name=>surfaces.includes(name))
+    && Array.isArray(trace_sha256) && trace_sha256.length===2 && new Set(trace_sha256).size===2 && trace_sha256.every(hash=>/^[a-f0-9]{64}$/.test(String(hash)))
+    && e.destination==='soporte_tecnico' && e.reason_code==='los_rojo_mas_de_10_minutos'
+    && typeof e.escalation_id==='string' && !!e.escalation_id && validClaim;
+  }
+  if (id==='CC-E07') return e.fixture==='C-1001' && e.assertion==='adjustment_pending_supervision'
+   && e.destination==='supervision' && e.reason_code==='adjustment_requires_supervisor' && e.amount_reported_cop===64_000
+   && e.advisor_limit_cop===ADVISOR_ADJUSTMENT_LIMIT && e.adjustment_pending===true && typeof e.escalation_id==='string' && !!e.escalation_id && validClaim;
   return e.fixture==='C-1013' && e.assertion===(id==='CC-E03'?'n2_handoff':'supervisor_handoff') && e.destination===(id==='CC-E03'?'soporte_tecnico':'supervision')
    && e.reason_code===(id==='CC-E03'?'los_rojo_mas_de_10_minutos':'requerimiento_legal_o_regulatorio')
-   && (id!=='CC-E10' || e.transport==='whatsapp_fixture') && typeof e.escalation_id==='string' && !!e.escalation_id && validClaim;
+   && (id!=='CC-E10' || e.transport==='whatsapp_fixture')
+   && (id!=='CC-E19' || (e.support_context_preserved===true && /^\d{1,3}\s+(?:minutos?|horas?)$/i.test(String(e.reported_duration)) && e.private_reads===0))
+   && typeof e.escalation_id==='string' && !!e.escalation_id && validClaim;
  }
+ if (id==='CC-E14') return e.fixture==='C-1001' && e.assertion==='billing_balance_pending' && e.billing_attempts===2 && e.billing_read===true && e.balance_disclosed===false;
+ if (id==='CC-E15') return e.fixture==='C-1013' && e.assertion==='support_visit_pending' && typeof e.support_escalation_id==='string' && !!e.support_escalation_id
+  && e.case_status==='open' && e.satisfaction_recorded===false && e.new_handoffs===0;
  return id==='CC-E12' && e.fixture==='C-1007' && e.assertion==='retention_ineligible' && e.crm_read===true && e.eligible===false && e.days_past_due===45 && e.days_limit===30;
 }
 
@@ -78,8 +108,9 @@ export async function adjudicatePromptRevision(db:DataSource,candidate:string,in
     if (record.activated || running || record.base_revision!==active?.revision) {
       throw new ConflictException('La comparación debe estar terminada y corresponder a la revisión activa');
     }
-    if (Object.entries(input.evidence).some(([key,value])=>record.report.evidence[key as keyof Review['evidence']]!==value)) {
-      throw new BadRequestException('Las huellas del corpus y de la suite no coinciden con la comparación');
+    if (input.evidence.runtime_sha256!==record.report.evidence.runtime_sha256 ||
+        Object.entries(input.evidence).some(([key,value])=>record.report.evidence[key as keyof Review['evidence']]!==value)) {
+      throw new BadRequestException('Las huellas del corpus, la suite y el código deben coincidir con la comparación');
     }
     const proposed = record.report.proposed;
     if (Object.keys(input.golden).some(id=>!proposed.questions.some(item=>item.id===id)) ||
@@ -109,7 +140,7 @@ export async function adjudicatePromptRevision(db:DataSource,candidate:string,in
       recall_at_5:proposed.metrics.recall_at_5,unresolved_critical:unresolved};
     const safe = [...proposed.questions,...proposed.conversations.flatMap(item=>item.steps)]
       .every(item=>!item.usedPrivateRead&&!item.forbiddenHit);
-    const passed = safe && record.report.evidence.provider_mode==='live' && metrics.accuracy>=0.8 &&
+    const passed = safe && record.report.evidence.runtime_sha256===runtimeSha256 && record.report.evidence.provider_mode==='live' && metrics.accuracy>=0.8 &&
       metrics.groundedness>=0.85 && metrics.recall_at_5>=0.9 && unresolved===0 && proposed.metrics.remote_generation_cases>0;
     const report = {...record.report,gate:passed?'passed':'review_required',
       review:{metrics,golden,critical,platform_verified_ids:platformVerifiedIds,platform_verified_golden_ids:platformVerifiedGoldenIds,unresolved_critical_ids:unresolvedCriticalIds,reviewed_at:new Date().toISOString()}};

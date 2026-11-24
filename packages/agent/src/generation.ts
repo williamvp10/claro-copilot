@@ -3,15 +3,19 @@ import { publicReplyLimit } from './public-reply.js';
 
 export type Profile = 'economico' | 'intermedio' | 'complejo';
 export type AgentObservation = {
-  name: 'retrieval' | 'context' | 'decision.jev' | 'generation.openai' | 'effect' | `tool.${string}`;
+  name: 'retrieval' | 'context' | 'decision.jev' | 'decision.objectives' | 'decision.evidence' | 'generation.openai' | 'catalogue.selection' | 'advisor.handoff_summary' | 'effect' | `tool.${string}`;
   started: number;
   ended: number;
   metadata: Record<string, string | number>;
 };
 export type Observe = (observation: AgentObservation) => void;
+export const modelObservationNames = ['generation.openai','decision.jev','decision.objectives','decision.evidence'] as const;
+export function isModelObservation(name:AgentObservation['name']):boolean {
+  return modelObservationNames.some(modelName=>modelName===name);
+}
 export type Draft = { answer: string; citations: Citation[] };
 export interface PublicWriter {
-  write(topic: string, sources: Citation[], profile: Profile, prompt: string, observe?: Observe, channel?:Channel): Promise<Draft | null>;
+  write(topic: string, sources: Citation[], profile: Profile, prompt: string, observe?: Observe, channel?:Channel, turnDeadline?:number): Promise<Draft | null>;
 }
 
 const profiles = {
@@ -45,12 +49,20 @@ export function validateDraft(value: unknown, sources: Citation[], channel:Chann
 
 type Usage = { input_tokens?: number; output_tokens?: number };
 type ResponseBody = { status?: string; model?: string; usage?: Usage; output?: { type?: string; content?: { type?: string; text?: string }[] }[] };
+export function openAIUsage(usage:Usage|undefined, model:string):AgentObservation['metadata'] {
+  const {input_tokens:input,output_tokens:output}=usage ?? {};
+  if (typeof input!=='number' || typeof output!=='number' ||
+      !Number.isSafeInteger(input) || input<0 || !Number.isSafeInteger(output) || output<0) return {};
+  const prices=Object.values(profiles).find(profile=>profile.model===model);
+  return {input_tokens:input,output_tokens:output,
+    ...(prices ? {cost_usd:(input*prices.input+output*prices.output)/1e6,cost_basis:'standard_rates'} : {})};
+}
 
 export function createOpenAIPublicWriter(options: { apiKey: string; fetch?: typeof fetch }): PublicWriter {
-  return { async write(topic, sources, profile, prompt, observe, channel='web') {
+  return { async write(topic, sources, profile, prompt, observe, channel='web', turnDeadline=Infinity) {
     if (!sources.length || !prompt.trim()) return null;
     const instructions = `${prompt.trim()} El mensaje debe caber en ${publicReplyLimit(channel)} caracteres. Responde en un párrafo breve, en orden conversacional y con máximo una pregunta. Las citas se adjuntan aparte. Evita copiar tablas o pasajes completos.`;
-    const deadline = Date.now() + 5700;
+    const deadline = Math.min(turnDeadline, Date.now() + 5700);
     const input = JSON.stringify({ tema: topic.slice(0, 512),
       pasajes: sources.slice(0, 3).map(({ id,title,excerpt }) => ({ id,title,extracto:excerpt.slice(0, 1400) })) });
     const maxOutput = 480;
@@ -64,7 +76,8 @@ export function createOpenAIPublicWriter(options: { apiKey: string; fetch?: type
       reserved += upper;
       const started = Date.now();
       let status = 'unavailable';
-      let used: Record<string, number> = {};
+      let servedModel=spec.model;
+      let used: AgentObservation['metadata'] = {};
       try {
         const response = await (options.fetch ?? fetch)('https://api.openai.com/v1/responses', {
           method: 'POST', headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
@@ -82,10 +95,10 @@ export function createOpenAIPublicWriter(options: { apiKey: string; fetch?: type
           continue;
         }
         const body: ResponseBody = await response.json();
-        const incoming = body.usage?.input_tokens ?? 0, outgoing = body.usage?.output_tokens ?? 0;
-        used = { input_tokens: incoming, output_tokens: outgoing, cost_usd: (incoming * spec.input + outgoing * spec.output) / 1e6 };
+        used = openAIUsage(body.usage,spec.model);
         const values = body.output?.filter(x => x.type === 'message').flatMap(x => x.content ?? []).filter(x => x.type === 'output_text');
         const modelMatch = body.model === spec.model || body.model?.startsWith(`${spec.model}-`);
+        if (modelMatch && body.model) servedModel=body.model;
         const draft = modelMatch && body.status === 'completed' && values?.length === 1 && values[0].text
           ? validateDraft(JSON.parse(values[0].text), sources, channel) : null;
         status = draft ? 'accepted' : 'invalid';
@@ -93,7 +106,7 @@ export function createOpenAIPublicWriter(options: { apiKey: string; fetch?: type
       } catch {
         status = 'invalid_or_timeout';
       } finally {
-        observe?.({ name: 'generation.openai', started, ended: Date.now(), metadata: { ...used, model: spec.model, status } });
+        observe?.({ name: 'generation.openai', started, ended: Date.now(), metadata: { ...used, model: servedModel, status } });
       }
     }
     return null;

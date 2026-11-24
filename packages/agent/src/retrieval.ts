@@ -1,6 +1,8 @@
 import type { KnowledgeDocument } from './index.js';
 import type { CaseIntake, KnowledgeSearchFilters } from '@claro/contracts';
 import { mobilePlanTopic } from './public-reply.js';
+import { portabilityRequest } from './objectives.js';
+import { mobileCommitmentQuestion, portabilityTimingQuestion } from './policy-reply.js';
 
 const stopWords = new Set('al algo ante aqui asi bajo caso cual cuanto como con cuando debe debo del donde dos ella ellas ellos era esa ese eso esta estan estar este esto hay hasta hizo hoy los las mas me mi mismo mucha mucho nuestro otra otro para pero poco podemos puede puedo por que quien quiero recibo saber sea ser si sobre son sus tan tambien tengo teniendo tiene tipo todo tras una uno unos usan usa usted usan varios vez ya cliente clientes claro servicio servicios'.split(' '));
 const related = [
@@ -28,7 +30,7 @@ const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u0
 
 export function retentionPolicyQuery(query: string) {
   const text = normalize(query);
-  return /\bretencion\b/.test(text) && !/\b(?:mi cuenta|quiero cancelar|dar de baja|mi oferta|mi descuento|acepto|me ofrecieron)\b/.test(text);
+  return /\bretencion\b/.test(text) && !/\b(?:mi cuenta|quiero cancelar|dar de baja|mi oferta|mi descuento|acepto|me ofrecieron|c-\d+)\b/.test(text);
 }
 
 export function isRetentionPolicy(document: KnowledgeDocument) {
@@ -38,7 +40,21 @@ export function isRetentionPolicy(document: KnowledgeDocument) {
 export function prepareKnowledgeQuery(input:string, intake?:CaseIntake): {query:string; retry:string; filters:KnowledgeSearchFilters} {
   input=input.replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi,' ').replace(/\+?\d(?:[ .()-]*\d){6,}/g,' ').trim();
   const value=normalize(input);
+  if (portabilityTimingQuestion(input)) {
+    return {query:`${input} plazo ventana de cambio día calendario código NIP`,
+      retry:'plazos vigencia NIP portabilidad operador receptor',filters:{tags:['portabilidad']}};
+  }
+  if (portabilityRequest.test(value)) {
+    const query = `${input} portabilidad`;
+    return {query,retry:'portabilidad requisitos operador receptor',filters:{tags:['portabilidad']}};
+  }
   if (mobilePlanTopic(input)==='change') return {query:input,retry:'cambiar plan móvil sin costo siguiente ciclo facturación',filters:{source:'faq',tags:['movil']}};
+  if (mobileCommitmentQuestion(input)) return {query:`${input} contrato pospago equipo financiado`,
+    retry:'permanencia mínima terminación contrato de telefonía móvil pospago',filters:{source:'contrato-movil',tags:['contrato','movil']}};
+  if (/\bpqr\b/.test(value) && /\b(?:plazo|responde\w*|respuesta|demora\w*)\b/.test(value)) {
+    return {query:`${input} respuesta a reclamos días hábiles desde recepción`,
+      retry:'plazo para responder petición queja reclamo PQR',filters:{tags:[]}};
+  }
   if (retentionPolicyQuery(input)) {
     const eligibility=/\b(?:requisit\w*|condici\w*|elegib\w*|aplica|mora|antiguedad)\b/.test(value);
     const tags=eligibility ? ['retencion','elegibilidad'] : ['retencion'];
@@ -54,7 +70,8 @@ export function prepareKnowledgeQuery(input:string, intake?:CaseIntake): {query:
   }
   if (intake?.intent==='soporte_tecnico' && intake.facts.sintoma==='Lentitud') {
     const medium=intake.facts.medio ?? '';
-    return {query:`${input} internet hogar prueba de velocidad ${medium}`,retry:'medir velocidad internet hogar cable wifi',filters:{tags:['velocidad']}};
+    return {query:`medir velocidad real computador cable conexión Wi-Fi ${medium} ${input}`,
+      retry:'medir velocidad real computador cable velocidad contratada',filters:{tags:['velocidad']}};
   }
   const plan=value.match(/\bfibra\s*(300|500|900)\b/);
   if (plan) return {query:input,retry:`catálogo internet hogar fibra ${plan[1]}`,filters:{tags:[`fibra-${plan[1]}`]}};
@@ -64,9 +81,9 @@ export function prepareKnowledgeQuery(input:string, intake?:CaseIntake): {query:
 
 export function plansDiscovery(query: string) {
   const text = normalize(query);
-  if (/\b(?:mis? planes?|que plan tengo|precio|cuanto|costo|incluye|simetri\w*|iva|promocion|descuento|cobertura|instalacion|convergencia|max|triple play|\d+\s*(?:gb|mbps)|fibra\s*\d+)\b/.test(text)) return null;
-  if (!/\bplanes?\b/.test(text)) return null;
-  const mobile = /\b(?:movil|celular|pospago|prepago)\b/.test(text);
+  if (/\b(?:mis? plan(?:es)?|que plan tengo|precio|cuanto|costo|incluye|simetri\w*|iva|promocion|descuento|cobertura|instalacion|permanencia|clausula|convergencia|max|triple play|\d+\s*(?:gb|mbps)|fibra\s*\d+)\b/.test(text)) return null;
+  if (!/\bplan(?:es)?\b/.test(text)) return null;
+  const mobile = /\b(?:movil(?:es)?|celular(?:es)?|pospago|prepago)\b/.test(text);
   const home = /\b(?:casa|hogar|fibra)\b/.test(text);
   if (mobile) return home ? 'general' : 'mobile';
   if (home) return 'home';
@@ -169,6 +186,7 @@ export function rankKnowledge(query: string, documents: KnowledgeDocument[], fil
   const direct = [...new Set(requested.map(stem))];
   if (!direct.length) return [];
   const wifi = wifiConfiguration(requested);
+  const timing = portabilityTimingQuestion(query);
   const expanded = [...new Set(retrievalTerms(query).map(stem))].filter(word=>!direct.includes(word));
   const policy = retentionPolicyQuery(query);
   const discovery = plansDiscovery(query);
@@ -199,7 +217,8 @@ export function rankKnowledge(query: string, documents: KnowledgeDocument[], fil
     const homeSection = /^hogar fibra /m.test(excerpt);
     const mobileSection = /telefonia movil (?:pospago|prepago)/.test(excerpt) && /\$\d/.test(excerpt);
     const discoveryFit = discovery && ((discovery !== 'mobile' && homeSection) || (discovery !== 'home' && mobileSection)) ? 12 : 0;
-    return [{...row, score:total * (0.65+coverage) / (1+0.13*Math.log1p(row.body.size/40)) + configurationFit + policyFit + discoveryFit + tags.length*2
+    const regulationFit = timing && documentSource(row.document)==='crc-portabilidad' && /\bplazos\b/.test(excerpt) ? 18 : 0;
+    return [{...row, score:total * (0.65+coverage) / (1+0.13*Math.log1p(row.body.size/40)) + configurationFit + policyFit + discoveryFit + regulationFit + tags.length*2
       - (isHeadingOnly ? 4 : 0) + 0.2/(row.position+1)}];
   }).sort((a,b)=>b.score-a.score || a.position-b.position);
 

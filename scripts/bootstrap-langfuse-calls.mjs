@@ -4,13 +4,24 @@ import { isDeepStrictEqual } from 'node:util';
 
 const manifestUrl = new URL('../docs/agente/jev-langfuse.v1.json', import.meta.url);
 const manifest = JSON.parse(await readFile(manifestUrl, 'utf8'));
-const { dataset, connection, evaluator } = manifest;
+const { connection } = manifest;
 const { LANGFUSE_UI_URL, LANGFUSE_PROJECT_ID: projectId, LANGFUSE_PUBLIC_KEY: publicKey,
   LANGFUSE_SECRET_KEY: secretKey, LANGFUSE_ADMIN_EMAIL: email, LANGFUSE_ADMIN_PASSWORD: password,
   OPENROUTER_API_KEY: openRouterKey } = process.env;
 const args = process.argv.slice(2);
-const datasetOnly = args[0] === '--dataset-only';
-if (args.length > Number(datasetOnly)) throw new Error('Uso: bootstrap-langfuse-calls.mjs [--dataset-only]');
+const datasetOnly = args.includes('--dataset-only');
+const namedManifest = args.includes('--manifest-evaluator');
+const catalogue = args.includes('--catalogue');
+if (args.length !== Number(datasetOnly)+Number(namedManifest)+Number(catalogue) || datasetOnly && namedManifest) {
+  throw new Error('Uso: bootstrap-langfuse-calls.mjs [--catalogue] [--dataset-only | --manifest-evaluator]');
+}
+const dataset = catalogue ? {
+  name:'claro-catalogo-contratacion-v1',description:'Consultas comerciales por chat y traspaso para contratación',
+  source:'catalogo-contratacion-evals.v1.jsonl',items:10
+} : manifest.dataset;
+const evaluator = namedManifest
+  ? { ...manifest.evaluator, name: `${manifest.evaluator.name} · Manifiesto` }
+  : manifest.evaluator;
 if (manifest.schema_version !== 1) throw new Error('Versión de manifiesto incompatible.');
 if (!LANGFUSE_UI_URL || !projectId || !publicKey || !secretKey) {
   throw new Error('Configura LANGFUSE_UI_URL, LANGFUSE_PROJECT_ID y las dos API keys del proyecto.');
@@ -25,16 +36,17 @@ if ((base.protocol !== 'https:' && !(base.protocol === 'http:' && loopback)) ||
 const suite = await readFile(new URL(dataset.source, manifestUrl));
 const sha256 = createHash('sha256').update(suite).digest('hex');
 const items = suite.toString('utf8').trim().split(/\r?\n/).map(line => {
-  const { id, turns, intent, required, forbidden, sources } = JSON.parse(line);
+  const { id, turns, intent, required, forbidden, sources, fixture } = JSON.parse(line);
   const nonEmptyStrings = values => Array.isArray(values) && values.length > 0 &&
     values.every(value => typeof value === 'string' && value.trim());
-  if (!/^TRX-\d{4}$/.test(id) || typeof intent !== 'string' || !intent.trim() ||
+  if (!(catalogue ? /^COM-\d{2}$/ : /^TRX-\d{4}$/).test(id) || typeof intent !== 'string' || !intent.trim() ||
+      catalogue && !['standard','edition-change','conflict','reserved'].includes(fixture) ||
       ![turns, required, forbidden, sources].every(nonEmptyStrings)) {
     throw new Error('La suite contiene un caso inválido.');
   }
   return {
     id: `${dataset.name}-${id}`, datasetName: dataset.name, input: { turns },
-    expectedOutput: { intent, required, forbidden }, metadata: { sources, suite_sha256: sha256 }
+    expectedOutput: { intent, required, forbidden }, metadata: { sources, suite_sha256: sha256, ...(catalogue ? {fixture} : {}) }
   };
 });
 if (items.length !== dataset.items || new Set(items.map(({ id }) => id)).size !== items.length) {
@@ -116,18 +128,39 @@ async function evaluatorSession() {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload
     } : {});
     if (!response.ok) throw new Error(`Interfaz de Langfuse ${manifest.langfuse_version}, ${method}, HTTP ${response.status}.`);
-    const result = (await response.json()).result?.data?.json;
-    if (!result) throw new Error(`Respuesta incompatible de Langfuse en ${method}.`);
-    return result;
+    const data = (await response.json()).result?.data;
+    // The connection mutation can acknowledge success with no response value in 4.83.0.
+    if (!data?.json && !(method==='llmApiKey.create' && data?.json===null)) {
+      throw new Error(`Respuesta incompatible de Langfuse en ${method}.`);
+    }
+    return data.json;
   };
 }
 
-async function importEvaluator(rpc) {
+async function installedConnection(rpc) {
   const links = await rpc('llmApiKey.all', { includeDecisionModels: true });
   const installed = links.data.find(row => row.provider === connection.provider);
   if (installed && !Object.keys(connection).every(field => isDeepStrictEqual(installed[field], connection[field]))) {
     throw new Error(`La conexión ${connection.provider} difiere del manifiesto.`);
   }
+  return installed;
+}
+
+function verifyEvaluator(current) {
+  const version = current.versions.reduce((latest, row) => row.version > (latest?.version ?? 0) ? row : latest, null);
+  const definition = version && {
+    type: current.type, modelConfig: { provider: version.provider, model: version.model },
+    variableMapping: version.variableMapping, questions: version.questions
+  };
+  if (current.description !== evaluator.description || !isDeepStrictEqual(definition, evaluator.definition)) {
+    const recovery = namedManifest ? '' : ' Usa --manifest-evaluator para registrar la definición exacta con otro nombre.';
+    throw new Error(`El evaluador ${evaluator.name} difiere del manifiesto.${recovery}`);
+  }
+  if (current.blockedAt) throw new Error(`El evaluador ${evaluator.name} está bloqueado en Langfuse.`);
+}
+
+async function importEvaluator(rpc) {
+  const installed = await installedConnection(rpc);
   if (!installed && !openRouterKey) throw new Error('Configura OPENROUTER_API_KEY para crear la conexión Jev.');
 
   const list = await rpc('evalsV2.list', { search: evaluator.name });
@@ -135,23 +168,19 @@ async function importEvaluator(rpc) {
   const matches = list.evaluators.filter(row => row.name === evaluator.name);
   if (matches.length > 1) throw new Error(`Hay varios evaluadores llamados ${evaluator.name}.`);
   const current = matches[0] && await rpc('evalsV2.get', { evaluatorId: matches[0].id });
-  if (current) {
-    const version = current.versions.reduce((latest, row) => row.version > (latest?.version ?? 0) ? row : latest, null);
-    const definition = version && {
-      type: current.type, modelConfig: { provider: version.provider, model: version.model },
-      variableMapping: version.variableMapping, questions: version.questions
-    };
-    if (current.description !== evaluator.description || !isDeepStrictEqual(definition, evaluator.definition)) {
-      throw new Error(`El evaluador ${evaluator.name} difiere del manifiesto.`);
-    }
-    if (current.blockedAt) throw new Error(`El evaluador ${evaluator.name} está bloqueado en Langfuse.`);
+  if (current) verifyEvaluator(current);
+  if (!installed) {
+    await rpc('llmApiKey.create', { ...connection, secretKey: openRouterKey }, true);
+    if (!await installedConnection(rpc)) throw new Error('Langfuse no confirmó la conexión Jev.');
   }
-  if (!installed) await rpc('llmApiKey.create', { ...connection, secretKey: openRouterKey }, true);
-  const target = current ?? await rpc('evalsV2.create', { ...evaluator, evaluatorId: destinationEvaluatorId }, true);
-  if (target.type !== evaluator.definition.type || !target.id || target.blockedAt) {
-    throw new Error('Langfuse no devolvió un evaluador de decisión activo.');
+  if (!current) {
+    const created = await rpc('evalsV2.create', { ...evaluator, evaluatorId: destinationEvaluatorId }, true);
+    if (!created.id) throw new Error('Langfuse no devolvió el identificador del evaluador de decisión.');
+    verifyEvaluator(await rpc('evalsV2.get',{evaluatorId:created.id}));
+    console.log(`Evaluador ${evaluator.name} (${created.id}). Creado.`);
+    return;
   }
-  console.log(`Evaluador ${evaluator.name} (${target.id}). ${current ? 'Ya configurado' : 'Creado'}.`);
+  console.log(`Evaluador ${evaluator.name} (${current.id}). Ya configurado.`);
 }
 
 try {

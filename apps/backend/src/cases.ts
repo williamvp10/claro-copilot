@@ -1,10 +1,10 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { asksToChangeMobilePlan, catalogComparison, contextIntent, evolveContext, mandatoryPolicyRoute, nextContextQuestion, recordQuestion } from '@claro/agent';
+import { asksToChangeMobilePlan, catalogComparison, changesCancellationToPlan, claimedBillingAccount, commercialHandoff, contextIntent, evolveContext, mandatoryPolicyRoute, nextContextQuestion, recordQuestion, renderCaseSummary } from '@claro/agent';
 import { ConflictException, ForbiddenException, ServiceUnavailableException, Inject, Injectable, NotFoundException, UnauthorizedException, HttpException, UnprocessableEntityException } from '@nestjs/common';
 import { type z } from 'zod';
 import {
   AgentTurn, CaseSnapshot, WebChatSnapshot, demoWelcome, demoVerifyInvitation, type Actor, type Contact, type DecideProposal, type Intent,
-  type CloseCase, type Message, type OpenCase, type Proposal, type SendMessage, type Viewer
+  type CloseCase, type ConfirmedReceipt, type Message, type OpenCase, type Proposal, type SendMessage, type Viewer
 } from '@claro/contracts';
 import { DataSource, type EntityManager } from 'typeorm';
 import { audit, type CaseRow, type ContactRow, type DraftPublication, DATABASE, enqueue } from './database.js';
@@ -12,6 +12,11 @@ import { accountHandoffReason, accountInquiry, accountReply, accountVerification
 import { privateSignals, queueChurn } from './ml-advisory.js';
 import { readRunPromptConfig } from './prompt-catalog.js';
 import { SimulatorFailure, simulators } from './simulator-client.js';
+
+export async function confirmedCaseReceipts(tx:EntityManager, caseId:string):Promise<ConfirmedReceipt[]> {
+  return tx.query(`SELECT action->>'kind' AS kind, reference FROM integration_operation
+    WHERE case_id=$1 AND status='confirmed' AND reference IS NOT NULL ORDER BY created_at DESC LIMIT 12`, [caseId]);
+}
 
 type Assessor = Viewer;
 type Mutation = (tx: EntityManager, row: CaseRow) => Promise<void>;
@@ -125,9 +130,12 @@ export function addMessage(row: CaseRow, actor: z.infer<typeof Actor>, text: str
 }
 
 const replayScenarios:Record<string,{fixture:string;channel:'telegram'|'whatsapp'}> = {
-  'CC-E03':{fixture:'C-1013',channel:'telegram'}, 'CC-E10':{fixture:'C-1013',channel:'whatsapp'},
+  'CC-E03':{fixture:'C-1013',channel:'telegram'}, 'CC-E04':{fixture:'C-1005',channel:'telegram'},
+  'CC-E07':{fixture:'C-1001',channel:'telegram'}, 'CC-E10':{fixture:'C-1013',channel:'whatsapp'},
   'CC-E11':{fixture:'C-1004',channel:'telegram'}, 'CC-E12':{fixture:'C-1007',channel:'telegram'},
-  'CC-E13':{fixture:'C-1013',channel:'telegram'},
+  'CC-E13':{fixture:'C-1013',channel:'telegram'}, 'CC-E14':{fixture:'C-1001',channel:'telegram'},
+  'CC-E15':{fixture:'C-1013',channel:'telegram'}, 'CC-E17':{fixture:'C-1012',channel:'telegram'},
+  'CC-E18':{fixture:'C-1013',channel:'telegram'}, 'CC-E19':{fixture:'C-1013',channel:'telegram'},
   'GQ-25':{fixture:'C-1001',channel:'telegram'}, 'GQ-26':{fixture:'C-1004',channel:'telegram'},
   'GQ-27':{fixture:'C-1007',channel:'telegram'}, 'GQ-28':{fixture:'C-1013',channel:'telegram'}
 };
@@ -236,8 +244,7 @@ export class Cases {
       this.db.query(`SELECT kind,created_at AS at FROM attention_event
         WHERE case_id=$1 AND (kind LIKE 'escalation_%' OR kind IN ('handoff_taken','holder_verified','closed'))
         ORDER BY id DESC LIMIT 12`, [row.id]),
-      this.db.query(`SELECT action->>'kind' AS kind, reference FROM integration_operation
-        WHERE case_id=$1 AND status='confirmed' AND reference IS NOT NULL ORDER BY created_at DESC LIMIT 12`, [row.id])
+      confirmedCaseReceipts(this.db.manager,row.id)
     ]);
     const preferred = escalation?.status==='tomado' || escalation?.status==='resuelto'
       ? escalation.destination==='supervision' ? 'supervisor' : 'n2' : 'n1';
@@ -262,7 +269,9 @@ export class Cases {
       row.snapshot.card = null;
       await audit(tx, id, 'handoff_taken');
       await queueChurn(tx,row);
-      await queueRun(tx, row);
+      const commercial=row.snapshot.conversation_memory?.selected_plan &&
+        (row.handoff_pending===commercialHandoff || row.handoff_pending==='Atención humana');
+      await queueRun(tx,row,undefined,false,commercial ? {decision:'prepare_commercial_handoff'} : undefined);
     });
   }
 
@@ -380,6 +389,16 @@ export class Cases {
         throw new ConflictException('Se requiere un caso de cancelación elegible y verificado');
       }
       if (eligible) await audit(tx,id,'retention_outcome',{category:'cancelacion',outcome:retention_outcome ?? 'pendiente'});
+      if (row.snapshot.card) {
+        const [active] = await tx.query('SELECT revision FROM prompt_revision WHERE activated');
+        const config = active ? await readRunPromptConfig(tx,active.revision) : undefined;
+        if (config?.prompts.agent_objectives && config.prompts.handoff_summary) {
+          const status = resolved ? 'Atención resuelta' : 'Atención cerrada con pendientes';
+          const summaryCard = {...row.snapshot.card,summary:status + '. ' + row.snapshot.card.summary};
+          row.snapshot.card.closure_summary = renderCaseSummary(config.prompts.handoff_summary,summaryCard,
+            await confirmedCaseReceipts(tx,id));
+        }
+      }
       row.snapshot.status = 'closed';
       row.snapshot.revision += 1;
       await tx.query('UPDATE attention_case SET resolved=$2 WHERE id=$1', [id, resolved]);
@@ -592,11 +611,37 @@ export class Cases {
     const greeting=!requested && !pending && !contextIntent(text) && isGreeting(text);
     const safeText=greeting ? 'Hola' : this.safeCustomerText(text,aliases,codes);
     const priority=mandatoryPolicyRoute(safeText);
+    const claimedBilling = !verified && row.snapshot.channel==='telegram' && row.snapshot.attention_mode==='autoservicio' &&
+      (contextIntent(safeText)==='facturacion' || requested==='invoice') && claimedBillingAccount(safeText);
     const previousIntake=row.snapshot.intake;
+    if (!priority && !handoff && !planChange && previousIntake?.intent==='cancelacion' && changesCancellationToPlan(safeText)) {
+      requested=null;
+      const proposal=row.snapshot.card?.proposal;
+      if (proposal?.kind==='retention_offer' && proposal.status==='pending_approval') {
+        await tx.query(`UPDATE retention_proposal SET proposal=jsonb_set(proposal,'{status}','"expired"')
+          WHERE id=$1 AND case_id=$2 AND proposal->>'status'='pending_approval'`,[proposal.id,row.id]);
+        row.snapshot.revision += 1;
+        row.snapshot.card=null;
+        await audit(tx,row.id,'proposal_expired',{proposal_id:proposal.id,reason:'cancellation_withdrawn'});
+      }
+      const handoffReason = row.snapshot.handoff_reason ?? row.handoff_pending ?? '';
+      const cancellationHandoff = /^El cliente solicita cancelar el servicio\.|^Solicitud de cancelación$/i.test(handoffReason);
+      if (row.snapshot.attention_mode==='autoservicio' && !row.snapshot.owner_id &&
+          (!row.handoff_pending || cancellationHandoff)) {
+        if (row.handoff_pending) await audit(tx,row.id,'case_autoservice_resumed',{
+          channel:row.snapshot.channel, reason:'cancellation_withdrawn'
+        });
+        row.handoff_pending=null;
+        delete row.snapshot.handoff_reason;
+        row.account_inquiry=null;
+        pending=null;
+        this.clearChallenge(row);
+      }
+    }
     const collectingCancellation=demo && row.snapshot.attention_mode==='autoservicio' && !pending &&
       (requested==='assistance' && contextIntent(text)==='cancelacion' ||
         previousIntake?.intent==='cancelacion' && !!previousIntake.pending);
-    const verificationTurn = !verified && !handoff && !priority && (requested==='identify' || !!pending && (!requested || !!activeChallenge));
+    const verificationTurn = !verified && !handoff && !priority && !claimedBilling && (requested==='identify' || !!pending && (!requested || !!activeChallenge));
     const message = addMessage(row,'cliente',verificationTurn
       ? '[Dato de verificación oculto]'
       : safeText);
@@ -613,11 +658,11 @@ export class Cases {
         : `${demoWelcome}${demo ? ` ${demoVerifyInvitation}` : ''} ¿En qué te puedo ayudar?`);
       return;
     }
-    if (requested && requested!=='identify' && !verificationTurn) delete row.snapshot.conversation_memory;
+    if (requested && requested!=='identify' && !verificationTurn && !handoff) delete row.snapshot.conversation_memory;
     if (!verificationTurn && !(collectingCancellation && previousIntake && aliases.length)) {
       row.snapshot.intake=evolveContext(safeText,previousIntake);
     }
-    if (!handoff && priority) {
+    if (!handoff && (priority || claimedBilling)) {
       row.account_inquiry=null;
       this.clearChallenge(row);
       await queueRun(tx,row,message,true);
