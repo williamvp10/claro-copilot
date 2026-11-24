@@ -11,6 +11,7 @@
 .env.*
 !.env.example
 coverage
+artifacts
 **/*.pyc
 **/*.env
 **/acceso-*.txt
