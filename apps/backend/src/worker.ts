@@ -231,18 +231,19 @@ async function deliver(job: Extract<CaseJob, {kind: 'deliver'}>) {
 async function handle(job: CaseJob) {
   switch (job.kind) {
     case 'run': {
+      const { row } = await runContext(db.manager, job.payload.run_id, false);
+      const subject = row.web_visitor_ref ?? row.contact_ref;
       if (job.payload.observed_context && job.payload.observed_context.decision!=='prepare_commercial_handoff') {
         const at=Date.now();
         const metadata=job.payload.observed_context;
         const config=await readRunPromptConfig(db,job.payload.config_revision);
         const traceSha = await exportAgentSpan(job.payload,at,'context',metadata.decision,[{name:'context',started:at,ended:at,
-          metadata:{decision:metadata.decision,question_id:metadata.question_id ?? '',agent_id:'copiloto'}}],config.prompt_metadata);
+          metadata:{decision:metadata.decision,question_id:metadata.question_id ?? '',agent_id:'copiloto'}}],config.prompt_metadata,subject);
         if (traceSha) {
           await audit(db.manager,job.case_id,'langfuse_exported',{run_id:job.payload.run_id,trace_sha256:traceSha});
         }
         break;
       }
-      const { row } = await runContext(db.manager, job.payload.run_id, false);
       if (!stillCurrent(row, job.payload)) return audit(db.manager, job.case_id, 'agent_stale');
       const started = Date.now();
       const promptConfig = await readRunPromptConfig(db, job.payload.config_revision);
@@ -256,7 +257,7 @@ async function handle(job: CaseJob) {
           await audit(db.manager, job.case_id, item.name, { ...item.metadata, route:result.route, run_id:job.payload.run_id, ms: item.ended - item.started });
         }
       }
-      const traceSha = await exportAgentSpan(job.payload, started, result.route, result.type, spans, promptConfig.prompt_metadata);
+      const traceSha = await exportAgentSpan(job.payload, started, result.route, result.type, spans, promptConfig.prompt_metadata,subject);
       if (traceSha) {
         await audit(db.manager, job.case_id, 'langfuse_exported', {run_id:job.payload.run_id,trace_sha256:traceSha});
       }
@@ -269,7 +270,8 @@ async function handle(job: CaseJob) {
     case 'effect': {
       const started = Date.now();
       await executeAgentIntegration(db,job.case_id,job.payload.proposal_id);
-      const [record] = await db.query('SELECT r.turn,p.proposal FROM retention_proposal p JOIN agent_run r ON r.id=p.run_id WHERE p.id=$1', [job.payload.proposal_id]);
+      const [record] = await db.query(`SELECT r.turn,p.proposal,COALESCE(c.web_visitor_ref,c.contact_ref) AS subject
+        FROM retention_proposal p JOIN agent_run r ON r.id=p.run_id JOIN attention_case c ON c.id=r.case_id WHERE p.id=$1`, [job.payload.proposal_id]);
       if (record && record.proposal.status === 'confirmed' && record.proposal.effect_ref) {
         const terminal = record.proposal.kind === 'support_ticket' ? 'ticket_confirmed' : 'offer_confirmed';
         const [seen] = await db.query(`SELECT EXISTS(SELECT 1 FROM attention_event WHERE case_id=$1 AND kind='agent_task_outcome' AND metadata->>'effect_id'=$2) AS found`,[job.case_id,job.payload.proposal_id]);
@@ -277,7 +279,7 @@ async function handle(job: CaseJob) {
       }
       if (record) await exportAgentSpan(record.turn, started, 'effect', record.proposal.status, [{
         name:'effect', started, ended:Date.now(), metadata:{ status:record.proposal.status, kind:record.proposal.kind ?? 'retention_offer' }
-      }]);
+      }],undefined,record.subject);
       break;
     }
     case 'integration': await executeIntegration(db,job.case_id,job.payload.operation_id); break;

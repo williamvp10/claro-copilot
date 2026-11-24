@@ -152,7 +152,11 @@ export default function CustomerChat() {
         {messages.map(message => <article key={message.id} className={message.actor === 'cliente' ? styles.customer : styles.agent}>
           <span className={styles.author}>{message.actor === 'cliente' ? 'Tú' : message.actor === 'asesor' ? 'Asesor Claro' : 'Claro Copiloto'}</span>
           <p>{message.text}</p>
-          {message.citations?.map(citation => citation.source
+          {message.citations?.filter((citation,index,all) => {
+            const source = citation.source;
+            return !source || !/^catalogo-v\d+$/.test(source.key) || all.findIndex(item =>
+              item.source?.publication === source.publication && item.source.key === source.key) === index;
+          }).map(citation => citation.source
             ? <a key={citation.id} className={styles.sourceLink}
                 href={`/fuentes/${citation.source.publication}/${citation.source.key}?pasaje=${encodeURIComponent(citation.id)}`}
                 target="_blank" rel="noreferrer"><FileText size={14} aria-hidden="true" /> {/^catalogo-v\d+$/.test(citation.source.key)

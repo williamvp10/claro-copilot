@@ -494,11 +494,13 @@ export class Cases {
     this.requireWebDemo();
     return this.db.transaction(async (tx) => {
       const session = await this.webSession(tx, token);
-      if (session && !fresh) return { token: undefined, snapshot: this.publicWeb(await loadCase(tx, session.case_id)) };
+      const prior = session ? await loadCase(tx, session.case_id) : undefined;
+      if (prior && !fresh) return { token: undefined, snapshot: this.publicWeb(prior) };
       await this.consumeWebQuota(tx, 'start', 24);
       await tx.query('DELETE FROM web_chat_session WHERE expires_at <= now()');
       const issued = randomBytes(32).toString('base64url');
-      const row = await this.newCase(tx, { ref: `web:${randomUUID()}`, display_name: 'Cliente web' }, null, 'web');
+      const row = await this.newCase(tx, { ref: `web:${randomUUID()}`, display_name: 'Cliente web' }, null, 'web',
+        prior?.web_visitor_ref ?? prior?.contact_ref);
       await tx.query("INSERT INTO web_chat_session VALUES ($1, $2, now() + interval '24 hours')", [this.tokenHash(issued), row.id]);
       return { token: issued, snapshot: this.publicWeb(row) };
     });
@@ -900,14 +902,16 @@ export class Cases {
     return row;
   }
 
-  private async newCase(tx: EntityManager, contact: Pick<ContactRow, 'ref' | 'display_name'>, owner: string | null, channel: 'telegram' | 'web' | 'whatsapp' = 'telegram'): Promise<CaseRow> {
+  private async newCase(tx: EntityManager, contact: Pick<ContactRow, 'ref' | 'display_name'>, owner: string | null,
+    channel: 'telegram' | 'web' | 'whatsapp' = 'telegram', webVisitorRef?: string): Promise<CaseRow> {
     const id = randomUUID();
     const snapshot: CaseSnapshot = {
       id, conversation_id: randomUUID(), display_name: contact.display_name, channel,
       owner_id: owner, attention_mode: owner ? 'asistido' : 'autoservicio', status: 'open',
       verified: false, revision: 1, updated_at: new Date().toISOString(), cursor: 0, messages: [], card: null, last_message: null
     };
-    await tx.query('INSERT INTO attention_case(id,contact_ref,snapshot) VALUES ($1,$2,$3)', [id, contact.ref, snapshot]);
+    await tx.query('INSERT INTO attention_case(id,contact_ref,snapshot,web_visitor_ref) VALUES ($1,$2,$3,$4)',
+      [id, contact.ref, snapshot, webVisitorRef ?? null]);
     await audit(tx, id, 'opened');
     if (owner) await audit(tx,id,'human_attention_started',{operator_id:owner,channel});
     return { id, snapshot, contact_ref: contact.ref, handoff_pending: null, intent_hint: null };

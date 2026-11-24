@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { isModelObservation, type AgentObservation } from '@claro/agent';
 import type { AgentTurn } from '@claro/contracts';
@@ -8,7 +8,8 @@ import { runtimeSha256 } from './runtime-revision.js';
 
 export const traceIdentifier = (runId: string) => createHash('sha256').update(runId).digest('hex').slice(0,32);
 
-export async function exportAgentSpan(turn: AgentTurn, started: number, route: string, result: string, observations: AgentObservation[] = [], promptMetadata: RunPromptConfig['prompt_metadata'] = {}): Promise<string | false> {
+export async function exportAgentSpan(turn: AgentTurn, started: number, route: string, result: string,
+  observations: AgentObservation[] = [], promptMetadata: RunPromptConfig['prompt_metadata'] = {}, subject?: string): Promise<string | false> {
   const publicKey = process.env.LANGFUSE_PUBLIC_KEY;
   const secret = process.env.LANGFUSE_SECRET_KEY;
   const base = process.env.LANGFUSE_BASE_URL;
@@ -19,6 +20,11 @@ export async function exportAgentSpan(turn: AgentTurn, started: number, route: s
       !(endpoint.protocol === 'http:' && ((endpoint.hostname === 'langfuse-web' && endpoint.port === '3000') ||
         (process.env.DEMO_MODE === 'true' && ['127.0.0.1','localhost'].includes(endpoint.hostname))))) return false;
     const traceId = traceIdentifier(turn.run_id);
+    const opaqueId = (value: string) => createHmac('sha256',process.env.BETTER_AUTH_SECRET || secret).update(value).digest('hex');
+    const correlation = {
+      ...(turn.conversation_id ? {'langfuse.session.id':opaqueId(`langfuse:session:${turn.conversation_id}`)} : {}),
+      ...(subject ? {'langfuse.user.id':opaqueId(`langfuse:user:${turn.channel}:${subject}`)} : {})
+    };
     const attributes = {
       'langfuse.observation.type': 'agent',
       'langfuse.trace.name': 'claro-attention',
@@ -35,7 +41,7 @@ export async function exportAgentSpan(turn: AgentTurn, started: number, route: s
       traceId, spanId, name, kind: 1, ...(parentSpanId ? { parentSpanId } : {}),
       startTimeUnixNano: String(BigInt(from) * 1_000_000n),
       endTimeUnixNano: String(BigInt(to) * 1_000_000n),
-      attributes: Object.entries(metadata).map(([key, value]) => ({
+      attributes: Object.entries({...metadata,...correlation}).map(([key, value]) => ({
         key, value: typeof value === 'number'
           ? Number.isInteger(value) ? { intValue: String(value) } : { doubleValue: value }
           : { stringValue: value }

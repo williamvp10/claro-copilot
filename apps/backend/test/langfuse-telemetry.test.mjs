@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { test } from 'node:test';
 import { exportAgentSpan, traceIdentifier } from '../dist/telemetry.js';
 import { promptEntry } from '../dist/prompt-catalog.js';
@@ -10,8 +10,9 @@ test('Langfuse export links the version and omits case text', async t=>{
   process.env.LANGFUSE_SECRET_KEY='fixture-secret';
   process.env.LANGFUSE_BASE_URL='http://langfuse-web:3000';
   process.env.KNOWLEDGE_INDEX_REVISION='a'.repeat(64);
+  process.env.BETTER_AUTH_SECRET='test-correlation-key';
   t.after(()=>{
-    for (const key of ['LANGFUSE_PUBLIC_KEY','LANGFUSE_SECRET_KEY','LANGFUSE_BASE_URL','KNOWLEDGE_INDEX_REVISION']) {
+    for (const key of ['LANGFUSE_PUBLIC_KEY','LANGFUSE_SECRET_KEY','LANGFUSE_BASE_URL','KNOWLEDGE_INDEX_REVISION','BETTER_AUTH_SECRET']) {
       if (original[key]===undefined) delete process.env[key];
       else process.env[key]=original[key];
     }
@@ -22,7 +23,7 @@ test('Langfuse export links the version and omits case text', async t=>{
     requests.push({url:String(url),body:JSON.parse(init.body),redirect:init.redirect});
     return Response.json(acknowledgment);
   });
-  const turn={run_id:'trace-test',channel:'web',audience:'cliente',config_revision:'test-v2',text:'Private transcript placeholder'};
+  const turn={run_id:'trace-test',conversation_id:'internal-conversation',channel:'web',audience:'cliente',config_revision:'test-v2',text:'Private transcript placeholder'};
   const now=Date.now();
   const prompt=promptEntry('public_answer','An approved immutable text','langfuse',9);
   const ok=await exportAgentSpan(turn,now,'consulta_planes','answer',[{
@@ -35,11 +36,19 @@ test('Langfuse export links the version and omits case text', async t=>{
   {name:'decision.jev',started:now,ended:now,metadata:{provider_attempted:'yes',model:'typesafe/jev-1.14',
     input_tokens:476,output_tokens:70,cost_usd:0.000019992,status:'fallback'}},
   {name:'decision.jev',started:now,ended:now,metadata:{provider_attempted:'yes',model:'typesafe/jev-1.14',status:'fallback'}}
-  ],{public_answer:prompt});
+  ],{public_answer:prompt},'private-contact-reference');
   assert.equal(ok,createHash('sha256').update(JSON.stringify(requests[0].body)).digest('hex'));
   assert.match(requests[0].url,/\/api\/public\/otel\/v1\/traces$/);
   assert.equal(requests[0].redirect,'error');
   const [root,generation,context,catalogue,jev,failedJev]=requests[0].body.resourceSpans[0].scopeSpans[0].spans;
+  const expectedId=value=>createHmac('sha256','test-correlation-key').update(value).digest('hex');
+  const correlationOf=span=>Object.fromEntries(span.attributes.filter(({key})=>['langfuse.session.id','langfuse.user.id'].includes(key))
+    .map(({key,value})=>[key,value.stringValue]));
+  const correlation={
+    'langfuse.session.id':expectedId('langfuse:session:internal-conversation'),
+    'langfuse.user.id':expectedId('langfuse:user:web:private-contact-reference')
+  };
+  for (const span of [root,generation,context,catalogue,jev,failedJev]) assert.deepEqual(correlationOf(span),correlation);
   assert.equal(root.traceId,traceIdentifier(turn.run_id));
   assert.equal(generation.parentSpanId,root.spanId);
   assert.equal(context.parentSpanId,root.spanId);
@@ -59,7 +68,11 @@ test('Langfuse export links the version and omits case text', async t=>{
   const attributes=Object.fromEntries(generation.attributes.map(({key,value})=>[key,value]));
   assert.equal(attributes['langfuse.observation.prompt.name'].stringValue,prompt.name);
   assert.equal(attributes['langfuse.observation.prompt.version'].intValue,'9');
-  assert.doesNotMatch(JSON.stringify(requests[0].body),/Private transcript|An approved immutable text/);
+  assert.doesNotMatch(JSON.stringify(requests[0].body),/Private transcript|An approved immutable text|private-contact-reference|internal-conversation/);
+  await exportAgentSpan({...turn,run_id:'next-run',conversation_id:'another-conversation'},now,'consulta_planes','answer',[],{},'private-contact-reference');
+  const next=correlationOf(requests[1].body.resourceSpans[0].scopeSpans[0].spans[0]);
+  assert.equal(next['langfuse.user.id'],correlation['langfuse.user.id']);
+  assert.notEqual(next['langfuse.session.id'],correlation['langfuse.session.id']);
   acknowledgment = {partialSuccess:{rejectedSpans:'1'}};
   assert.equal(await exportAgentSpan(turn,now,'consulta_planes','answer'),false);
   acknowledgment = {partial_success:{rejected_spans:1}};

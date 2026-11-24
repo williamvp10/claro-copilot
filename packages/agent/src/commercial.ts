@@ -2,7 +2,7 @@ import type { CatalogPlan, CatalogSegment, Citation, ConversationMemory, RunResu
 import { plansDiscovery } from './retrieval.js';
 
 const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-const clean = (value: string) => normalize(value).trim().replace(/^[¿¡]+|[.!?]+$/g, '').trim();
+const clean = (value: string) => normalize(value).trim().replace(/^[¿¡]+|[.!?]+$/g, '').trim().replace(/\s+/g,' ');
 const words = (value: string) => normalize(value).replace(/[^\p{L}\p{N}]+/gu,' ').trim();
 export const commercialHandoff = 'Solicitud de contratación';
 export const confirmCommercialPurchase = '¿Confirmas que quieres continuar con un asesor?';
@@ -10,13 +10,17 @@ const labels: Record<CatalogSegment, string> = { hogar: 'Internet Hogar', movil_
 type Action = 'list' | 'select' | 'price' | 'detail' | 'download' | 'purchase';
 export type CatalogRequest = { action: Action; query: string; groups: CatalogSegment[] };
 
+const categoryReply = /^(?:(?:me interesa |prefiero |quiero (?:ver )?|busco |opciones (?:de|para) ))?(?:(?:el|la|los|las|un|una) )?(?:planes? )?(?:(?:de|para) )?(?:(?:mi|el|la) )?(?:(?:telefonia |linea )?movil(?:es)?(?: (?:pospago|prepago))?|celular(?:es)?|(?:internet (?:para (?:el |la |mi )?)?)?(?:hogar|casa)|(?:internet de )?fibra|pospago|prepago|recargas?)(?:,? por favor)?$/;
+
 export function commercialRequest(text: string, contextualText: string, memory?: ConversationMemory): CatalogRequest | undefined {
   const query = clean(text);
   const reply = clean(contextualText);
   if (/\b(?:mi saldo|mi mora|mis? facturas?|mi plan actual|mis servicios|que plan tengo|plan contratado)\b/.test(query)) return;
-  const mobile = /\b(?:movil(?:es)?|celular(?:es)?)\b/;
+  const mobile = /\b(?:movil(?:es)?|celular(?:es)?|pospago|prepago|recargas?)\b/;
   const home = /\b(?:hogar|casa|fibra)\b/;
-  const groups: CatalogSegment[] = /\bpospago\b/.test(reply) ? ['movil_pospago'] : /\bprepago\b/.test(reply) ? ['movil_prepago']
+  const prepaid = /\b(?:prepago|recargas?)\b/.test(reply);
+  const postpaid = /\bpospago\b/.test(reply);
+  const groups: CatalogSegment[] = prepaid && postpaid ? ['movil_pospago','movil_prepago'] : postpaid ? ['movil_pospago'] : prepaid ? ['movil_prepago']
     : mobile.test(reply) && !home.test(reply) ? ['movil_pospago','movil_prepago'] : home.test(reply) && !mobile.test(reply) ? ['hogar'] : [];
   const request = (action: Action): CatalogRequest => ({ action, query, groups });
   const purchase = /\b(?:quiero (?:ya )?|deseo |quisiera |voy a )(?:contratar|comprar|adquirir)(?:lo|la)?\b|^(?:si,? )?(?:contratame|compra(?:lo|la)|contrata(?:lo|la)|procedamos con la contratacion)\b/;
@@ -24,11 +28,14 @@ export function commercialRequest(text: string, contextualText: string, memory?:
     if (purchase.test(query) || memory?.purchase_confirmation && /^(?:si(?:,? por favor)?|confirmo|de acuerdo|adelante)$/.test(query)) return request('purchase');
   }
   if (/\bcatalogo\b/.test(query) && /\b(?:pdf|descarg\w*|pasas|envia\w*|compart\w*|abri\w*|ver|manda\w*)\b/.test(query)) return request('download');
-  if (plansDiscovery(contextualText) || groups.length && /^que (?:ofrecen|opciones (?:hay|tienen))\b/.test(query) ||
-    /^(?:plan(?:es)? )?(?:de |para (?:mi |el )?)?(?:pospago|prepago|movil(?:es)?|celular(?:es)?|internet hogar)$/.test(reply)) return request('list');
+  if (plansDiscovery(contextualText) || categoryReply.test(reply)) return request('list');
+  if (/^(?:que ofrecen|que (?:otras )?opciones (?:hay|tienen)|cuales son las opciones)$/.test(query)) {
+    const discussed = groups.length ? groups : memory?.offered_segments;
+    if (discussed?.length) return {...request('list'),groups:discussed};
+  }
   if ((memory || /\b(?:plan|paquete|gb|mbps)\b/.test(query)) &&
     !/\b(?:saber|conocer|comparar)\b/.test(query) &&
-    /^(?:(?:si,? )?me (?:quedo con|interesa|gusta) |elijo |prefiero |escojo |selecciono |(?:el|la) de |(?:ese|esa)(?: plan| paquete)?$)/.test(query)) return request('select');
+    /^(?:(?:si,? )?me (?:quedo con|interesa|gusta) |elijo |prefiero |escojo |selecciono |(?:el|la) de |(?:ese|esa|este|esta)(?: plan| paquete)?$)/.test(query)) return request('select');
   const price = /\b(?:precio|cuesta|cuestan|cuanto vale|cuanto valen|valor mensual)\b/;
   const hasCommercialSubject = memory?.selected_plan || groups.length || /\b(?:plan|paquete|catalogo|gb|mbps)\b/.test(query);
   if (hasCommercialSubject && price.test(query)) return request('price');
@@ -43,10 +50,7 @@ function sameProduct(left: CatalogPlan, right: CatalogPlan) {
   return left.segment === right.segment && clean(left.name) === clean(right.name);
 }
 
-function namedOptions(query: string, plans: CatalogPlan[]) {
-  // Prefer a full published name before interpreting an informal description.
-  const nameMatches = plans.filter(plan => (` ${words(query)} `).includes(` ${words(plan.name)} `));
-  if (nameMatches.length) return nameMatches;
+function matchingDescription(query: string, plans: CatalogPlan[]) {
   const number = query.match(/\b(\d+)\s*(gb|mbps)?\b/);
   if (number) {
     return plans.filter(plan => {
@@ -79,7 +83,7 @@ export function answerCommercial(request: CatalogRequest, plans: CatalogPlan[], 
   if (action === 'list') {
     if (!scoped.length) return answer(unavailable, []);
     if (!groups.length && scoped.some(plan => plan.segment === 'hogar') && scoped.some(plan => plan.segment !== 'hogar')) {
-      return answer('Tenemos opciones de internet para el hogar y telefonía móvil. ¿Cuál estás buscando?', scoped, undefined);
+      return answer('Tenemos opciones de internet para el hogar y telefonía móvil. ¿Cuál estás buscando?', scoped, {});
     }
     const headings = [...new Set(scoped.map(plan => plan.segment))];
     const sections = headings.map(group => {
@@ -91,7 +95,10 @@ export function answerCommercial(request: CatalogRequest, plans: CatalogPlan[], 
     const note = missing.length ? `\nFalta confirmar ${missing.map(group=>labels[group]).join(' y ')}.` : '';
     const listing = `${sections.join('\n\n')}${note}\n\n¿Cuál te interesa?`;
     const summary = `Encontré ${headings.map(group=>labels[group]).join(' y ')} en el catálogo.${note} ¿De qué plan quieres conocer el precio?`;
-    return answer(listing.length <= 4000 ? listing : summary, scoped, groups.length === 1 ? {segment:groups[0]} : {});
+    return answer(listing.length <= 4000 ? listing : summary, scoped, {
+      offered_segments:headings, ...(headings.length === 1 ? {segment:headings[0]} : {}),
+      ...(scoped.length === 1 ? {anchor_plan:clean(scoped[0]!.name)} : {})
+    });
   }
   if (action === 'download') {
     if (selected?.citation.source && /\b(?:ese|esa|anterior|que citaste)\b/.test(query)) {
@@ -102,10 +109,17 @@ export function answerCommercial(request: CatalogRequest, plans: CatalogPlan[], 
     return source ? answer('Puedes ver o descargar la edición vigente del catálogo en la fuente adjunta.', [source])
       : answer('El PDF del catálogo no está disponible para esta consulta.', []);
   }
-  // In a detail question a number can describe a feature, rather than be a plan reference.
-  const options = action === 'detail' ? [] : namedOptions(query, scoped);
+  // A full published name can change the topic. Short descriptions refer to the options shown.
+  const named = action === 'detail' ? [] : scoped.filter(plan => (` ${words(query)} `).includes(` ${words(plan.name)} `));
+  const offered = !groups.length ? memory?.offered_segments : undefined;
+  const references = offered ? scoped.filter(plan=>offered.includes(plan.segment)) : scoped;
+  const options = named.length || action === 'detail' ? named : matchingDescription(query, references);
+  const currentSelection = selected && scoped.find(plan => sameProduct(plan, selected));
+  const refersToOne = /\b(?:ese|esa|este|esta)\b/.test(query);
+  const anchor = refersToOne && memory?.anchor_plan ? references.find(plan=>clean(plan.name)===memory.anchor_plan) : undefined;
   const current = options.length === 1 ? options[0] : options.length ? undefined
-    : selected && (action === 'detail' || !/\b(?:\d+\s*(?:gb|mbps)|ilimitad[oa])\b/.test(query)) ? scoped.find(plan => sameProduct(plan, selected)) : undefined;
+    : action === 'select' ? refersToOne ? currentSelection ?? anchor : undefined
+      : action === 'detail' || !/\b(?:\d+\s*(?:gb|mbps)|ilimitad[oa])\b/.test(query) ? currentSelection : undefined;
   if (options.length > 1) return answer(`Encontré más de una opción. ¿Te refieres a ${options.slice(0,4).map(plan=>plan.name).join(' o ')}?`, options);
   if (action === 'purchase') {
     if (!current && selected) {

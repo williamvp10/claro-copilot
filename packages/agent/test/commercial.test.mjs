@@ -72,6 +72,24 @@ test('COM-01 lista las dos modalidades y conserva la elección hasta la ficha de
  assert.ok(!later.card.reason_codes.includes('commercial_selection'));
 });
 
+test('interpreta categorías expresadas sin la palabra plan y recuerda las modalidades mostradas', async()=>{
+ const extra=makeDocument('prepaid','Telefonía móvil prepago','Paquete Mensual 60 GB 30 días $40.000');
+ const {send,calls}=session([...standard.slice(0,2),extra]);
+ assert.match((await send('que planes tienen?')).answer,/hogar.*móvil/);
+ const mobile=await send('telefonia movil');
+ assert.match(mobile.answer,/Pospago.*Prepago/s);
+ assert.deepEqual(mobile.conversation_memory.offered_segments,['movil_pospago','movil_prepago']);
+ const ambiguous=await send('El de 60 GB');
+ assert.match(ambiguous.answer,/Claro Max 60 GB o Paquete Mensual/);
+ const prepaid=await send('prefiero recargas');
+ assert.doesNotMatch(prepaid.answer,/Pospago/);
+ assert.match((await send('¿Qué opciones hay?')).answer,/^Prepago/);
+ assert.equal((await send('Me quedo con el de 60 GB')).conversation_memory.selected_plan.name,'Paquete Mensual');
+ assert.equal((await send('Elijo Claro Max 60 GB')).conversation_memory.selected_plan.name,'Claro Max 60 GB');
+ assert.match((await send('Internet para mi casa')).answer,/Internet Hogar/);
+ assert.ok(calls.every(call=>call==='catalogue'));
+});
+
 test('a question about another row does not transfer its benefits to the selected plan', async()=>{
  const {send}=session();
  await send('plan móvil');

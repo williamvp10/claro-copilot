@@ -33,6 +33,7 @@ export const CatalogPlan = z.object({
 export type CatalogPlan = z.infer<typeof CatalogPlan>;
 export const ConversationMemory = z.object({
   segment: CatalogSegment.optional(), anchor_plan: z.string().min(1).max(80).optional(),
+  offered_segments: z.array(CatalogSegment).min(1).max(3).optional(),
   preference: z.literal('lower_price').optional(), pending: z.literal('compare_prices').optional(), package_validity: PackageValidity.optional(),
   selected_plan: CatalogPlan.optional(),
   purchase_confirmation: z.boolean().optional()
