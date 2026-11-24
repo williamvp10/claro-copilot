@@ -162,7 +162,7 @@ export function answerCommercial(request: CatalogRequest, plans: CatalogPlan[], 
   if (options.length > 1) return answer(`Encontré más de una opción. ¿Te refieres a ${options.slice(0,4).map(plan=>plan.name).join(' o ')}?`, options);
   if (action === 'purchase') {
     if (!options.length && currentFocus && currentSelection && !sameProduct(currentFocus,currentSelection)) {
-      return answer(`¿Quieres contratar ${currentFocus.name} o ${currentSelection.name}?`, [currentFocus,currentSelection]);
+      return answer(`Habías elegido ${currentSelection.name} y acabamos de revisar ${currentFocus.name}. ¿Quieres contratar ${currentFocus.name} o ${currentSelection.name}?`, [currentFocus,currentSelection]);
     }
     if (!current && selected) {
       const alternatives = scoped.filter(plan => plan.segment === selected.segment);
