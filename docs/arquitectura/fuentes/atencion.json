@@ -1,0 +1,197 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "quality_profile": "showcase",
+    "title": "Quién responde en cada modo",
+    "output": "diagramas/atencion.html",
+    "locale": "es",
+    "visual_preset": "blueprint"
+  },
+  "lanes": [
+    {
+      "id": "auto",
+      "label": "Autoservicio"
+    },
+    {
+      "id": "asesor",
+      "label": "Atención humana"
+    },
+    {
+      "id": "priv",
+      "label": "Copiloto privado"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "chat",
+      "lane": "auto",
+      "col": 0,
+      "type": "external",
+      "label": "Cliente escribe",
+      "sublabel": "Chat web o Telegram"
+    },
+    {
+      "id": "rag",
+      "lane": "auto",
+      "col": 1,
+      "type": "backend",
+      "label": "Agente consulta RAG",
+      "sublabel": "Fuente vigente y pública"
+    },
+    {
+      "id": "resp",
+      "lane": "auto",
+      "col": 2,
+      "type": "frontend",
+      "label": "Agente responde",
+      "sublabel": "Mensaje con cita"
+    },
+    {
+      "id": "pasa",
+      "lane": "auto",
+      "col": 3,
+      "type": "security",
+      "label": "Deriva el caso",
+      "sublabel": "Hilo y pendientes"
+    },
+    {
+      "id": "directo",
+      "lane": "asesor",
+      "col": 0,
+      "type": "external",
+      "label": "Chat al asesor",
+      "sublabel": "Solicitud entrante"
+    },
+    {
+      "id": "asignado",
+      "lane": "asesor",
+      "col": 3,
+      "type": "frontend",
+      "label": "Asesor recibe caso",
+      "sublabel": "Bandeja y asignación"
+    },
+    {
+      "id": "habla",
+      "lane": "asesor",
+      "col": 4,
+      "type": "frontend",
+      "label": "Asesor conversa",
+      "sublabel": "Responde en el chat"
+    },
+    {
+      "id": "abre",
+      "lane": "priv",
+      "col": 0,
+      "type": "frontend",
+      "label": "Asesor inicia chat",
+      "sublabel": "Contacto habilitado"
+    },
+    {
+      "id": "escucha",
+      "lane": "priv",
+      "col": 4,
+      "type": "backend",
+      "label": "Copiloto lee turnos",
+      "sublabel": "Cliente y asesor"
+    },
+    {
+      "id": "ficha",
+      "lane": "priv",
+      "col": 5,
+      "type": "security",
+      "label": "Actualiza la ficha",
+      "sublabel": "CRM y citas según rol"
+    }
+  ],
+  "edges": [
+    {
+      "id": "chat-rag",
+      "from": "chat",
+      "to": "rag",
+      "variant": "emphasis"
+    },
+    {
+      "id": "rag-resp",
+      "from": "rag",
+      "to": "resp",
+      "variant": "emphasis",
+      "label": "Hay evidencia"
+    },
+    {
+      "id": "rag-pasa",
+      "from": "rag",
+      "to": "pasa",
+      "variant": "security",
+      "label": "Requiere asesor"
+    },
+    {
+      "id": "directo-asignado",
+      "from": "directo",
+      "to": "asignado",
+      "variant": "emphasis"
+    },
+    {
+      "id": "pasa-asignado",
+      "from": "pasa",
+      "to": "asignado",
+      "variant": "emphasis"
+    },
+    {
+      "id": "abre-asignado",
+      "from": "abre",
+      "to": "asignado",
+      "variant": "default"
+    },
+    {
+      "id": "asignado-habla",
+      "from": "asignado",
+      "to": "habla",
+      "variant": "emphasis"
+    },
+    {
+      "id": "habla-escucha",
+      "from": "habla",
+      "to": "escucha",
+      "variant": "dashed"
+    },
+    {
+      "id": "escucha-ficha",
+      "from": "escucha",
+      "to": "ficha",
+      "variant": "emphasis"
+    }
+  ],
+  "mainPath": [
+    "chat",
+    "rag",
+    "pasa",
+    "asignado",
+    "habla",
+    "escucha",
+    "ficha"
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Dos entradas al mismo servicio",
+      "items": [
+        "El cliente usa el chat web de demostración o Telegram. Cada adaptador identifica canal, conversación y autor y entrega su turno al servicio de casos. Una transferencia conserva el hilo. Cada respuesta se envía al canal de origen."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Atención asistida",
+      "items": [
+        "Al asignar el caso, el asesor recibe la solicitud en su bandeja. Puede contestar o iniciar un contacto habilitado. El copiloto observa los dos lados y actualiza la ficha tras cada turno. La escritura comercial exige aprobación."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Trazabilidad y acceso",
+      "items": [
+        "Cada caso vincula los turnos, la asignación vigente y el cliente de CRM tras verificar titularidad. La auditoría registra quién aprobó y qué confirmó el CRM. Una reasignación invalida resultados obsoletos."
+      ]
+    }
+  ]
+}

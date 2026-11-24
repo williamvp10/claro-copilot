@@ -1,0 +1,565 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "MVP · Servicios y persistencia",
+    "locale": "es",
+    "visual_preset": "blueprint",
+    "quality_profile": "showcase",
+    "output": "diagramas/arquitectura.html",
+    "repository": {
+      "url": "https://github.com/williamvp10/claro-copilot.git",
+      "revision": "233665ca37b38c4d6d458af0b995408ecc497e7e",
+      "link_mode": "web"
+    }
+  },
+  "components": [
+    {
+      "id": "telegram",
+      "type": "external",
+      "label": "Telegram",
+      "sublabel": "Servicio externo del bot",
+      "pos": [
+        40,
+        200
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Canal externo",
+      "sources": [
+        {
+          "path": "apps/backend/src/api.ts",
+          "line": 165
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "API NestJS",
+      "sublabel": "Caso, rol y aprobación",
+      "pos": [
+        335,
+        200
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Plataforma",
+      "sources": [
+        {
+          "path": "apps/backend/src/api.ts",
+          "line": 164
+        },
+        {
+          "path": "apps/backend/src/cases.ts",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "PostgreSQL + pgvector",
+      "sublabel": "Casos, outbox y conocimiento",
+      "pos": [
+        640,
+        200
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Plataforma",
+      "sources": [
+        {
+          "path": "apps/backend/src/worker.ts",
+          "line": 54
+        },
+        {
+          "path": "apps/backend/src/knowledge.ts",
+          "line": 51
+        }
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "Worker NestJS",
+      "sublabel": "LangGraph y herramientas",
+      "pos": [
+        945,
+        200
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Agente",
+      "sources": [
+        {
+          "path": "apps/backend/src/worker.ts",
+          "line": 198
+        }
+      ]
+    },
+    {
+      "id": "cache",
+      "type": "database",
+      "label": "Redis",
+      "sublabel": "Última ejecución · TTL 24 h",
+      "pos": [
+        945,
+        42
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Agente",
+      "sources": [
+        {
+          "path": "apps/backend/src/worker.ts",
+          "line": 207
+        }
+      ]
+    },
+    {
+      "id": "know",
+      "type": "backend",
+      "label": "Conocimiento MCP",
+      "sublabel": "Texto y similitud vectorial",
+      "pos": [
+        640,
+        42
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Agente",
+      "sources": [
+        {
+          "path": "apps/backend/src/mcp.ts",
+          "line": 1
+        },
+        {
+          "path": "apps/backend/src/knowledge.ts",
+          "line": 82
+        }
+      ]
+    },
+    {
+      "id": "mock",
+      "type": "backend",
+      "label": "CRM y facturación",
+      "sublabel": "Operaciones simuladas",
+      "pos": [
+        335,
+        332
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Plataforma",
+      "sources": [
+        {
+          "path": "apps/backend/src/business.ts",
+          "line": 1
+        },
+        {
+          "path": "apps/backend/src/worker.ts",
+          "line": 210
+        }
+      ]
+    },
+    {
+      "id": "fast",
+      "type": "backend",
+      "label": "FastAPI · intención",
+      "sublabel": "Inferencia CPU en sombra",
+      "pos": [
+        945,
+        497
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Equipo ML",
+      "sources": [
+        {
+          "path": "services/ml/app/main.py",
+          "line": 44
+        },
+        {
+          "path": "apps/backend/src/worker.ts",
+          "line": 182
+        }
+      ]
+    },
+    {
+      "id": "bundle",
+      "type": "database",
+      "label": "Volumen ml-models",
+      "sublabel": "Versión fija de solo lectura",
+      "pos": [
+        640,
+        497
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Equipo ML",
+      "sources": [
+        {
+          "path": "services/ml/app/release.py",
+          "line": 15
+        },
+        {
+          "path": "services/ml/app/main.py",
+          "line": 46
+        }
+      ]
+    },
+    {
+      "id": "job",
+      "type": "backend",
+      "label": "Entrenar y publicar",
+      "sublabel": "Jobs de scikit-learn y release",
+      "pos": [
+        335,
+        497
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Equipo ML",
+      "sources": [
+        {
+          "path": "services/ml/app/train.py",
+          "line": 85
+        },
+        {
+          "path": "services/ml/app/release.py",
+          "line": 15
+        }
+      ]
+    },
+    {
+      "id": "flow",
+      "type": "cloud",
+      "label": "MLflow OSS",
+      "sublabel": "Tracking y Model Registry",
+      "pos": [
+        40,
+        497
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Equipo ML",
+      "sources": [
+        {
+          "path": "infra/compose.yaml",
+          "line": 148
+        },
+        {
+          "path": "services/ml/app/train.py",
+          "line": 80
+        }
+      ]
+    },
+    {
+      "id": "providers",
+      "type": "external",
+      "label": "OpenRouter y OpenAI",
+      "sublabel": "Jev y selección de evidencia",
+      "pos": [
+        1240,
+        200
+      ],
+      "size": [
+        190,
+        72
+      ],
+      "tag": "Proveedor",
+      "sources": [
+        {
+          "path": "packages/agent/src/providers.ts",
+          "line": 30
+        }
+      ]
+    },
+    {
+      "id": "obs",
+      "type": "external",
+      "label": "Langfuse",
+      "sublabel": "Trazas de atención",
+      "pos": [
+        1240,
+        42
+      ],
+      "size": [
+        190,
+        72
+      ],
+      "tag": "Proveedor",
+      "sources": [
+        {
+          "path": "apps/backend/src/telemetry.ts",
+          "line": 10
+        }
+      ]
+    },
+    {
+      "id": "browser",
+      "type": "external",
+      "label": "Navegador",
+      "sublabel": "Consola del asesor",
+      "pos": [
+        40,
+        42
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Usuario",
+      "sources": [
+        {
+          "path": "apps/web/lib/api.ts",
+          "line": 42
+        }
+      ]
+    },
+    {
+      "id": "web",
+      "type": "frontend",
+      "label": "Frontend Next.js",
+      "sublabel": "Servidor web de la plataforma",
+      "pos": [
+        335,
+        42
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "tag": "Contenedor web",
+      "sources": [
+        {
+          "path": "infra/compose.yaml",
+          "line": 110
+        },
+        {
+          "path": "apps/web/next.config.ts",
+          "line": 5
+        }
+      ]
+    },
+    {
+      "id": "evaluador",
+      "type": "backend",
+      "label": "Evals · Node.js",
+      "sublabel": "Runner offline con casos JSONL",
+      "tag": "Calidad",
+      "pos": [
+        1240,
+        332
+      ],
+      "size": [
+        185,
+        72
+      ],
+      "sources": [
+        {
+          "path": "apps/backend/scripts/evaluate.mjs",
+          "line": 21
+        },
+        {
+          "path": "packages/agent/src/providers.ts",
+          "line": 73
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "Servidor del MVP · servicios de Docker Compose",
+      "wraps": [
+        "api",
+        "db",
+        "worker",
+        "cache",
+        "know",
+        "mock",
+        "web"
+      ],
+      "pad": 16
+    },
+    {
+      "kind": "security-group",
+      "label": "Mismo servidor · perfiles ml y ml-jobs",
+      "wraps": [
+        "fast",
+        "bundle",
+        "job",
+        "flow"
+      ],
+      "pad": 16
+    }
+  ],
+  "connections": [
+    {
+      "from": "browser",
+      "to": "web",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "from": "web",
+      "to": "api",
+      "label": "/api · HTTP y SSE",
+      "variant": "emphasis"
+    },
+    {
+      "from": "telegram",
+      "to": "api",
+      "label": "POST · webhook HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "SQL",
+      "variant": "security"
+    },
+    {
+      "from": "worker",
+      "to": "db",
+      "label": "Toma outbox",
+      "variant": "emphasis"
+    },
+    {
+      "from": "worker",
+      "to": "cache",
+      "label": "SET EX",
+      "variant": "default"
+    },
+    {
+      "from": "worker",
+      "to": "know",
+      "label": "MCP",
+      "variant": "default"
+    },
+    {
+      "from": "know",
+      "to": "db",
+      "label": "SQL + vector",
+      "variant": "emphasis"
+    },
+    {
+      "from": "api",
+      "to": "mock",
+      "label": "Autoriza",
+      "variant": "security"
+    },
+    {
+      "from": "worker",
+      "to": "fast",
+      "label": "HTTP asíncrono",
+      "variant": "dashed"
+    },
+    {
+      "from": "job",
+      "to": "flow",
+      "label": "Runs y versiones",
+      "variant": "emphasis"
+    },
+    {
+      "from": "job",
+      "to": "bundle",
+      "label": "Publica",
+      "variant": "emphasis"
+    },
+    {
+      "from": "fast",
+      "to": "bundle",
+      "label": "Carga al inicio",
+      "variant": "default"
+    },
+    {
+      "from": "worker",
+      "to": "providers",
+      "label": "HTTPS",
+      "variant": "security"
+    },
+    {
+      "from": "worker",
+      "to": "obs",
+      "label": "OTLP",
+      "variant": "dashed"
+    },
+    {
+      "from": "evaluador",
+      "to": "providers",
+      "label": "Jev · rúbrica",
+      "variant": "dashed"
+    },
+    {
+      "from": "evaluador",
+      "to": "db",
+      "label": "Lee pasajes",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Dos entradas al mismo caso",
+      "items": [
+        "El navegador carga la consola Next.js desde el contenedor web. Envía mensajes por HTTPS y abre un flujo SSE para recibir novedades del caso. En Compose, Next.js reenvía /api al servicio NestJS por HTTP interno.",
+        "Telegram entrega los mensajes del bot con un POST al webhook público /api/v1/webhooks/telegram. NestJS valida el secreto de Telegram. En el despliegue propuesto en la VPS, Traefik termina TLS y enruta las peticiones públicas.",
+        "La consola del asesor está en la plataforma. El chat web público para simular al cliente es el segundo adaptador propuesto y usaría la misma API de casos."
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Datos del caso",
+      "items": [
+        "PostgreSQL mantiene casos y trabajos pendientes. La extensión pgvector vive en la misma base. El worker guarda en Redis el identificador del último run con caducidad de 24 horas."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Del experimento a FastAPI",
+      "items": [
+        "MLflow OSS guarda metadatos en SQLite y artefactos en mlflow-data. El job de release descarga la versión exacta, verifica la firma y publica el bundle en ml-models. FastAPI carga el bundle al arrancar."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Aislamiento del turno",
+      "items": [
+        "La tarea ML escribe predicciones en ml-state. Si el predictor falla, el worker registra ml_unavailable y el turno continúa. Los módulos de CRM y facturación simulan la operación comercial.",
+        "Con proveedores habilitados, Jev clasifica señales y OpenAI selecciona entre evidencias autorizadas. La configuración local puede usar fixtures."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Evaluación fuera de la conversación",
+      "items": [
+        "El runner Node carga suites JSONL y consulta conocimiento. Con el juez habilitado, envía criterios y observaciones saneadas a Jev por OpenRouter. Devuelve un informe de revisión. El diseño de promoción enlaza estas decisiones con experimentos en Langfuse."
+      ]
+    }
+  ]
+}

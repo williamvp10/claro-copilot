@@ -1,0 +1,178 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Promoción por digest y recuperación",
+    "locale": "es",
+    "quality_profile": "showcase",
+    "output": "diagramas/release.html",
+    "visual_preset": "blueprint"
+  },
+  "lanes": [
+    {
+      "id": "codigo",
+      "label": "GitHub"
+    },
+    {
+      "id": "validacion",
+      "label": "CI y staging"
+    },
+    {
+      "id": "release",
+      "label": "Dokploy"
+    },
+    {
+      "id": "fallo",
+      "label": "Recuperación"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "feature",
+      "lane": "codigo",
+      "col": 0,
+      "type": "external",
+      "label": "Rama feature",
+      "sublabel": "PR hacia develop"
+    },
+    {
+      "id": "checks",
+      "lane": "validacion",
+      "col": 1,
+      "type": "backend",
+      "label": "Pruebas de código",
+      "sublabel": "Contratos, rutas y efectos"
+    },
+    {
+      "id": "stage",
+      "lane": "validacion",
+      "col": 2,
+      "type": "backend",
+      "label": "Candidato en staging",
+      "sublabel": "Imágenes por digest"
+    },
+    {
+      "id": "evals",
+      "lane": "validacion",
+      "col": 3,
+      "type": "security",
+      "label": "Comparación EDD",
+      "sublabel": "Código, Jev y Langfuse"
+    },
+    {
+      "id": "main",
+      "lane": "codigo",
+      "col": 4,
+      "type": "security",
+      "label": "Revisión humana",
+      "sublabel": "Aprueba el candidato"
+    },
+    {
+      "id": "deploy",
+      "lane": "release",
+      "col": 5,
+      "type": "backend",
+      "label": "Promueve por digest",
+      "sublabel": "Smoke de atención"
+    },
+    {
+      "id": "corrige",
+      "lane": "fallo",
+      "col": 3,
+      "type": "backend",
+      "label": "Corrige candidato",
+      "sublabel": "Conserva la versión activa"
+    },
+    {
+      "id": "revierte",
+      "lane": "fallo",
+      "col": 5,
+      "type": "backend",
+      "label": "Restaura versión",
+      "sublabel": "Rollback con smoke"
+    }
+  ],
+  "edges": [
+    {
+      "id": "feature-checks",
+      "from": "feature",
+      "to": "checks",
+      "variant": "emphasis"
+    },
+    {
+      "id": "checks-stage",
+      "from": "checks",
+      "to": "stage",
+      "label": "Pasa",
+      "variant": "emphasis"
+    },
+    {
+      "id": "stage-evals",
+      "from": "stage",
+      "to": "evals",
+      "variant": "emphasis"
+    },
+    {
+      "id": "evals-main",
+      "from": "evals",
+      "to": "main",
+      "label": "Pasa",
+      "variant": "security"
+    },
+    {
+      "id": "main-deploy",
+      "from": "main",
+      "to": "deploy",
+      "variant": "emphasis"
+    },
+    {
+      "id": "evals-corrige",
+      "from": "evals",
+      "to": "corrige",
+      "label": "Falla",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "deploy-revierte",
+      "from": "deploy",
+      "to": "revierte",
+      "label": "Falla",
+      "variant": "security",
+      "role": "error"
+    }
+  ],
+  "mainPath": [
+    "feature",
+    "checks",
+    "stage",
+    "evals",
+    "main",
+    "deploy"
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Evaluación del candidato",
+      "items": [
+        "GitHub Actions comprueba contratos, permisos y E2E, escanea imágenes y valida la IaC por ambiente. Staging prueba los mismos digests que se promueven.",
+        "El desarrollo guiado por pruebas (TDD) cubre permisos, idempotencia y contrato. El desarrollo guiado por evaluaciones (EDD) compara las respuestas del agente para los mismos casos y rúbricas."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Integridad del release",
+      "items": [
+        "Las pruebas de permisos y efectos son obligatorias. Main protege el merge y Dokploy promueve el manifiesto comprobado.",
+        "La persona responsable revisa diferencias y casos ambiguos. Un fallo crítico de autorización, evidencia exigida o efecto comercial bloquea la promoción aunque mejore la media."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Artefactos trazables",
+      "items": [
+        "Versionar modelos, prompts, índice y dataset. Si staging falla se corrige el candidato. Si el smoke de release falla se revierte."
+      ]
+    }
+  ]
+}

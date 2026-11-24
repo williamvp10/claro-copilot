@@ -27,6 +27,8 @@ En web y Telegram, el cliente escribe su correo o teléfono de prueba y después
 
 ## Arquitectura
 
+[Ver los diagramas del MVP y de la arquitectura propuesta en AWS](docs/arquitectura/README.md)
+
 - **Plataforma.** Next.js y shadcn/ui para la consola. NestJS, Better Auth, TypeORM y PostgreSQL para sesiones, casos, integraciones y aprobaciones.
 - **CRM y Facturación.** Dos APIs Express implementan los OpenAPI suministrados. Comparten una instancia PostgreSQL con la plataforma y cada servicio usa su propia base y rol. [Contratos y operación de los simuladores](docs/openapi/simuladores.md)
 - **Agente.** LangGraph.js en un worker de NestJS. El worker recupera evidencia vigente y redacta respuestas públicas con citas mediante OpenAI Direct en el perfil conectado. Consulta el índice PostgreSQL o el MCP privado y usa Jev para clasificación tipada en el perfil conectado.
