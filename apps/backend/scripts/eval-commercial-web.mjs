@@ -277,7 +277,10 @@ if(publish) {
       'langfuse.experiment.metadata.runtime_sha256':row.runtime, 'langfuse.experiment.metadata.suite_sha256':suiteSha,
       'langfuse.experiment.metadata.prompt_revision':row.revision, 'langfuse.experiment.metadata.prompt_manifest_sha256':row.manifest_sha256,
       'langfuse.experiment.item.metadata.fixture':item.fixture, 'langfuse.observation.input':JSON.stringify(stored.input),
-      'langfuse.observation.output':JSON.stringify(row.turns.map(({turn,answer,awaiting_advisor,citations})=>({turn,answer,awaiting_advisor,citations}))),
+      'langfuse.observation.output':JSON.stringify(row.turns.map(({turn,answer,awaiting_advisor,citations,context,selection,verified})=>({
+        turn,answer,awaiting_advisor,citations,
+        ...(sharedContext ? {context,selected_public_plan:selection?.name ?? null,verified} : {})
+      }))),
       'langfuse.observation.metadata.jev_rubric':JSON.stringify(stored.expectedOutput),
       'langfuse.experiment.item.expected_output':JSON.stringify(stored.expectedOutput),
       'langfuse.observation.metadata.platform':row.checks.status
