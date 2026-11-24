@@ -98,6 +98,26 @@ ML_API_URL=http://localhost:39094 PLATFORM_E2E_TARGET=http://localhost:39092 \
   node --env-file=.env.demo.local apps/backend/test/ml-advisory-e2e.mjs
 ```
 
+## Redesplegar el demo principal
+
+Para un demo con el índice contextual publicado, conserva `KNOWLEDGE_INDEX_REVISION` y `KNOWLEDGE_ORIGINALS_DIR` en `.env.demo.release.local`. Mantén el nombre del proyecto y sus volúmenes para conservar las conversaciones y el índice.
+
+```bash
+git switch develop
+revision="$(git rev-parse --short HEAD)"
+export CLARO_IMAGE="claro-copiloto:develop-$revision"
+export ML_IMAGE="claro-ml:develop-$revision"
+app() { docker compose --env-file .env.demo.local --env-file .env.demo.release.local \
+  -f infra/compose.yaml -f infra/compose.local.yaml -f infra/compose.knowledge-originals.yaml \
+  --profile knowledge --profile ml "$@"; }
+app config --quiet
+app build web ml
+app up -d --no-build --pull never --wait --wait-timeout 150 \
+  api worker web knowledge-mcp crm-mcp billing-mcp ml mlflow
+```
+
+Guarda los tags desplegados en `CLARO_IMAGE` y `ML_IMAGE` de `.env.demo.release.local` para futuros reinicios. En el [chat](http://localhost:39092/chat) prueba «¿Qué planes tienen?» seguido de «telefonía móvil». Comprueba en Langfuse que los turnos nuevos estén agrupados en la misma sesión y que **Nuevo chat** abra otra sesión para el mismo visitante.
+
 ## Modelos y correlación
 
 El job de entrenamiento registra los candidatos **claro_intent_e5_svm** y **claro_churn_logistic** en MLflow y escribe en cada manifiesto el experimento, run, modelo registrado y `model_id`. FastAPI lee los bundles verificados desde su volumen de solo lectura. NestJS pide inferencia a FastAPI desde el worker. FastAPI conecta con `http://mlflow:5000` para exportar trazas de inferencia, con versión, latencia de predicción y run de entrenamiento. El `model_id` asocia los bundles nuevos al Logged Model y los experimentos de entrenamiento contienen sus trazas. El codificador E5 se conserva junto al bundle de intención y es necesario para volver a servirlo.
