@@ -102,6 +102,8 @@ ML_API_URL=http://localhost:39094 PLATFORM_E2E_TARGET=http://localhost:39092 \
 
 Para un demo con el índice contextual publicado, conserva `KNOWLEDGE_INDEX_REVISION` y `KNOWLEDGE_ORIGINALS_DIR` en `.env.demo.release.local`. Mantén el nombre del proyecto y sus volúmenes para conservar las conversaciones y el índice.
 
+Configura `LANGFUSE_CAPTURE_CHAT_IO=true` en `.env.demo.release.local` para ver los mensajes saneados del autoservicio sintético en las nuevas sesiones. El perfil local de Langfuse da a ClickHouse 4 CPU y 4 GiB por defecto. Usa `LANGFUSE_CLICKHOUSE_CPUS`, `LANGFUSE_CLICKHOUSE_MEMORY`, `LANGFUSE_WEB_HEAP_MIB` y `LANGFUSE_WORKER_HEAP_MIB` para adaptar el perfil al presupuesto de Docker Desktop.
+
 ```bash
 git switch develop
 revision="$(git rev-parse --short HEAD)"

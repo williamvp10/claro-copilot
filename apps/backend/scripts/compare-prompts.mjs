@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { createAgent, createOpenAIPublicWriter, createOpenAIObjectivePlanner, createJevDecisionAdapter, createJevSemanticEvaluator, evolveContext, isModelObservation, recordQuestion } from '@claro/agent';
+import { createAgent, createOpenAIPublicWriter, createOpenAIObjectivePlanner, createJevSemanticEvaluator, evolveContext, isModelObservation, recordQuestion } from '@claro/agent';
 import { createDatabase } from '../dist/database.js';
 import { activeKnowledgeRevision, databaseKnowledge, knowledgeCorpus } from '../dist/knowledge.js';
 import { exportAgentSpan } from '../dist/telemetry.js';
@@ -32,7 +32,6 @@ const key = live ? process.env.OPENROUTER_API_KEY : undefined;
 if (live && (!key || !process.env.OPENAI_API_KEY)) throw new Error('Live evaluation requires both provider keys');
 const jev = key ? {apiKey:key,model:process.env.JEV_MODEL || 'typesafe/jev-1.14',timeoutMs:3500} : null;
 let judge;
-const decision = jev && createJevDecisionAdapter(jev);
 const writer = live && createOpenAIPublicWriter({apiKey:process.env.OPENAI_API_KEY});
 const planner = live && createOpenAIObjectivePlanner(process.env.OPENAI_API_KEY);
 const normalized = normalizeEvidence;
@@ -53,7 +52,7 @@ function fixture(revision, verified, channel, businessDate, knowledge, advisor =
     getCustomerContext:read('obtenerCliente'),listServices:read('listarServicios'),getBilling:read('obtenerSaldo'),listInvoices:read('listarFacturas'),getInvoiceDetail:read('obtenerFactura'),getTickets:read('listarTickets'),
     evaluateRetention:async()=>{calls.push('evaluateRetention');return ({eligible:false,reason:'Requiere replay de plataforma',facts:[],options:[],policy:fallbackPolicy});},
     createProposal:async()=>{ calls.push('proposal'); throw new Error('Requires platform-controlled approval'); }
-  }, {knowledge:{revision:knowledge.revision,catalog:knowledge.catalog?.bind(knowledge),search:async (...args)=>{calls.push('search_public_kb');return knowledge.search(...args);}}, requireApprovedPrompts:live, ...(writer ? {writer} : {}), ...(planner ? {planner} : {}), ...(decision && !verified && !advisor ? {decision} : {}), observe:(_, item)=>events.push(item)});
+  }, {knowledge:{revision:knowledge.revision,catalog:knowledge.catalog?.bind(knowledge),search:async (...args)=>{calls.push('search_public_kb');return knowledge.search(...args);}}, requireApprovedPrompts:live, ...(writer ? {writer} : {}), ...(planner ? {planner} : {}), observe:(_, item)=>events.push(item)});
   const session = { calls, events, durationMs:undefined, async run(actor,text) {
     calls.length=0;
     events.length=0;
@@ -104,8 +103,7 @@ async function score(id, input, result, session, required, forbidden, authorizes
   const abstention = expectedAbstention && result.type==='handoff' && result.route==='fuera_de_alcance' && citations.length===0;
   const correct = deterministic && (abstention || ((authorizesReads ? citations.length : sources.length)>0 &&
     expectedFacts && (recall===null || recall===1) && semantic?.status!=='fail'));
-  const requests=session.events.filter(item=>isModelObservation(item.name) &&
-    (item.name!=='decision.jev' || item.metadata.provider_attempted==='yes'));
+  const requests=session.events.filter(item=>isModelObservation(item.name));
   const costs=requests.flatMap(item=>typeof item.metadata.cost_usd==='number' ? [item.metadata.cost_usd] : []);
   return { id, route:result.route, result:result.type, citations:citations.map(x=>x.id), usedPrivateRead, forbiddenHit,
     score:correct?'verified_exact':deterministic?'review':'failed', elapsed_ms:session.durationMs, semantic:semantic?.status ?? 'unavailable',

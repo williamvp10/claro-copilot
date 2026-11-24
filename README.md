@@ -31,7 +31,7 @@ En web y Telegram, el cliente escribe su correo o teléfono de prueba y después
 
 - **Plataforma.** Next.js y shadcn/ui para la consola. NestJS, Better Auth, TypeORM y PostgreSQL para sesiones, casos, integraciones y aprobaciones.
 - **CRM y Facturación.** Dos APIs Express implementan los OpenAPI suministrados. Comparten una instancia PostgreSQL con la plataforma y cada servicio usa su propia base y rol. [Contratos y operación de los simuladores](docs/openapi/simuladores.md)
-- **Agente.** LangGraph.js en un worker de NestJS. El worker recupera evidencia vigente y redacta respuestas públicas con citas mediante OpenAI Direct en el perfil conectado. Consulta el índice PostgreSQL o el MCP privado y usa Jev para clasificación tipada en el perfil conectado.
+- **Agente.** LangGraph.js en un worker de NestJS. El worker recupera evidencia vigente y redacta respuestas públicas con citas mediante OpenAI Direct en el perfil conectado. LangGraph decide la ruta con el turno y el contexto del caso. Las consultas de conocimiento usan PostgreSQL o el MCP privado. Jev evalúa las respuestas en las suites de calidad.
 - **Aprendizaje automático.** FastAPI sirve el clasificador clásico de intención y MLflow registra sus versiones. El modelo opera en sombra para medir su desempeño durante la atención.
 - **Despliegue y operación.** Docker Compose en Dokploy. Prometheus consulta los contadores del backend. El worker puede exportar trazas saneadas por OpenTelemetry al Compose separado de Langfuse autohospedado. El panel agrega indicadores del dominio y del servicio de ML.
 

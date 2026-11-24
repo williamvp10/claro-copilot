@@ -51,40 +51,15 @@ test('plans guidance uses the active catalogue and follows the prior question on
  }
 });
 
-test('Jev receives only fixed categorical features and rejects uncertain decisions',async()=>{
- const {createJevDecisionAdapter}=await import('../dist/index.js');let body;
- const observed=[];
- const probabilities={soporte_tecnico:0.01,facturacion:0.9,consulta_planes:0.01,cancelacion:0.02,portabilidad:0.02,fuera_de_alcance:0.02,indeterminada:0.02};
- const fake=async(_url,init)=>{body=JSON.parse(init.body);return Response.json({
-   id:'gen-dec-opaque',model:'typesafe/jev-1.14-20261101',usage:{input_tokens:476,output_tokens:70,cost:0.000019992},
-   answers:{intencion:{type:'choice',choice:'facturacion',probabilities,confidence:0.67},
-     complejidad:{type:'choice',choice:'simple',probabilities:{simple:0.85,intermedia:0.05,compuesta:0.05,indeterminada:0.05}}}
- });};
- const adapter=createJevDecisionAdapter({apiKey:'test',model:'typesafe/jev-1.14',fetch:fake});
- const result=await adapter.classify('Mi factura de María 3101234567 maria@example.com',undefined,metadata=>observed.push(metadata));
- assert.equal(result.intent,'facturacion');assert.equal(body.state.senales,'facturacion');assert.doesNotMatch(JSON.stringify(body),/María|3101234567|example.com/);
- const [call]=observed;
- assert.equal(call.provider_request_id,'gen-dec-opaque');
- assert.equal(call.model,'typesafe/jev-1.14-20261101');
- assert.equal(call.cost_usd,0.000019992);
- assert.equal(call.input_tokens,476);
- assert.equal(call.output_tokens,70);
- assert.equal(call.intent_confidence,0.67);
- assert.equal(call.intent_probability,0.9);
- assert.deepEqual(JSON.parse(call.intent_probabilities),probabilities);
- assert.doesNotMatch(JSON.stringify(call),/María|3101234567|example.com/);
- const uncertain=createJevDecisionAdapter({apiKey:'test',model:'typesafe/jev-1.14',fetch:async()=>Response.json({
-   model:'typesafe/jev-1.14',usage:{cost:0.000021},answers:{intencion:{type:'choice',choice:'facturacion',
-     probabilities:{...probabilities,soporte_tecnico:0.30,facturacion:0.61}}}
- })});
- assert.equal(await uncertain.classify('factura',undefined,metadata=>observed.push(metadata)),null);
- assert.equal(observed[1].provider_status,'abstained');
- assert.equal(observed[1].cost_usd,0.000021);
- assert.equal(observed[1].input_tokens,undefined);
- const throttled=createJevDecisionAdapter({apiKey:'test',model:'typesafe/jev-1.14',fetch:async()=>new Response(null,{status:429})});
- assert.equal(await throttled.classify('factura',undefined,metadata=>observed.push(metadata)),null);
- assert.equal(observed[2].provider_status,'http_429');
- assert.equal(observed[2].cost_usd,undefined);
+test('the orchestrator routes a billing turn using the case context',async()=>{
+ const {ports,calls}=fixture();
+ const spans=[];
+ const result=await createAgent(ports,{observe:(_,span)=>spans.push(span)}).run(turn({text:'¿Cuál es mi saldo pendiente?'}));
+ assert.equal(result.route,'facturacion');
+ assert.deepEqual(calls,['billing']);
+ const step=spans.find(span=>span.metadata.step_id==='classify_turn');
+ assert.equal(step?.metadata.decision,'orchestrator');
+ assert.equal(step?.metadata.intent,'facturacion');
 });
 test('OpenAI selector sends only signals and accepts only an authorized index',async()=>{
  const {createOpenAIEvidenceSelector}=await import('../dist/index.js');let body;
@@ -96,7 +71,11 @@ test('semantic evaluation blocks failed deterministic checks and does not promot
  const evaluator=createJevSemanticEvaluator({apiKey:'test',model:'typesafe/jev-1.14',fetch:async(_url,init)=>{calls++;body=JSON.parse(init.body);return new Response(JSON.stringify({model:'typesafe/jev-1.14',answers:{q0:{type:'choice',choice:'presente',probabilities:{presente:0.9,ausente:0.05,ambiguo:0.05}}}}))}});
  const observation={question:'María consulta factura 123456789',answer:'La factura está pendiente de pago',evidence:['Factura pendiente'],requiredFacts:['Factura pendiente'],deterministicPassed:false};assert.equal((await evaluator.evaluate(observation)).status,'fail');assert.equal(calls,0);observation.deterministicPassed=true;assert.equal((await evaluator.evaluate(observation)).status,'review');assert.doesNotMatch(JSON.stringify(body),/María|123456789/);
 });
-test('priority handoff never calls remote decision adapter',async()=>{const f=fixture();let calls=0;const a=createAgent(f.ports,{decision:{classify:async()=>{calls++;return null}}});await a.run(turn({text:'Quiero hablar con un supervisor'}));assert.equal(calls,0);});
+test('priority handoff bypasses the orchestrator classification step',async()=>{
+ const f=fixture();const spans=[];
+ await createAgent(f.ports,{observe:(_,span)=>spans.push(span)}).run(turn({text:'Quiero hablar con un supervisor'}));
+ assert.ok(!spans.some(span=>span.metadata.step_id==='classify_turn'));
+});
 test('MCP read-only adapter sends a minimized query and accepts structured documents',async()=>{
  const {createKnowledgeMcpAdapter}=await import('../dist/index.js');const requests=[];
  const fake=async(_url,init)=>{if (init.method==='GET') return new Response(null,{status:405});const body=init.body?JSON.parse(init.body):null;requests.push(body);
@@ -212,7 +191,7 @@ test('a compound cancellation checks support recurrence before any offer and rea
  const f=fixture(); const spans=[];
  f.ports.getTickets=async()=>{f.calls.push('tickets');return [{id:'technical-tickets-90d',label:'Tickets',value:'4'}];};
  f.ports.listInvoices=async()=>{f.calls.push('invoices');return [{id:'F-1001',label:'Factura',value:'pendiente'}];};
- const result=await createAgent(f.ports,{observe:(_run,item)=>spans.push(item),decision:{classify:async()=>({intent:'facturacion',confidence:0.95,complexity:'complejo'})}})
+ const result=await createAgent(f.ports,{observe:(_run,item)=>spans.push(item)})
   .run(turn({text:'Quiero cancelar. Se cae el internet todos los días y también quiero saber por qué subió mi factura.'}));
  assert.equal(result.route,'cancelacion');
  assert.equal(result.card.proposal?.detail,'priority-ticket');
@@ -237,7 +216,7 @@ test('advisor draft keeps authorized amounts and filters unsupported claims even
 });
 test('live mode does not call providers when approved templates are missing',async()=>{
  const f=fixture({verified:false});let calls=0;
- const agent=createAgent(f.ports,{requireApprovedPrompts:true,decision:{classify:async()=>{calls++;return null}},writer:{write:async()=>{calls++;return null}},evidenceSelector:{select:async()=>{calls++;return null}},documents:[{id:'p1',title:'Fibra',excerpt:'Fibra 500',version:'1',scope:'public',effective_from:'2026-01-01',provider_approved:true},{id:'p2',title:'Fibra',excerpt:'Fibra 500',version:'1',scope:'public',effective_from:'2026-01-01',provider_approved:true}]});
+ const agent=createAgent(f.ports,{requireApprovedPrompts:true,writer:{write:async()=>{calls++;return null}},evidenceSelector:{select:async()=>{calls++;return null}},documents:[{id:'p1',title:'Fibra',excerpt:'Fibra 500',version:'1',scope:'public',effective_from:'2026-01-01',provider_approved:true},{id:'p2',title:'Fibra',excerpt:'Fibra 500',version:'1',scope:'public',effective_from:'2026-01-01',provider_approved:true}]});
  const out=await agent.run(turn({attention_mode:'autoservicio',audience:'cliente',text:'Cuánto cuesta fibra 500'}));
  assert.equal(out.type,'answer');assert.equal(calls,0);
 });
@@ -254,11 +233,11 @@ test('mandatory escalation is suggested before any model, tool or effect', async
   ['Soy una persona vulnerable','supervision','riesgo_o_vulnerabilidad']
  ];
  for (const [text,destination,reason] of cases) {
-  const f=fixture();let classified=0;
-  const agent=createAgent(f.ports,{decision:{classify:async()=>{classified++;return null}}});
+  const f=fixture();const spans=[];
+  const agent=createAgent(f.ports,{observe:(_,span)=>spans.push(span)});
   const out=await agent.run(turn({text}));
   assert.equal(out.type,'card',text);assert.deepEqual(out.card.suggested_escalation,{destination,reason_code:reason},text);
-  assert.equal(classified,0,text);assert.deepEqual(f.calls,[],text);
+  assert.ok(!spans.some(span=>span.metadata.step_id==='classify_turn'),text);assert.deepEqual(f.calls,[],text);
  }
 });
 test('LOS at ten minutes or without a duration does not assert the >10 minute policy', async () => {
@@ -270,9 +249,9 @@ test('LOS at ten minutes or without a duration does not assert the >10 minute po
 
 test('duration supplied in the next turn completes the LOS escalation condition',async()=>{
  const f=fixture({messages:[msg('La luz LOS está roja','cliente',1),msg('¿Cuántos minutos lleva roja?','asesor',2),msg('Hace 15 minutos','cliente',3)]});
- let modelCalls=0;
- const out=await createAgent(f.ports,{decision:{classify:async()=>{modelCalls++;return null}}}).run(turn({turn_seq:3,text:'Hace 15 minutos'}));
- assert.equal(out.type,'card');assert.equal(out.card.suggested_escalation?.reason_code,'los_rojo_mas_de_10_minutos');assert.equal(modelCalls,0);assert.deepEqual(f.calls,[]);
+ const spans=[];
+ const out=await createAgent(f.ports,{observe:(_,span)=>spans.push(span)}).run(turn({turn_seq:3,text:'Hace 15 minutos'}));
+ assert.equal(out.type,'card');assert.equal(out.card.suggested_escalation?.reason_code,'los_rojo_mas_de_10_minutos');assert.ok(!spans.some(span=>span.metadata.step_id==='classify_turn'));assert.deepEqual(f.calls,[]);
 });
 
 test('WiFi change uses the three contiguous manual steps with their original citations',async()=>{
@@ -327,7 +306,7 @@ test('GQ-25 reads current services and balance only after verification',async()=
  const f=fixture();const spans=[];
  f.ports.listServices=async()=>{f.calls.push('services');return [{id:'home',label:'Hogar Fibra 500',value:'$109.900'},{id:'mobile',label:'Claro Max 60 GB',value:'$59.415'}]};
  f.ports.getBilling=async()=>{f.calls.push('billing');return [{id:'balance',label:'Saldo',value:'$169.315'},{id:'due',label:'Vencimiento',value:'2026-11-25'}]};
- const agent=createAgent(f.ports,{decision:{classify:async()=>({intent:'consulta_planes',confidence:0.95,complexity:'economico'})},observe:(_,item)=>spans.push(item)});
+ const agent=createAgent(f.ports,{observe:(_,item)=>spans.push(item)});
  const out=await agent.run(turn({actor:'asesor',text}));
  assert.equal(out.type,'card');assert.equal(out.route,'facturacion');assert.deepEqual(f.calls,['billing','services']);
  assert.deepEqual(out.card.facts.map(x=>x.id),['balance','due','home','mobile']);
@@ -336,7 +315,7 @@ test('GQ-25 reads current services and balance only after verification',async()=
  const deniedOut=await createAgent(denied.ports).run(turn({actor:'asesor',text}));
  assert.equal(deniedOut.type,'card');assert.ok(deniedOut.card.reason_codes.includes('verification_required'));assert.deepEqual(denied.calls,[]);
  const publicCase=fixture({verified:false});
- const publicOut=await createAgent(publicCase.ports,{decision:{classify:async()=>({intent:'consulta_planes',confidence:0.99,complexity:'economico'})}}).run(turn({actor:'cliente',audience:'cliente',attention_mode:'autoservicio',text:'¿Cuál es mi plan actual y el saldo pendiente?'}));
+ const publicOut=await createAgent(publicCase.ports).run(turn({actor:'cliente',audience:'cliente',attention_mode:'autoservicio',text:'¿Cuál es mi plan actual y el saldo pendiente?'}));
  assert.equal(publicOut.type,'handoff');assert.equal(publicOut.verification_required,true);assert.deepEqual(publicCase.calls,[]);
 });
 
@@ -346,7 +325,7 @@ test('GQ-28 inspects confirmed recurrence and leaves scheduling pending after ti
  f.ports.getCustomerContext=async()=>{f.calls.push('customer');return [{id:'tenure',label:'Antigüedad',value:'26 meses'}]};
  f.ports.getTickets=async()=>{f.calls.push('tickets');return [{id:'technical-tickets-90d',label:'Tickets técnicos en 90 días',value:'4'}]};
  f.ports.createProposal=async(_id,input)=>{f.calls.push(input);return {id:'ticket-proposal',revision:1,title:'Ticket prioritario',detail:'Visita técnica prioritaria dentro de 24 horas',kind:'support_ticket',status:'pending_approval'}};
- const agent=createAgent(f.ports,{decision:{classify:async()=>({intent:'soporte_tecnico',confidence:0.99,complexity:'intermedio'})}});
+ const agent=createAgent(f.ports);
  const out=await agent.run(turn({actor:'asesor',text}));
  assert.equal(out.type,'card');assert.equal(out.route,'cancelacion');assert.deepEqual(f.calls.slice(0,2).sort(),['customer','tickets']);
  assert.deepEqual(f.calls[2],{option_id:'priority-ticket',citation_ids:['retention-recurrent-faults']});assert.ok(!f.calls.includes('retention'));

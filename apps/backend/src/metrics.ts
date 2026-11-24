@@ -288,7 +288,7 @@ async function technical(db: DataSource, filters: Filters) {
           ($3='all' OR COALESCE(e.metadata->>'route',c.category)=$3)
       ) SELECT date,sum(amount)::float AS usd,count(DISTINCT case_id)::int AS conversations,
           count(*) FILTER(WHERE request)::int AS requests,count(amount)::int AS measured
-        FROM grouped GROUP BY GROUPING SETS ((date),()) ORDER BY date`,[...windowParams(filters),modelObservationNames]) as Promise<ModelCosts[]>,
+        FROM grouped GROUP BY GROUPING SETS ((date),()) ORDER BY date`,[...windowParams(filters),[...modelObservationNames,'decision.jev']]) as Promise<ModelCosts[]>,
     apiHealth(filters.days),
     db.query(`SELECT published_at,manifest->>'detected_at' AS detected_at FROM knowledge_publication
       WHERE published_at>=now()-$1::int*interval '1 day' AND manifest ? 'detected_at' ORDER BY published_at DESC LIMIT 30`,[filters.days])

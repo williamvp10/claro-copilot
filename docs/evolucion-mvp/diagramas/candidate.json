@@ -2,7 +2,7 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Arquitectura propuesta del agente · Claro Copiloto",
+    "title": "Arquitectura del agente · Claro Copiloto",
     "locale": "es",
     "output": "docs/evolucion-mvp/diagramas/arquitectura-agente.html",
     "quality_profile": "showcase"
@@ -42,7 +42,7 @@
       "id": "orquestador",
       "type": "backend",
       "label": "Orquestador LangGraph",
-      "sublabel": "Política, ruta y salida",
+      "sublabel": "Decide ruta y subagente",
       "pos": [
         480,
         260
@@ -52,21 +52,6 @@
         66
       ],
       "tag": "AGENTE"
-    },
-    {
-      "id": "jev",
-      "type": "external",
-      "label": "Jev por OpenRouter",
-      "sublabel": "Intención y complejidad",
-      "pos": [
-        480,
-        32
-      ],
-      "size": [
-        168,
-        62
-      ],
-      "tag": "PROVEEDOR"
     },
     {
       "id": "soporte",
@@ -268,7 +253,7 @@
       "type": "backend",
       "tag": "PASO",
       "label": "Clasificar turno",
-      "sublabel": "Usa dos prompts tipados",
+      "sublabel": "Contexto y reglas",
       "pos": [
         480,
         136
@@ -283,7 +268,7 @@
       "type": "external",
       "tag": "GESTOR DE PROMPTS",
       "label": "Langfuse",
-      "sublabel": "Plantillas y trazas",
+      "sublabel": "Prompts, sesiones y trazas",
       "pos": [
         480,
         398
@@ -445,12 +430,6 @@
       "label": "Paso del grafo"
     },
     {
-      "id": "clasificar-jev",
-      "from": "clasificar",
-      "to": "jev",
-      "label": "Señales"
-    },
-    {
       "id": "orquestador-langfuse",
       "from": "orquestador",
       "to": "langfuse",
@@ -501,7 +480,7 @@
       "dot": "cyan",
       "title": "Agente, subagente y paso",
       "items": [
-        "El orquestador aplica política y verifica el modo del caso. Jev propone intención y complejidad. LangGraph decide qué subgrafo ejecutar y cuándo pedir una segunda lectura autorizada.",
+        "El orquestador aplica política y carga el contexto del caso. LangGraph determina la intención, elige el subgrafo y decide cuándo pedir una segunda lectura autorizada.",
         "El cliente recibe la respuesta pública con evidencia o una derivación. En atención asistida, el asesor recibe la ficha y edita el borrador antes de enviar en el mismo canal."
       ]
     },
@@ -510,7 +489,7 @@
       "title": "Acceso a herramientas",
       "items": [
         "Soporte usa search_knowledge, crm.list_services y crm.list_recent_tickets. Facturación usa search_knowledge, billing.get_balance, billing.list_invoices y billing.get_invoice_detail. Consulta crm.list_services cuando el servicio explica el cargo.",
-        "Comercial y portabilidad usan search_knowledge, crm.get_customer_context, crm.list_services y crm.evaluate_retention. Para fallas recurrentes el orquestador delega la lectura de tickets a Soporte.",
+        "Comercial usa list_catalog_plans para ofertas vigentes y search_knowledge para sus condiciones. Las consultas de cuenta y retención usan herramientas autorizadas según el caso.",
         "Un cliente MCP compartido limita las tools por paso. CRM y Facturación solo leen para un caso verificado y un asesor activo, con capacidad firmada por tool. Los servidores consultan sus APIs mock por HTTP privado."
       ]
     },
@@ -519,7 +498,7 @@
       "title": "Prompts y borrador",
       "items": [
         "Cada turno fija revisión y hash del catálogo. Una edición en Langfuse se importa por versión y pasa por A/B y aprobación antes de activarse.",
-        "Jev recibe señales tipadas. OpenAI recibe pasajes públicos autorizados. Las plantillas locales añaden hechos verificados y un reconocimiento del inconveniente cuando aplica."
+        "OpenAI recibe pasajes públicos autorizados. Las plantillas locales añaden hechos verificados. Jev puntúa respuestas en los experimentos de Evals."
       ]
     },
     {
@@ -527,7 +506,7 @@
       "title": "Efectos y escalamiento",
       "items": [
         "El asesor confirma la propuesta y supervisión aprueba cuando la política lo exige. El outbox revalida el caso y confirma la escritura con un recibo idempotente de la API mock.",
-        "N2 o supervisión toma el mismo caso y recibe historial, evidencia y pendientes según su permiso. Los pasos y resultados saneados se correlacionan por run_id con Langfuse."
+        "Con el permiso del caso, N2 o supervisión recibe historial, evidencia y pendientes. En el demo, Langfuse agrupa los mensajes saneados de autoservicio por sesión."
       ]
     }
   ]

@@ -43,6 +43,13 @@ export function clearPersonalData(text: string) {
     .replace(/\[factura_[a-z]+\]/g,()=>invoices[index++] ?? '');
 }
 
+export function publicDemoChatPair(row: CaseRow, input: Message | undefined, output: Message) {
+  if (process.env.DEMO_MODE !== 'true' || process.env.LANGFUSE_CAPTURE_CHAT_IO !== 'true' ||
+      row.snapshot.channel !== 'web' || row.snapshot.verified || row.account_ref || row.account_inquiry ||
+      input?.actor !== 'cliente' || input.verification_input || output.actor !== 'agente') return;
+  return {input:input.text,output:output.text};
+}
+
 export function latestAnalyzable(snapshot: CaseSnapshot) {
   return snapshot.messages.findLast((message) => message.actor !== 'agente' && !message.verification_input);
 }
@@ -801,7 +808,11 @@ export class Cases {
   }
 
   private async channelReply(tx: EntityManager,row: CaseRow,text: string) {
+    const previous = row.snapshot.messages.at(-1);
     const message = addMessage(row,'agente',text);
+    if (previous && publicDemoChatPair(row, previous, message)) {
+      await enqueue(tx,`chat-trace:${message.id}`,row.id,'chat_trace',{input_id:previous.id,output_id:message.id});
+    }
     if (row.snapshot.channel === 'telegram') {
       await enqueue(tx,`deliver:${message.id}`,row.id,'deliver',{
         text,sender:'sistema',revision:row.snapshot.revision,turn_seq:message.turn_seq

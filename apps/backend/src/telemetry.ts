@@ -8,8 +8,33 @@ import { runtimeSha256 } from './runtime-revision.js';
 
 export const traceIdentifier = (runId: string) => createHash('sha256').update(runId).digest('hex').slice(0,32);
 
-export async function exportAgentSpan(turn: AgentTurn, started: number, route: string, result: string,
-  observations: AgentObservation[] = [], promptMetadata: RunPromptConfig['prompt_metadata'] = {}, subject?: string): Promise<string | false> {
+type TraceTurn = Pick<AgentTurn,'run_id'|'conversation_id'|'channel'|'audience'|'config_revision'>;
+type TraceExchange = {input: string; output: string};
+
+function traceText(text: string) {
+  return text.replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi,'[correo]')
+    .replace(/\b(?:C|F)-\d+\b/gi,'[referencia]')
+    .replace(/\+?\d(?:[ .()-]*\d){6,}/g,'[número]')
+    .replace(/\b\d{5,6}\b/g,'[dato]')
+    .slice(0,4096);
+}
+
+function stepExchange({name,metadata}: AgentObservation): Record<string,string> {
+  const io = (input:object, output:object) => ({
+    'langfuse.observation.input':JSON.stringify(input), 'langfuse.observation.output':JSON.stringify(output)
+  });
+  if (metadata.step_id==='classify_turn') return io({decision:metadata.decision}, {intent:metadata.intent,profile:metadata.profile});
+  if (metadata.step_id==='plan_objectives') return io({primary:metadata.primary}, {objectives:metadata.objectives,investigated:metadata.investigated});
+  if (name==='retrieval' && metadata.step_id==='retrieve_knowledge') return io({source:metadata.source,tags:metadata.tags,index:metadata.index_revision},
+    {count:metadata.count,passages:metadata.top_5,attempts:metadata.attempts});
+  if (name==='catalogue.selection') return io({request:metadata.reference_resolution},
+    {version:metadata.catalog_version,decision:metadata.decision,reason:metadata.reason});
+  return {};
+}
+
+export async function exportAgentSpan(turn: TraceTurn, started: number, route: string, result: string,
+  observations: AgentObservation[] = [], promptMetadata: RunPromptConfig['prompt_metadata'] = {}, subject?: string,
+  exchange?: TraceExchange): Promise<string | false> {
   const publicKey = process.env.LANGFUSE_PUBLIC_KEY;
   const secret = process.env.LANGFUSE_SECRET_KEY;
   const base = process.env.LANGFUSE_BASE_URL;
@@ -37,6 +62,11 @@ export async function exportAgentSpan(turn: AgentTurn, started: number, route: s
       'claro.runtime_sha256': runtimeSha256
     };
     const root = createHash('sha256').update(`root:${turn.run_id}`).digest('hex').slice(0,16);
+    const content: Record<string,string> = exchange && turn.channel==='web' && turn.audience==='cliente' &&
+      process.env.DEMO_MODE==='true' && process.env.LANGFUSE_CAPTURE_CHAT_IO==='true' ? {
+        'langfuse.observation.input':JSON.stringify(traceText(exchange.input)),
+        'langfuse.observation.output':JSON.stringify(traceText(exchange.output))
+      } : {};
     const span = (spanId: string, name: string, from: number, to: number, metadata: Record<string,string|number>, parentSpanId?: string) => ({
       traceId, spanId, name, kind: 1, ...(parentSpanId ? { parentSpanId } : {}),
       startTimeUnixNano: String(BigInt(from) * 1_000_000n),
@@ -48,15 +78,15 @@ export async function exportAgentSpan(turn: AgentTurn, started: number, route: s
       }))
     });
     const rootSpans = observations.every(item => item.name === 'effect') && observations.length ? [] : [
-      span(root, 'attention.run', started, Date.now(), { ...attributes, 'langfuse.trace.metadata.run_id':turn.run_id })
+      span(root, 'attention.run', started, Date.now(), { ...attributes, 'langfuse.trace.metadata.run_id':turn.run_id, ...content })
     ];
     const steps = observations.map(item => {
-      const externalModel = isModelObservation(item.name) &&
-        (item.name!=='decision.jev' || item.metadata.provider_attempted==='yes');
+      const externalModel = isModelObservation(item.name);
       const metadata: Record<string,string|number> = {
         'langfuse.observation.type': externalModel ? 'generation'
           : item.name.startsWith('tool.') ? 'tool' : item.name === 'retrieval' ? 'retriever' : 'span',
-        ...Object.fromEntries(Object.entries(item.metadata).map(([key,value]) => [`claro.${key}`,value]))
+        ...Object.fromEntries(Object.entries(item.metadata).map(([key,value]) => [`claro.${key}`,value])),
+        ...stepExchange(item)
       };
       if (item.name === 'tool.list_catalog_plans' || item.name === 'catalogue.selection') {
         for (const key of ['reference_resolution','catalog_version','decision','reason'] as const) {

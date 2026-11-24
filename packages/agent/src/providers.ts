@@ -1,17 +1,12 @@
-import type { Citation, Intent } from '@claro/contracts';
-import type { Decision, DecisionAdapter } from './index.js';
+import type { Citation } from '@claro/contracts';
 import { safeDecisionFeatures } from './index.js';
-import { openAIUsage, type Observe } from './generation.js';
+import { openAIUsage, type Observe, type Profile } from './generation.js';
 
 type Fetch = typeof globalThis.fetch;
 type Choice = { type?: unknown; choice?: unknown; probabilities?: unknown; confidence?: unknown };
 type DecisionUsage = {input_tokens?:unknown;output_tokens?:unknown;cost?:unknown};
 type JevResponse = {id?:unknown;model?:unknown;answers?:Record<string,unknown>;usage?:DecisionUsage};
 type DecisionMetadata=Record<string,string|number>;
-const intents = ['soporte_tecnico','facturacion','consulta_planes','cancelacion','portabilidad','fuera_de_alcance','indeterminada'] as const;
-const complexity = ['simple','intermedia','compuesta','indeterminada'] as const;
-const intentCriteria = {soporte_tecnico:'Falla o procedimiento técnico.', facturacion:'Factura, saldo, cobro o pago.', consulta_planes:'Planes, precios o características.', cancelacion:'Terminar el servicio.', portabilidad:'Portar número.', fuera_de_alcance:'Objetivo ajeno.', indeterminada:'No se puede distinguir el objetivo.'};
-const complexityCriteria = {simple:'Un objetivo.', intermedia:'Un objetivo con verificaciones.', compuesta:'Varios objetivos.', indeterminada:'Información insuficiente.'};
 function readChoice(value: unknown, labels: readonly string[]) {
   if (!value || typeof value !== 'object') return null;
   const answer = value as Choice;
@@ -41,59 +36,14 @@ function decisionUsage(usage:DecisionUsage|undefined) {
   }
   return values;
 }
-function choiceMetadata(prefix:string, value:ReturnType<typeof readChoice>) {
-  if (!value) return {};
-  return { [prefix+'_choice']:value.choice,[prefix+'_probability']:value.probability,
-    [prefix+'_probabilities']:JSON.stringify(value.probabilities),
-    ...(value.confidence!==undefined ? {[prefix+'_confidence']:value.confidence} : {}) };
-}
 export type JevOptions = { apiKey: string; model: string; timeoutMs?: number; fetch?: Fetch; semanticTemplate?: string };
 export function parseJevQuestion(template:string, expectedKeys:readonly string[], variables:Record<string,string> = {}): {instructions:string;criteria:Record<string,string>} | null {
  try { const value=JSON.parse(template) as {instructions:unknown;criteria:unknown}; if (typeof value.instructions !== 'string' || !value.criteria || typeof value.criteria !== 'object' || Array.isArray(value.criteria)) return null; const criteria=value.criteria as Record<string,unknown>; if (Object.keys(criteria).length !== expectedKeys.length || expectedKeys.some(k=>typeof criteria[k] !== 'string') || Object.keys(criteria).some(k=>!expectedKeys.includes(k))) return null; const render=(s:string)=>s.replace(/{{\s*([a-zA-Z_][a-zA-Z_0-9]*)\s*}}/g,(_,key:string)=>variables[key] ?? ''); return {instructions:render(value.instructions),criteria:Object.fromEntries(expectedKeys.map(k=>[k,render(criteria[k] as string)]))}; } catch { return null; }
 }
-/** Jev receives only categorical features; API errors and uncertain output abstain. */
-export function createJevDecisionAdapter(options: JevOptions): DecisionAdapter {
-  if (!options.apiKey || !/^typesafe\/jev-[a-zA-Z0-9.-]+$/.test(options.model)) throw new Error('A server key and explicit Jev model are required');
-  return { async classify(text, prompts, observe): Promise<Decision | null> {
-    const intentQuestion = prompts?.intent_decision ? parseJevQuestion(prompts.intent_decision,intents) : {instructions:'Clasifica la intención a partir de señales categóricas.',criteria:intentCriteria};
-    const complexityQuestion = prompts?.complexity_decision ? parseJevQuestion(prompts.complexity_decision,complexity) : {instructions:'Clasifica la complejidad solo si hay información suficiente.',criteria:complexityCriteria};
-    if (!intentQuestion || !complexityQuestion) return null;
-    const features = safeDecisionFeatures(text);
-    if (features === 'indeterminada') return null;
-    const telemetry:DecisionMetadata={model:options.model,provider_attempted:'yes',provider_status:'unavailable'};
-    try {
-      const response = await (options.fetch ?? fetch)('https://openrouter.ai/api/alpha/decisions', {method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${options.apiKey}`},signal:AbortSignal.timeout(options.timeoutMs ?? 800),body:JSON.stringify({model:options.model,state:{senales:features},questions:{intencion:{type:'choice',...intentQuestion},complejidad:{type:'choice',...complexityQuestion}}})});
-      if (!response.ok) {
-        telemetry.provider_status=`http_${response.status}`;
-        return null;
-      }
-      telemetry.provider_status='invalid_response';
-      const data = await response.json() as JevResponse;
-      Object.assign(telemetry,decisionUsage(data?.usage));
-      if (typeof data?.id==='string' && /^gen-dec-[a-zA-Z0-9_-]{1,110}$/.test(data.id)) telemetry.provider_request_id=data.id;
-      if (typeof data.model !== 'string' || !(data.model === options.model || data.model.startsWith(`${options.model}-`))) return null;
-      telemetry.model=data.model;
-      const intent = readChoice(data.answers?.intencion,intents);
-      const profile = readChoice(data.answers?.complejidad,complexity);
-      Object.assign(telemetry,choiceMetadata('intent',intent),choiceMetadata('complexity',profile));
-      if (intent) telemetry.provider_status='abstained';
-      const i = acceptChoice(intent); const c = acceptChoice(profile);
-      if (!i || i.choice === 'indeterminada' || i.choice === 'fuera_de_alcance') return null;
-      telemetry.provider_status='accepted';
-      return {intent:i.choice as Intent, confidence:i.probability, complexity:c?.choice === 'compuesta' ? 'complejo' : c?.choice === 'intermedia' ? 'intermedio' : 'economico'};
-    } catch (error) {
-      if (error instanceof Error && error.name==='TimeoutError') telemetry.provider_status='timeout';
-      return null;
-    } finally {
-      observe?.(telemetry);
-    }
-  }};
-}
-
 export interface EvidenceSelector {
-  select(query:string, citations:Citation[], profile:Decision['complexity'], prompt?:string, observe?:Observe):Promise<number|null>;
+  select(query:string, citations:Citation[], profile:Profile, prompt?:string, observe?:Observe):Promise<number|null>;
 }
-export type OpenAISelectorOptions = {apiKey: string; models: Partial<Record<Decision['complexity'],string>>; timeoutMs?:number; fetch?:Fetch};
+export type OpenAISelectorOptions = {apiKey: string; models: Partial<Record<Profile,string>>; timeoutMs?:number; fetch?:Fetch};
 /** Responses API selects an already-authorized passage; generated prose is never published. */
 export function createOpenAIEvidenceSelector(options: OpenAISelectorOptions): EvidenceSelector {
   if (!options.apiKey) throw new Error('A server key is required');

@@ -12,8 +12,8 @@ services:
       timeout: 12s
       start_period: 60s
   lf-clickhouse:
-    cpus: 2.0
-    mem_limit: 2560m
+    cpus: ${LANGFUSE_CLICKHOUSE_CPUS:-4.0}
+    mem_limit: ${LANGFUSE_CLICKHOUSE_MEMORY:-4g}
     volumes:
       - ./langfuse/clickhouse-local.xml:/etc/clickhouse-server/config.d/zz-local-budget.xml:ro
     healthcheck:
@@ -21,10 +21,13 @@ services:
       start_period: 90s
   langfuse-web:
     environment:
-      NODE_OPTIONS: --max-old-space-size=${LANGFUSE_WEB_HEAP_MIB:-1024}
+      NODE_OPTIONS: --max-old-space-size=${LANGFUSE_WEB_HEAP_MIB:-1536}
     healthcheck:
       timeout: 15s
       start_period: 120s
+  langfuse-worker:
+    environment:
+      NODE_OPTIONS: --max-old-space-size=${LANGFUSE_WORKER_HEAP_MIB:-1024}
 volumes:
   clickhouse:
     name: ${LANGFUSE_CLICKHOUSE_VOLUME:-claro-demo-langfuse_clickhouse}

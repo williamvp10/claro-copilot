@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
 import { test } from 'node:test';
 import { exportAgentSpan, traceIdentifier } from '../dist/telemetry.js';
+import { publicDemoChatPair } from '../dist/cases.js';
 import { promptEntry } from '../dist/prompt-catalog.js';
 
 test('Langfuse export links the version and omits case text', async t=>{
@@ -11,8 +12,10 @@ test('Langfuse export links the version and omits case text', async t=>{
   process.env.LANGFUSE_BASE_URL='http://langfuse-web:3000';
   process.env.KNOWLEDGE_INDEX_REVISION='a'.repeat(64);
   process.env.BETTER_AUTH_SECRET='test-correlation-key';
+  process.env.DEMO_MODE='true';
+  process.env.LANGFUSE_CAPTURE_CHAT_IO='true';
   t.after(()=>{
-    for (const key of ['LANGFUSE_PUBLIC_KEY','LANGFUSE_SECRET_KEY','LANGFUSE_BASE_URL','KNOWLEDGE_INDEX_REVISION','BETTER_AUTH_SECRET']) {
+    for (const key of ['LANGFUSE_PUBLIC_KEY','LANGFUSE_SECRET_KEY','LANGFUSE_BASE_URL','KNOWLEDGE_INDEX_REVISION','BETTER_AUTH_SECRET','DEMO_MODE','LANGFUSE_CAPTURE_CHAT_IO']) {
       if (original[key]===undefined) delete process.env[key];
       else process.env[key]=original[key];
     }
@@ -38,9 +41,9 @@ test('Langfuse export links the version and omits case text', async t=>{
   {name:'tool.list_catalog_plans',started:now,ended:now,metadata:{
     reference_resolution:'memory',catalog_version:'CAT-2026 v1.0',decision:'answer',reason:'lowest_applicable_price'
   }},
-  {name:'decision.jev',started:now,ended:now,metadata:{provider_attempted:'yes',model:'typesafe/jev-1.14',
+  {name:'decision.objectives',started:now,ended:now,metadata:{provider_attempted:'yes',model:'openai-fixture',
     input_tokens:476,output_tokens:70,cost_usd:0.000019992,status:'fallback'}},
-  {name:'decision.jev',started:now,ended:now,metadata:{provider_attempted:'yes',model:'typesafe/jev-1.14',status:'fallback'}}
+  {name:'decision.objectives',started:now,ended:now,metadata:{provider_attempted:'yes',model:'openai-fixture',status:'fallback'}}
   ],{public_answer:prompt},'private-contact-reference');
   assert.equal(ok,createHash('sha256').update(JSON.stringify(requests[0].body)).digest('hex'));
   assert.match(requests[0].url,/\/api\/public\/otel\/v1\/traces$/);
@@ -78,6 +81,23 @@ test('Langfuse export links the version and omits case text', async t=>{
   const next=correlationOf(requests[1].body.resourceSpans[0].scopeSpans[0].spans[0]);
   assert.equal(next['langfuse.user.id'],correlation['langfuse.user.id']);
   assert.notEqual(next['langfuse.session.id'],correlation['langfuse.session.id']);
+  const input={text:'Hola, escribe a prueba@example.com o al 3101234567',actor:'cliente'};
+  const output={text:'Hola. Referencia F-1234 y código 123456',actor:'agente'};
+  const row={snapshot:{channel:'web',verified:false}};
+  const exchange=publicDemoChatPair(row,input,output);
+  assert.ok(exchange);
+  assert.equal(publicDemoChatPair({snapshot:{channel:'web',verified:true}},input,output),undefined);
+  assert.equal(publicDemoChatPair(row,{...input,verification_input:true},output),undefined);
+  assert.equal(publicDemoChatPair({...row,account_inquiry:'invoice'},input,output),undefined);
+  await exportAgentSpan(turn,now,'platform','answer',[],{},'private-contact-reference',exchange);
+  const latestRoot=()=>Object.fromEntries(requests.at(-1).body.resourceSpans[0].scopeSpans[0].spans[0].attributes
+    .map(({key,value})=>[key,value.stringValue]));
+  assert.equal(JSON.parse(latestRoot()['langfuse.observation.input']),'Hola, escribe a [correo] o al [número]');
+  assert.equal(JSON.parse(latestRoot()['langfuse.observation.output']),'Hola. Referencia [referencia] y código [dato]');
+  process.env.DEMO_MODE='false';
+  await exportAgentSpan(turn,now,'platform','answer',[],{},'private-contact-reference',exchange);
+  assert.equal(latestRoot()['langfuse.observation.input'],undefined);
+  assert.equal(latestRoot()['langfuse.observation.output'],undefined);
   acknowledgment = {partialSuccess:{rejectedSpans:'1'}};
   assert.equal(await exportAgentSpan(turn,now,'consulta_planes','answer'),false);
   acknowledgment = {partial_success:{rejected_spans:1}};

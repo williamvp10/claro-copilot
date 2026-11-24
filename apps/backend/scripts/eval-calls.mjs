@@ -9,8 +9,8 @@ import { agentProviders } from '../dist/agent-providers.js';
 import { runtimeSha256 } from '../dist/runtime-revision.js';
 
 const env = process.env;
-if (env.AGENT_PROVIDERS === 'live' && (!env.OPENAI_API_KEY || !env.OPENROUTER_API_KEY)) {
-  throw new Error('Live replay requires OPENAI_API_KEY and OPENROUTER_API_KEY.');
+if (env.AGENT_PROVIDERS === 'live' && !env.OPENAI_API_KEY) {
+  throw new Error('Live replay requires OPENAI_API_KEY.');
 }
 const enabled = process.argv.includes('--jev');
 const native = process.argv.includes('--native-jev');
@@ -180,8 +180,7 @@ try {
       } : {}),
     }), ...observations.map(event => {
       const prompt = config.prompt_metadata[event.metadata.prompt_ref];
-      const externalModel=isModelObservation(event.name) &&
-        (event.name!=='decision.jev' || event.metadata.provider_attempted==='yes');
+      const externalModel=isModelObservation(event.name);
       const {model:servedModel,input_tokens,output_tokens,cost_usd}=event.metadata;
       return span(hex(8), event.name, event.started, event.ended, {
         'langfuse.observation.metadata.turn': String(event.turnIndex),
@@ -217,8 +216,7 @@ try {
     if (enabled) scores.push(score('jev_semantic', semantic.status, 'CATEGORICAL', { model: semantic.model ?? model }),
       ...semantic.decisions.map(({ criterion, choice }) => score(`jev_${criterion.replace(':', '_')}`, choice, 'CATEGORICAL')));
     await post('/api/public/scores', scores);
-    const requests=observations.filter(event=>isModelObservation(event.name) &&
-      (event.name!=='decision.jev' || event.metadata.provider_attempted==='yes'));
+    const requests=observations.filter(event=>isModelObservation(event.name));
     const costPerStep={};
     for (const {name,metadata} of requests) {
       const current=costPerStep[name] ??= {requests:0,measured:0,usd:0};

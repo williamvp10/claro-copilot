@@ -1,6 +1,6 @@
 export { createOpenAIPublicWriter, isModelObservation, modelObservationNames, validateDraft } from './generation.js';
 export type { AgentObservation, PublicWriter } from './generation.js';
-import type { AgentObservation, PublicWriter } from './generation.js';
+import type { AgentObservation, Profile, PublicWriter } from './generation.js';
 import { safeKnowledgeQuery } from './mcp.js';
 import { claimedBillingAccount, explainInvoiceChange, invoicePeriods, reportedAdjustmentAmount } from './billing-evidence.js';
 export { claimedBillingAccount, explainInvoiceChange, invoicePeriods } from './billing-evidence.js';
@@ -24,7 +24,7 @@ export { retrievalTerms } from './retrieval.js';
 export { retentionPolicyQuery } from './retrieval.js';
 export { createKnowledgeMcpAdapter, isTransientMcpRead, safeKnowledgeQuery } from './mcp.js';
 export type { KnowledgeMcpOptions } from './mcp.js';
-export { createJevDecisionAdapter, createOpenAIEvidenceSelector, createJevSemanticEvaluator, parseJevQuestion } from './providers.js';
+export { createOpenAIEvidenceSelector, createJevSemanticEvaluator, parseJevQuestion } from './providers.js';
 export type { JevOptions, OpenAISelectorOptions, EvidenceSelector, SemanticObservation, SemanticResult } from './providers.js';
 import type { EvidenceSelector } from './providers.js';
 import { Annotation, StateGraph, START, END } from '@langchain/langgraph';
@@ -32,17 +32,13 @@ import { ADVISOR_ADJUSTMENT_LIMIT, AgentTurn as TurnSchema, RunResult as ResultS
 import type { AgentPorts, AgentRunner, AgentTurn, CaseIntake, CatalogPlan, KnowledgeSearchFilters, KnowledgeTags, RunResult, RunResume, Citation, Fact, Intent, Message, Retention } from '@claro/contracts';
 
 export type KnowledgeDocument = Citation & { scope: 'public' | 'advisor'; effective_from: string; effective_to?: string; status?: 'ready' | 'draft'; channels?: string[]; products?: string[]; type?: string; provider_approved?: true; metadata?:KnowledgeTags };
-export type Decision = { intent: Intent; complexity: 'economico' | 'intermedio' | 'complejo'; confidence: number };
-export interface DecisionAdapter {
-  classify(text:string, prompts?:Record<string,string>, observe?:(metadata:AgentObservation['metadata'])=>void):Promise<Decision | null>;
-}
 export interface KnowledgeAdapter {
   revision?: string;
   catalog?(context: {business_date:string;channel:string}): Promise<CatalogPlan[]>;
   search(query: string, context: { business_date: string; audience: 'cliente' | 'asesor'; channel: string; filters?:KnowledgeSearchFilters }): Promise<KnowledgeDocument[]>;
 }
 export interface CheckpointStore { get(key: string): Promise<RunResult | undefined>; put(key: string, result: RunResult): Promise<void> }
-export type AgentOptions = { requireApprovedPrompts?: boolean; documents?: KnowledgeDocument[]; knowledge?: KnowledgeAdapter; decision?: DecisionAdapter; checkpoints?: CheckpointStore; rerank?: (query: string, documents: KnowledgeDocument[]) => Promise<KnowledgeDocument[]>; evidenceSelector?: EvidenceSelector; writer?: PublicWriter; planner?: ObjectivePlanner; turnTimeoutMs?:number; observe?: (runId: string, observation: AgentObservation) => void; };
+export type AgentOptions = { requireApprovedPrompts?: boolean; documents?: KnowledgeDocument[]; knowledge?: KnowledgeAdapter; checkpoints?: CheckpointStore; rerank?: (query: string, documents: KnowledgeDocument[]) => Promise<KnowledgeDocument[]>; evidenceSelector?: EvidenceSelector; writer?: PublicWriter; planner?: ObjectivePlanner; turnTimeoutMs?:number; observe?: (runId: string, observation: AgentObservation) => void; };
 
 const norm = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const tokens = (s: string) => norm(s).match(/[a-z0-9]+/g)?.filter(x => x.length > 2) ?? [];
@@ -227,7 +223,7 @@ export function createKnowledgePipeline(options:Pick<AgentOptions,'requireApprov
         return {ranked:[],unavailable:true,attempts};
       }
     }).addEdge(START,'plan_search').addEdge('plan_search','find_evidence').addEdge('find_evidence',END).compile();
-  async function retrieve(turn: KnowledgeTurn, profile: Decision['complexity'], prompts:Record<string,string>, selectEvidence = true) {
+  async function retrieve(turn: KnowledgeTurn, profile: Profile, prompts:Record<string,string>, selectEvidence = true) {
     const started = Date.now();
     const timeout = {turn,plan:prepareKnowledgeQuery(turn.text,turn.intake),ranked:[],unavailable:true,attempts:0};
     const {plan,ranked,unavailable,attempts}=await withinDeadline(turn.deadline ?? Infinity,()=>graph.invoke({turn}),timeout);
@@ -249,7 +245,7 @@ export function createKnowledgePipeline(options:Pick<AgentOptions,'requireApprov
     const candidates = selectEvidence ? await selectPublicEvidence(turn,profile,prompts.public_evidence_selector,shortlist) : shortlist;
     return { candidates, ranked:docs, unavailable, search:{query:plan.query,...plan.filters,attempts,revision} };
   }
-  async function selectPublicEvidence(turn:KnowledgeTurn, profile:Decision['complexity'], prompt:string|undefined, documents:KnowledgeDocument[]) {
+  async function selectPublicEvidence(turn:KnowledgeTurn, profile:Profile, prompt:string|undefined, documents:KnowledgeDocument[]) {
     const publicCandidates = documents.filter(doc=>doc.scope==='public' && doc.provider_approved===true);
     const selector=options.evidenceSelector;
     if (turn.audience==='cliente' && !plansDiscovery(turn.text) && selector && publicCandidates.length > 1 && (!options.requireApprovedPrompts || Boolean(prompt))) {
@@ -266,7 +262,7 @@ export function createKnowledgePipeline(options:Pick<AgentOptions,'requireApprov
     }
     return documents;
   }
-  async function answer(turn:KnowledgeTurn, profile:Decision['complexity'], publicPrompt:string, documents:KnowledgeDocument[], checkConflicts=false,
+  async function answer(turn:KnowledgeTurn, profile:Profile, publicPrompt:string, documents:KnowledgeDocument[], checkConflicts=false,
     fallbackEvidencePrompt?:string) {
     if (!documents.length) return null;
     if (checkConflicts && has(turn.text,/\b(?:precio|cuesta|tarifa|valor)\b/)) {
@@ -398,7 +394,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
   const get = async (key: string) => (await options.checkpoints?.get(key)) ?? results.get(key);
   const put = async (key: string, value: RunResult) => { results.set(key, value); await options.checkpoints?.put(key, value); };
   const {retrieve: retrieveKnowledge, answer: answerKnowledge} = createKnowledgePipeline(options);
-  async function retrieve(turn:AgentTurn & KnowledgeTurn, profile:Decision['complexity'], prompts:Record<string,string>, selectEvidence=true) {
+  async function retrieve(turn:AgentTurn & KnowledgeTurn, profile:Profile, prompts:Record<string,string>, selectEvidence=true) {
     return (await retrieveKnowledge({...turn,reads:readBudgets.get(turn.run_id)},profile,prompts,selectEvidence)).candidates;
   }
   type CaseState = Awaited<ReturnType<AgentPorts['readCaseForRun']>>;
@@ -433,7 +429,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     return budget ? await budget.read({tool:'list_catalog_plans',agent:'comercial',step:'compare_catalogue',purpose,read}) ?? []
       : await withinDeadline(deadline,()=>read().catch(()=>[]),[]);
   }
-  const GraphState = Annotation.Root({ turn: Annotation<AgentTurn>(), caseState: Annotation<CaseState>(), intent: Annotation<Intent>(), profile: Annotation<Decision['complexity']>(), publicPrompt: Annotation<string>(), prompts: Annotation<Record<string,string>>(), result: Annotation<RunResult>(), historyOnly:Annotation<boolean>(), objectives:Annotation<Intent[]>(), supportingCards:Annotation<Extract<RunResult,{type:'card'}>[]>(), deadline:Annotation<number>() });
+  const GraphState = Annotation.Root({ turn: Annotation<AgentTurn>(), caseState: Annotation<CaseState>(), intent: Annotation<Intent>(), profile: Annotation<Profile>(), publicPrompt: Annotation<string>(), prompts: Annotation<Record<string,string>>(), result: Annotation<RunResult>(), historyOnly:Annotation<boolean>(), objectives:Annotation<Intent[]>(), supportingCards:Annotation<Extract<RunResult,{type:'card'}>[]>(), deadline:Annotation<number>() });
   type Domain = 'soporte' | 'facturacion' | 'comercial';
   type CaseRead = 'crm.get_customer_context' | 'crm.list_services' | 'crm.list_recent_tickets' | 'crm.evaluate_retention'
     | 'billing.get_balance' | 'billing.list_invoices' | 'billing.get_invoice_detail';
@@ -449,7 +445,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
   const reportsCancellationFaults = (turn:AgentTurn,state:CaseState) => [turn.text,...state.messages
     .filter(message => message.actor==='cliente' && message.turn_seq<turn.turn_seq).map(message => message.text)]
     .some(text => cancellationWithFaults(text) || has(text,/\b(se cae|caidas|fallas recurrentes|intermitencia|falla todo el tiempo)\b/));
-  async function resolve(turn: AgentTurn, state: CaseState, intent: Intent, profile: Decision['complexity'], publicPrompt: string, prompts:Record<string,string>, agentId:Domain, historyOnly:boolean, deadline:number, supportingCards:Extract<RunResult,{type:'card'}>[]): Promise<RunResult> {
+  async function resolve(turn: AgentTurn, state: CaseState, intent: Intent, profile: Profile, publicPrompt: string, prompts:Record<string,string>, agentId:Domain, historyOnly:boolean, deadline:number, supportingCards:Extract<RunResult,{type:'card'}>[]): Promise<RunResult> {
     const reads=readBudgets.get(turn.run_id);
     const scopeStep = agentId==='facturacion' ? 'resolve_billing_facts'
       : agentId==='soporte' ? 'read_service_context' : 'read_commercial_context';
@@ -751,29 +747,12 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       }
       return { caseState, prompts:config.prompts, publicPrompt: config.prompts.public_answer ?? '', intent: recentPurpose(caseState.messages, turn) };
     })
-    .addNode('classify', async ({ turn, caseState, prompts, deadline }) => {
+    .addNode('classify', ({ turn, caseState, prompts }) => {
+      const started = Date.now();
       let intent = recentPurpose(caseState.messages, turn);
-      let profile: Decision['complexity'] = 'economico';
       if (turn.actor === 'cliente' && !accepted(turn.text) && tokens(turn.text).length > 2) {
         const activeOffer = intent === 'cancelacion' && !contextIntent(turn.text) && has(turn.text,/\b(?:descuento|oferta)\b/);
         if (!activeOffer) intent = classify(turn.text);
-      }
-      const classifier=options.decision;
-      if (classifier && turn.actor === 'cliente' && !accepted(turn.text) && (!options.requireApprovedPrompts || Boolean(prompts.intent_decision && prompts.complexity_decision))) {
-        const started = Date.now();
-        let status = 'fallback';
-        let provider:AgentObservation['metadata']={};
-        try {
-          const decision = await withinDeadline(deadline,()=>classifier.classify(safeDecisionFeatures(turn.text),prompts,metadata=>{provider=metadata;}),null);
-          if (decision && decision.confidence >= 0.75) {
-            if (!(intent === 'cancelacion' && (explicitAccountBilling(turn.text) || asksCurrentPlanAndBalance(turn.text)))) intent = decision.intent;
-            profile = decision.complexity;
-            status = 'accepted';
-          }
-        } catch { /* Keep the local rules when Jev is unavailable. */ }
-        options.observe?.(turn.run_id, { name:'decision.jev', started, ended:Date.now(), metadata:{
-          ...provider,status,intent,profile,agent_id:'copiloto',step_id:'classify_turn',prompt_ref:'intent_decision'
-        } });
       }
       const newPlan = changesCancellationToPlan(turn.text);
       if (newPlan) intent='consulta_planes';
@@ -788,6 +767,10 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       else if (plansDiscovery(planConversation(turn,caseState.messages).text) || mobilePlanTopic(planConversation(turn,caseState.messages).text)) intent='consulta_planes';
       else if (caseState.intake?.intent==='cancelacion' && !retentionPolicyQuery(turn.text)) intent='cancelacion';
       else if (caseState.intake?.intent==='soporte_tecnico' && ['Lentitud','E-202','Luz LOS roja','Cortes en videollamadas'].includes(caseState.intake.facts.sintoma ?? '')) intent='soporte_tecnico';
+      const profile: Profile = caseState.verified && turn.audience==='asesor' ? 'intermedio' : 'economico';
+      options.observe?.(turn.run_id,{name:'context',started,ended:Date.now(),metadata:{
+        agent_id:'copiloto',step_id:'classify_turn',decision:'orchestrator',intent,profile
+      }});
       return { intent, profile };
     })
     .addNode('plan_objectives', async (state) => {
@@ -801,7 +784,8 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
         objectives.add('soporte_tecnico');
       }
       const planned = [...objectives];
-      if (!prompts.agent_objectives) return {objectives:planned};
+      const profile: Profile = planned.length > 1 ? 'complejo' : state.profile;
+      if (!prompts.agent_objectives) return {objectives:planned,profile};
       const started = Date.now();
       const planner=options.planner;
       const order = planned.length > 1 && planner
@@ -822,7 +806,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
         agent_id:'copiloto',step_id:'plan_objectives',primary:intent,
         objectives:ordered.join(','),investigated:supportingCards.map(result=>result.route).join(',')
       }});
-      return {objectives:ordered,supportingCards};
+      return {objectives:ordered,supportingCards,profile};
     })
     .addNode('unresolved_objective', ({turn}) => ({
       result: turn.audience === 'asesor'

@@ -9,7 +9,7 @@ import { RunResult, type AgentTurn, type Citation, type RunResume } from '@claro
 import { createClient } from 'redis';
 import type { DataSource } from 'typeorm';
 import { audit, createDatabase, enqueue, type CaseJob } from './database.js';
-import { addMessage, loadCase, saveCase, stillCurrent, latestAnalyzable, isLegacyKnowledgeWait } from './cases.js';
+import { addMessage, loadCase, saveCase, stillCurrent, latestAnalyzable, isLegacyKnowledgeWait, publicDemoChatPair } from './cases.js';
 import { businessPorts, runContext } from './business.js';
 import { integrationMcpPorts } from './integration-mcp-client.js';
 import { agentProviders } from './agent-providers.js';
@@ -88,7 +88,7 @@ function telegramCitationLines(citations:Citation[]) {
 }
 
 async function project(turn: AgentTurn, result: RunResult) {
-  await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
     const row = await loadCase(tx, turn.case_id, true);
     if (!stillCurrent(row, turn)) {
       await audit(tx, row.id, 'agent_stale');
@@ -98,6 +98,7 @@ async function project(turn: AgentTurn, result: RunResult) {
       WHERE case_id=$1 AND kind='agent_completed' AND metadata->>'run_id'=$2) AS published`, [row.id, turn.run_id]);
     if (published) return;
     if (result.type === 'failed') throw new Error('agent_failed');
+    let exchange;
     if (turn.audience === 'cliente' && (result.type === 'answer' || result.type === 'handoff')) {
       const conversationalVerification = process.env.DEMO_MODE === 'true' && result.type === 'handoff' &&
         result.verification_required && !row.snapshot.verified && (row.snapshot.channel === 'web' || row.snapshot.channel === 'telegram');
@@ -125,6 +126,7 @@ async function project(turn: AgentTurn, result: RunResult) {
           : result.answer
         : result.reason;
       const msg = addMessage(row, 'agente', text.slice(0, 4096), result.type === 'answer' ? result.citations : []);
+      if (!conversationalVerification) exchange = publicDemoChatPair(row,row.snapshot.messages.find(item=>item.id===turn.turn_id),msg);
       if (result.type==='answer' && result.context_question && row.snapshot.intake) {
         recordQuestion(row.snapshot.intake,result.context_question);
         await audit(tx,row.id,'case_context_question',{run_id:turn.run_id,question_id:result.context_question.id,channel:turn.channel});
@@ -158,6 +160,7 @@ async function project(turn: AgentTurn, result: RunResult) {
     }
     await audit(tx, row.id, 'agent_completed', { run_id: turn.run_id, route: result.route, clarification, runtime_sha256:runtimeSha256 });
     await saveCase(tx, row);
+    return exchange;
   });
 }
 
@@ -250,20 +253,34 @@ async function handle(job: CaseJob) {
       const spans: AgentObservation[] = [];
       observations.set(job.payload.run_id, spans);
       const result = await runner.run(job.payload).finally(() => observations.delete(job.payload.run_id));
-      await project(job.payload, result);
+      const exchange = await project(job.payload, result);
       await audit(db.manager, job.case_id, 'agent_latency', { ms: Date.now() - started, run_id:job.payload.run_id, route:result.route });
       for (const item of spans) {
         if (isModelObservation(item.name) || item.name.startsWith('tool.')) {
           await audit(db.manager, job.case_id, item.name, { ...item.metadata, route:result.route, run_id:job.payload.run_id, ms: item.ended - item.started });
         }
       }
-      const traceSha = await exportAgentSpan(job.payload, started, result.route, result.type, spans, promptConfig.prompt_metadata,subject);
+      const traceSha = await exportAgentSpan(job.payload, started, result.route, result.type, spans, promptConfig.prompt_metadata,subject,exchange);
       if (traceSha) {
         await audit(db.manager, job.case_id, 'langfuse_exported', {run_id:job.payload.run_id,trace_sha256:traceSha});
       }
       if (redis?.isReady) {
         await redis.set(`conversation:${job.payload.conversation_id}`, JSON.stringify({ lastRun: job.payload.run_id }), { expiration: { type: 'EX', value: 86400 } }).catch(() => undefined);
       }
+      break;
+    }
+    case 'chat_trace': {
+      const row = await loadCase(db.manager,job.case_id);
+      const input = row.snapshot.messages.find(message=>message.id===job.payload.input_id);
+      const output = row.snapshot.messages.find(message=>message.id===job.payload.output_id);
+      if (!input || !output) return;
+      const exchange = publicDemoChatPair(row,input,output);
+      if (!exchange) return;
+      const traceSha = await exportAgentSpan({run_id:output.id,conversation_id:row.snapshot.conversation_id,
+        channel:row.snapshot.channel,audience:'cliente',config_revision:'platform'},Date.parse(input.created_at),
+        'platform','answer',[],{},row.web_visitor_ref ?? row.contact_ref,exchange);
+      if (!traceSha) throw new Error('langfuse_chat_export_failed');
+      await audit(db.manager,job.case_id,'langfuse_exported',{run_id:output.id,trace_sha256:traceSha});
       break;
     }
     case 'resume': await resume(job.payload); break;
