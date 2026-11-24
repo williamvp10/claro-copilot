@@ -748,6 +748,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
   }
   const graph = new StateGraph(GraphState)
     .addNode('load_case', async ({ turn, deadline }) => {
+      const started = Date.now();
       const caseState = await ports.readCaseForRun(turn.run_id);
       const config = await ports.getAgentConfig(turn.config_revision);
       if (config.revision !== turn.config_revision) throw new Error('configuration revision mismatch');
@@ -755,6 +756,11 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
         const readDeadline=deadline - Math.min(150, Math.floor(turnTimeoutMs/10));
         readBudgets.set(turn.run_id,new TurnReads(readDeadline,observation=>options.observe?.(turn.run_id,observation)));
       }
+      const history = caseState.messages.filter(message=>message.turn_seq<turn.turn_seq);
+      options.observe?.(turn.run_id,{name:'context',started,ended:Date.now(),metadata:{
+        agent_id:'copiloto',step_id:'load_case',history_count:history.length,
+        first_turn_seq:history[0]?.turn_seq ?? 0,last_turn_seq:history.at(-1)?.turn_seq ?? 0
+      }});
       return { caseState, prompts:config.prompts, publicPrompt: config.prompts.public_answer ?? '', intent: recentPurpose(caseState.messages, turn) };
     })
     .addNode('resolve_turn', ({ turn, caseState, prompts }) => {

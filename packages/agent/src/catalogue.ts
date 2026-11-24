@@ -105,9 +105,9 @@ export function catalogComparisonAfterWithdrawal(text:string, messages:Message[]
 export function catalogComparison(text: string, messages: Message[], memory?: ConversationMemory, before=Infinity): Comparison | undefined {
   const query = normalize(text).trim().replace(/^[¿¡]+/,'');
   if (otherTopic.test(query) || advisor.test(query) || /\b(?:mi plan actual|cambiame|contratame|tramit\w*)\b/.test(query)) return;
-  const recent = messages.filter(m=>m.turn_seq<before && !m.verification_input && m.actor!=='asesor').slice(-6).reverse();
+  const previousMessages = messages.filter(m=>m.turn_seq<before && !m.verification_input && m.actor!=='asesor').reverse();
   let history: ConversationMemory | undefined;
-  for (const message of recent) {
+  for (const message of previousMessages) {
     const previous = normalize(message.text);
     if (message.actor==='cliente' && otherTopic.test(previous)) break;
     if (message.actor==='cliente' && pricePreference.test(previous)) {
@@ -120,7 +120,7 @@ export function catalogComparison(text: string, messages: Message[], memory?: Co
       if (segment) break;
     }
   }
-  const prior = recent.find(m=>m.actor==='cliente' && !askExpert.test(normalize(m.text)));
+  const prior = previousMessages.find(m=>m.actor==='cliente' && !askExpert.test(normalize(m.text)));
   const context = prior && otherTopic.test(normalize(prior.text)) ? undefined : memory;
   const explicit = explicitSegment(query);
   const continuing = context?.preference==='lower_price' || history?.preference==='lower_price';

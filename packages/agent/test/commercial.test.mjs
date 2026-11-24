@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createAgent, catalogPlans} from '../dist/index.js';
+import {createAgent, catalogComparison, catalogPlans} from '../dist/index.js';
 
 const digest='a'.repeat(64);
 const makeDocument=(id,title,excerpt,version='CAT-2026 v1.0',date='2026-11-01')=>({
@@ -121,6 +121,14 @@ test('continúa el catálogo desde las opciones mostradas y recuerda el plan con
  await priceFirst.send('planes móviles');
  await priceFirst.send('¿Cuánto cuesta el de 60 GB?');
  assert.match((await priceFirst.send('¿Qué incluye?')).answer,/Claro Max 60 GB.*Claro Video/);
+});
+
+test('recupera una preferencia de catálogo anterior a seis turnos dentro del mismo asunto', ()=>{
+ const message=(text,turn_seq)=>({id:String(turn_seq),actor:'cliente',text,turn_seq,created_at:'2026-11-24T12:00:00.000Z'});
+ const history=[message('Busco el plan más barato de pospago',1),...Array.from({length:8},(_,index)=>message('Entendido',index+2))];
+ assert.equal(catalogComparison('Dime tú',history)?.segment,'movil_pospago');
+ history.splice(2,1,message('Quiero revisar mi factura',3));
+ assert.equal(catalogComparison('Dime tú',history),undefined);
 });
 
 test('revalida una elección al cambiar la edición y pide una nueva confirmación', async()=>{

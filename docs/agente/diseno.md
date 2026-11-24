@@ -30,13 +30,15 @@ La generación, el análisis de casos y los subagentes usan **OpenAI Responses A
 
 ## Memoria y persistencia
 
+El orquestador y los subagentes comparten el estado tipado del mismo caso. Incluye el historial conversacional autorizado del cliente, el asistente y el asesor, con orden, autor y citas. También incluye la ruta activa, el plan en consulta, la elección comercial, la verificación y las preguntas pendientes. Facturación y CRM aplican sus controles de titularidad al ejecutar cada lectura. Los datos de verificación quedan fuera del estado discursivo. Los proveedores externos reciben los datos previstos por cada paso y Langfuse registra el número y rango de turnos cargados.
+
 | Capa | Qué se guarda | Criterio de acceso y vida útil |
 | --- | --- | --- |
-| **Checkpoints de LangGraph en PostgreSQL** | Estado mínimo de ejecución, IDs de evidencia y pausas de aprobación. | `thread_id` ligado a ámbito y conversación. Revalidar acceso al reanudar. El historial de conversaciones pertenece a plataforma. |
-| **Redis de sesión** | Resumen saneado del caso y últimos turnos necesarios. | Clave por canal, conversación y ámbito. TTL inicial de 24 horas para la demo. Revocar al cambiar titular, rol o asignación. |
-| **Redis de perfil autorizado** | Preferencias explícitas de idioma, accesibilidad o atención que se puedan reutilizar. | Solo para identidades vinculadas con autorización vigente. Guardar por sujeto opaco y tipo, con TTL inicial de 30 días, persistencia AOF y borrado al revocar. Se puede aislar en un Redis separado si la política de expulsión o recursos lo requiere. |
+| **Caso en PostgreSQL** | Historial y estado de atención compartidos por el orquestador y los subagentes. | Cargar por caso y revisión vigente con alcance de plataforma. |
+| **Checkpoints en PostgreSQL** | Resultado tipado de cada ejecución y reanudación. | Identificar por ejecución y efecto. Revalidar acceso antes de publicar un resultado reanudado. |
+| **Redis de sesión** | Referencia de la última ejecución del agente. | Clave por conversación con TTL de 24 horas para el demo. |
 
-Los TTL son decisiones iniciales de demo. No mezclar memoria de perfiles con cachés anónimas ni usar mensajes como fuente de permisos. Guardar referencias y preferencias autorizadas, evitando PII y datos de cuenta en memoria. La pérdida de Redis reduce contexto y la sesión puede reconstruirse desde el mínimo permitido por plataforma. [Persistencia de Redis](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/)
+Cada turno reconstruye su contexto desde PostgreSQL. La comparación comercial puede buscar preferencias expresadas al principio de la conversación dentro del mismo asunto. Un cambio de dominio delimita la búsqueda, para que una recomendación anterior no se arrastre a una consulta de cuenta.
 
 ## RAG, re-ranking e ingesta
 
