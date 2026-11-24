@@ -26,14 +26,29 @@ export function invoiceForAccount<T extends { cliente_id: string }>(invoice: T, 
   return invoice;
 }
 
-async function provider<T>(read: () => Promise<T>) {
+async function provider<T>(
+  read: () => Promise<T>,
+  notFound = 'Registro no encontrado en la API de origen'
+) {
   try {
     return await read();
   } catch (error) {
     if (!(error instanceof SimulatorFailure)) throw error;
-    if (error.status === 404) throw new NotFoundException('Registro no encontrado en la API de origen');
+    if (error.status === 404) throw new NotFoundException(notFound);
     throw new ServiceUnavailableException('La API de origen no está disponible. Reintenta en unos segundos.');
   }
+}
+
+export async function readBilling(account: string, notFound?: string) {
+  const [balance, invoices] = await provider(
+    () => Promise.all([simulators.balance(account), simulators.invoices(account)]),
+    notFound
+  );
+  return { balance, invoices };
+}
+
+export async function readInvoice(account: string, ref: string, notFound?: string) {
+  return invoiceForAccount(await provider(() => simulators.invoice(ref), notFound), account);
 }
 
 function requireAccount(viewer: Viewer, row: CaseRow) {
@@ -60,13 +75,12 @@ export class IntegrationOperations {
 
   async billing(viewer: Viewer, id: string) {
     const ref = requireAccount(viewer,await loadCase(this.db.manager,id));
-    const [balance,invoices] = await provider(() => Promise.all([simulators.balance(ref),simulators.invoices(ref)]));
-    return { balance, invoices };
+    return readBilling(ref);
   }
 
   async invoice(viewer: Viewer, id: string, ref: string) {
     const account = requireAccount(viewer,await loadCase(this.db.manager,id));
-    return invoiceForAccount(await provider(() => simulators.invoice(ref)),account);
+    return readInvoice(account, ref);
   }
 
   async list(viewer: Viewer, id: string) {

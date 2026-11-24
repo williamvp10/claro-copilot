@@ -15,7 +15,10 @@ let cases = structuredClone(seed);
 let revisions: PromptRevision[] = [{revision:'rev-1',status:'active',prompts:{atencion:'Responde con claridad, respalda tus afirmaciones y protege los datos del cliente.',retencion:'Evalúa la elegibilidad y presenta opciones respaldadas por la política vigente.'}}];
 const contacts: Contact[] = [{ref:'C-1004',display_name:'Laura Martínez · C-1004',enabled:true},{ref:'C-1001',display_name:'María Rodríguez · C-1001',enabled:true},{ref:'C-1007',display_name:'Andrés Gómez · C-1007',enabled:true}];
 const dashboard: Dashboard = {sample:'synthetic',window_days:30,revision:'rev-1',metrics:[{id:'cases',label:'Casos atendidos',value:128,unit:'casos',denominator:128},{id:'fcr',label:'Resolución al primer contacto',value:78,unit:'%',denominator:128},{id:'aht',label:'Tiempo medio de atención',value:8.4,unit:'min',denominator:128},{id:'quality',label:'Respuestas con respaldo',value:92,unit:'%',denominator:75}],providers:[{name:'Plataforma',status:'operativo'},{name:'Agente',status:'operativo'},{name:'ML · modo sombra',status:'operativo'}]};
-async function request<T>(path:string, init?:RequestInit):Promise<T> { const response = await fetch(path,{...init,credentials:'same-origin',headers:{'Content-Type':'application/json',...init?.headers}}); if(!response.ok){let message = `No fue posible completar la solicitud (${response.status}).`; try {const data=await response.json(); if(typeof data.message==='string') message=data.message;}catch{} throw new Error(message);} return response.json() as Promise<T>; }
+class ApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+async function request<T>(path:string, init?:RequestInit):Promise<T> { const response = await fetch(path,{...init,credentials:'same-origin',headers:{'Content-Type':'application/json',...init?.headers}}); if(!response.ok){let message = `No fue posible completar la solicitud (${response.status}).`; try {const data=await response.json(); if(typeof data.message==='string') message=data.message;}catch{} throw new ApiError(message,response.status);} return response.json() as Promise<T>; }
 const post = <T>(path:string, body:unknown={}) => request<T>(path,{method:'POST',body:JSON.stringify(body)});
 const knowledgePath='/api/v1/admin/knowledge';
 const knowledgeSource=(digest:string,source:string)=>`${knowledgePath}/publications/${encodeURIComponent(digest)}/sources/${encodeURIComponent(source)}`;
@@ -25,11 +28,21 @@ function update(id:string, fn:(c:CaseSnapshot)=>void){const c=getCase(id);fn(c);
 function verifiedCard(c:CaseSnapshot){ if(c.id==='C-1001') {c.card={intent:'facturacion',summary:'Consulta de factura pendiente después de conocer Fibra 500.',facts:[{id:'p1',label:'Hogar',value:'Fibra 500 · $109.900'},{id:'p2',label:'Móvil',value:'Claro Max 60 GB · $59.415'},{id:'p3',label:'Factura noviembre',value:'$169.315 · vence el 25 de noviembre'}],citations:[catalog],pending:[],next_action:'Comparte el valor y vencimiento con el cliente.',reason_codes:[]};} else if(c.id==='C-1007'){c.card={intent:'cancelacion',summary:'Solicita cancelar y pregunta por un descuento.',facts:[{id:'f1',label:'Mora',value:'45 días'},{id:'f2',label:'Límite de política',value:'30 días'}],citations:[policy],pending:['Continuar trámite de cancelación'],next_action:'Explica la condición y continúa con la solicitud de cancelación.',reason_codes:['no_elegible']};} else {c.card={intent:'cancelacion',summary:'Cliente interesado en cancelar. Es elegible para alternativas de retención.',facts:[{id:'f1',label:'Antigüedad',value:'30 meses'},{id:'f2',label:'Mora',value:'0 días'},{id:'f3',label:'Ofertas últimos 12 meses',value:'0'}],citations:[policy],pending:['Confirmar aceptación del cliente'],next_action:'Presenta las alternativas y confirma la elección del cliente.',reason_codes:['elegible'],proposal:{id:'proposal-1004',revision:1,title:'30 % de descuento por seis meses',detail:'Sobre $89.900 durante seis meses. Alternativa: mejora a Fibra 500 sin costo por seis meses.',status:'pending_approval'}};} }
 const caseIntegration = (id: string) => `/api/v1/cases/${encodeURIComponent(id)}/integrations`;
 const adminIntegration = '/api/v1/admin/integrations';
+const directoryBilling = (id: string) => `/api/v1/crm/customers/${encodeURIComponent(id)}/billing`;
 
 export const integrations = {
  crm: (id: string) => request<CrmView>(caseIntegration(id)+'/crm'),
  billing: (id: string) => request<BillingView>(caseIntegration(id)+'/billing'),
  invoice: (id: string, ref: string) => request<InvoiceDetail>(caseIntegration(id)+'/billing/invoices/'+encodeURIComponent(ref)),
+ directoryBilling: async (id: string): Promise<BillingView | null> => {
+   try {
+     return await request<BillingView>(directoryBilling(id));
+   } catch (error) {
+     if (error instanceof ApiError && error.status === 404) return null;
+     throw error;
+   }
+ },
+ directoryInvoice: (id: string, ref: string) => request<InvoiceDetail>(directoryBilling(id)+'/invoices/'+encodeURIComponent(ref)),
  operations: (id: string) => request<IntegrationOperation[]>(caseIntegration(id)+'/operations'),
  confirm: (id: string, action: ManualAction, idempotency_key: string) =>
    post<IntegrationOperation>(caseIntegration(id)+'/operations',{idempotency_key,action}),

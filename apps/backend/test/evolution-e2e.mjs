@@ -9,8 +9,8 @@ if (!origin || process.env.DEMO_MODE!=='true') throw new Error('Run on a seeded 
 const db = new Client({connectionString:process.env.DATABASE_URL});
 await db.connect();
 
-async function http(path, {cookie,data,method='GET',status=200,token}={}) {
-  const response = await fetch(target+path,{
+async function http(path, {cookie,data,method='GET',status=200,token,endpoint=target}={}) {
+  const response = await fetch(endpoint+path,{
     method,headers:{Origin:origin,...cookie&&{Cookie:cookie},...token&&{Authorization:'Bearer '+token},
       ...data&&{'Content-Type':'application/json'}},body:data&&JSON.stringify(data),signal:AbortSignal.timeout(7000)
   });
@@ -38,10 +38,68 @@ async function until(check, label) {
   throw new Error('Timeout: '+label);
 }
 
-try {
+async function assertDirectoryBilling(admin, advisor, superAdmin) {
+  const customerPath = '/crm/customers/C-1001';
+  const billingPath = customerPath + '/billing';
+
+  const page = (await get(admin, '/crm/customers?offset=0&limit=1')).body;
+  assert.deepEqual(page.map(row => row.cliente_id), ['C-1001']);
+  const nextPage = (await get(admin, '/crm/customers?offset=1&limit=1')).body;
+  assert.equal(nextPage.length, 1);
+  assert.notEqual(nextPage[0].cliente_id, page[0].cliente_id);
+  const query = encodeURIComponent(page[0].nombre);
+  assert.ok((await get(admin, `/crm/customers?q=${query}`)).body.some(row => row.cliente_id === 'C-1001'));
+
+  const { customer } = (await get(admin, customerPath)).body;
+  assert.equal(customer.cliente_id, 'C-1001');
+  assert.match(customer.email, /^\*{3}.{0,3}$/);
+  assert.match(customer.celular, /^\*{3}.{0,3}$/);
+  assert.ok(customer.servicios.length > 0);
+
+  assert.equal((await get(admin, '/me')).body.can_read_mock_billing, true);
+  assert.equal((await get(superAdmin, '/me')).body.can_read_mock_billing, true);
+  assert.equal((await get(advisor, '/me')).body.can_read_mock_billing, false);
+  const { balance, invoices } = (await get(admin, billingPath)).body;
+  assert.equal(balance.cliente_id, 'C-1001');
+  assert.equal(invoices.length, 3);
+  assert.ok(invoices.every(invoice => invoice.cliente_id === 'C-1001'));
+  assert.deepEqual((await get(superAdmin, billingPath)).body.invoices, invoices);
+  const invoicePath = billingPath + '/invoices/' + invoices[0].factura_id;
+  const invoice = (await get(admin, invoicePath)).body;
+  assert.ok(invoice.detalle.length > 0);
+  assert.ok(invoice.ajustes.every(adjustment => !Object.hasOwn(adjustment, 'aprobado_por')));
+  const crossAccount = await get(admin, invoicePath.replace('C-1001', 'C-1004'), 404);
+  const missingInvoice = await get(admin, billingPath + '/invoices/F-9999999999', 404);
+  assert.deepEqual(crossAccount.body, missingInvoice.body);
+  await get(admin, billingPath + '/invoices/invalid', 400);
+  for (const path of [billingPath, invoicePath]) {
+    await get(undefined, path, 401);
+    await get(advisor, path, 403);
+  }
+
+  const nonDemoTarget = process.env.PLATFORM_NON_DEMO_E2E_TARGET;
+  if (nonDemoTarget) {
+    const read = (cookie, path, status) => http(api + path, { cookie, status, endpoint: nonDemoTarget });
+    for (const cookie of [admin, superAdmin]) {
+      assert.equal((await read(cookie, '/me')).body.can_read_mock_billing, false);
+      await read(cookie, billingPath, 403);
+      await read(cookie, invoicePath, 403);
+    }
+    assert.deepEqual((await read(admin, '/crm/customers?q=C-1001')).body, []);
+    assert.equal((await read(superAdmin, '/crm/customers?q=C-1001')).body[0].cliente_id, 'C-1001');
+  }
+}
+
+async function main() {
   const [admin,n1,n2,supervisor,superAdmin] = await Promise.all(
     ['ADMIN','ASESSOR','N2','SUPERVISOR','SUPERADMIN'].map(account)
   );
+  await assertDirectoryBilling(admin, n1, superAdmin);
+  if (process.argv.includes('--directory-only')) {
+    console.log('CRM directory and account billing verified through authenticated HTTP.');
+    return;
+  }
+
   const groupIds=['negocio','calidad-llm','tecnica','agentes','machine-learning','devops'];
   for (const group of groupIds) {
     const {body} = await get(admin,`/admin/metrics/${group}?days=7&channel=telegram`);
@@ -221,17 +279,22 @@ try {
   assert.equal(receipt.revision,1);
   assert.equal((await get(superAdmin,`/crm/customers?q=${encodeURIComponent(name)}&offset=0&limit=1`)).body[0].cliente_id,customerRef);
   await get(n1,`/crm/customers/${customerRef}`,404);
+  assert.match((await get(admin, `/crm/customers/${customerRef}/billing`, 404)).body.message, /no tiene registro/);
   const customer=(await get(superAdmin,`/crm/customers/${customerRef}`)).body;
   assert.notEqual(customer.customer.email,createCustomer.email);
   assert.notEqual(customer.customer.celular,createCustomer.celular);
   assert.ok(Array.isArray(customer.customer.servicios) && Array.isArray(customer.customer.tickets_recientes));
   const update={revision:1,motivo:'Cambio sintetico',nombre:`${name} actualizado`,idempotency_key:randomUUID()};
+  await write(admin, `/admin/customers/${customerRef}`, update, 403, 'PATCH');
   assert.equal((await write(superAdmin,`/admin/customers/${customerRef}`,update,200,'PATCH')).body.revision,2);
   await write(superAdmin,`/admin/customers/${customerRef}`,{...update,idempotency_key:randomUUID()},409,'PATCH');
   assert.equal((await get(superAdmin,`/crm/customers/${customerRef}`)).body.customer.nombre,update.nombre);
   const history=(await get(superAdmin,'/crm/customers/C-1013')).body.case_history;
   assert.ok(history.some(row=>row.case_id===scenario.id));
   assert.ok(history.every(row=>row.messages===undefined && row.card===undefined));
+  const adminHistory = (await get(admin, '/crm/customers/C-1013')).body.case_history;
+  assert.ok(adminHistory.every(row => row.case_id !== scenario.id));
+  await get(admin, `/cases/${scenario.id}`, 404);
   const auditRows=(await get(superAdmin,'/admin/audit')).body;
   assert.ok(auditRows.some(row=>row.kind==='customer_created' && row.metadata.customer_ref===customerRef));
   assert.ok(auditRows.some(row=>row.kind==='escalation_claim' && row.case_id===scenario.id));
@@ -263,6 +326,10 @@ try {
     capabilities:[],specialties:[],enabled:false,available:false
   },409,'PATCH');
   console.log('MVP evolution verified through HTTP: metric groups, synthetic release evidence, prompt gates, CRM scope, all escalation queues, CRM and operator administration, and private drafts.');
+}
+
+try {
+  await main();
 } finally {
   await db.end();
 }

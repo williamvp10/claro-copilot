@@ -1,13 +1,14 @@
-import { Body, ConflictException, Controller, ForbiddenException, Get, Inject, NotFoundException, Param, Patch, Post, Query, Req, Res, UnauthorizedException, BadRequestException, ServiceUnavailableException } from '@nestjs/common';
+import { Body, ConflictException, Controller, ForbiddenException, Get, Header, Inject, NotFoundException, Param, Patch, Post, Query, Req, Res, UnauthorizedException, BadRequestException, ServiceUnavailableException } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from 'better-auth/crypto';
 import { z } from 'zod';
 import type { DataSource } from 'typeorm';
-import type { Viewer } from '@claro/contracts';
-import { AUTH, getViewer, type createAuth } from './auth.js';
+import { CustomerId, InvoiceId, type Viewer } from '@claro/contracts';
+import { AUTH, canReadMockBilling, getViewer, type createAuth } from './auth.js';
 import { audit, DATABASE, enqueue, type CaseRow } from './database.js';
 import { checkCase, clearPersonalData, customerReference, loadCase, saveCase } from './cases.js';
+import { readBilling, readInvoice } from './integration-operations.js';
 import { privateSignals, queueChurn } from './ml-advisory.js';
 import { SimulatorFailure, simulators } from './simulator-client.js';
 
@@ -179,7 +180,7 @@ export class PlatformEvolutionController {
   async customers(@Req() req:Request,@Query() query:unknown) {
     const v=await this.viewer(req);
     const {offset,limit,q}=parse(z.object({offset:z.coerce.number().int().min(0).default(0),limit:z.coerce.number().int().min(1).max(100).default(25),q:z.string().trim().max(100).default('')}),query);
-    if (has(v,'superadmin')) return provider(()=>simulators.directory(offset,limit,q));
+    if (has(v,'superadmin') || canReadMockBilling(v)) return provider(()=>simulators.directory(offset,limit,q));
     const rows:CaseRow[]=await this.db.query(`SELECT * FROM attention_case WHERE snapshot->>'owner_id'=$1 AND snapshot->>'verified'='true'`,[v.id]);
     const refs=[...new Set<string>(rows.map(customerReference).filter((ref):ref is string=>!!ref))];
     return refs.length ? provider(()=>simulators.directory(offset,limit,q,refs)) : [];
@@ -194,11 +195,33 @@ export class PlatformEvolutionController {
       FROM attention_case c WHERE c.snapshot->>'verified'='true'
       AND (c.account_ref=$1 OR c.contact_ref=$1 OR ($1='C-1001' AND c.contact_ref LIKE 'web-c1001:%'))
       AND ($2 OR c.snapshot->>'owner_id'=$3) ORDER BY c.created_at DESC LIMIT 100`,[ref,admin,v.id]);
-    if (!admin && !history.length) throw new NotFoundException();
+    if (!admin && !canReadMockBilling(v) && !history.length) throw new NotFoundException();
     const customer=await provider(()=>simulators.directoryCustomer(ref));
     const mask=(value:string)=>value.length<4?'***':'***'+value.slice(-3);
     return {customer:{...customer,email:mask(customer.email),celular:mask(customer.celular)},eligibility:await provider(()=>simulators.eligibility(ref)),case_history:history};
   }
+  private async authorizeBilling(req: Request) {
+    if (!canReadMockBilling(await this.viewer(req))) throw new ForbiddenException();
+  }
+
+  @Get('crm/customers/:id/billing')
+  @Header('Cache-Control', 'private, no-store')
+  async customerBilling(@Req() req: Request, @Param('id') ref: string) {
+    await this.authorizeBilling(req);
+    return readBilling(parse(CustomerId, ref), 'Esta cuenta aún no tiene registro en Facturación.');
+  }
+
+  @Get('crm/customers/:id/billing/invoices/:ref')
+  @Header('Cache-Control', 'private, no-store')
+  async customerInvoice(@Req() req: Request, @Param('id') customer: string, @Param('ref') ref: string) {
+    await this.authorizeBilling(req);
+    const invoice = await readInvoice(parse(CustomerId, customer), parse(InvoiceId, ref), 'Factura no encontrada');
+    return {
+      ...invoice,
+      ajustes: invoice.ajustes.map(({ ajuste_id, fecha, motivo, valor }) => ({ ajuste_id, fecha, motivo, valor }))
+    };
+  }
+
   @Post('admin/customers')
   async createCustomer(@Req() req:Request,@Body() raw:unknown) {
     const v=await this.superadmin(req);

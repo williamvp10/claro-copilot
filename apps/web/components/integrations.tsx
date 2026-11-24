@@ -2,7 +2,7 @@
 
 import { Tabs } from 'radix-ui';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { CrmView, IntegrationOperation, InvoiceDetail, ManualAction } from '@claro/contracts';
+import type { BillingView, CrmView, IntegrationOperation, InvoiceDetail, ManualAction } from '@claro/contracts';
 import { ADVISOR_ADJUSTMENT_LIMIT } from '@claro/contracts';
 import { integrations, key } from '@/lib/api';
 import { Badge } from './ui/badge';
@@ -129,9 +129,14 @@ function CrmPanel({caseId,open,revision,prepare}:{caseId:string;open:boolean;rev
   </>;
 }
 
-function InvoicePanel({caseId,refId,open,revision,prepare}:{caseId:string;refId:string;open:boolean;revision:number;prepare:(draft:Draft)=>void}) {
-  const read = useCallback(()=>integrations.invoice(caseId,refId),[caseId,refId]);
-  const result = useProvider(read,revision);
+type InvoiceRead = (ref: string) => Promise<InvoiceDetail>;
+type PrepareAdjustment = (draft: Extract<Draft, {kind: 'adjustment'}>) => void;
+
+function InvoicePanel({refId, readInvoice, revision, prepare}: {
+  refId: string; readInvoice: InvoiceRead; revision: number; prepare?: PrepareAdjustment;
+}) {
+  const read = useCallback(() => readInvoice(refId), [readInvoice, refId]);
+  const result = useProvider(read, revision);
   if (!result.data) return <IntegrationLoading name="factura" {...result}/>;
   const invoice = result.data;
   return <div className="integration-choice">
@@ -140,14 +145,16 @@ function InvoicePanel({caseId,refId,open,revision,prepare}:{caseId:string;refId:
     <ul>{invoice.detalle.map((line,index)=><li key={line.concepto+index}><span>{line.concepto}</span><strong>{money(line.valor)}</strong></li>)}</ul>
     <p>Saldo abierto <strong>{money(invoice.saldo_abierto)}</strong></p>
     {invoice.ajustes.length>0&&<><h3>Ajustes aplicados</h3><ul>{invoice.ajustes.map(credit=><li key={credit.ajuste_id}><span>{credit.fecha} · {credit.motivo}</span><strong>−{money(credit.valor)}</strong></li>)}</ul></>}
-    {open && invoice.saldo_abierto>0 && <Button size="sm" variant="outline" onClick={()=>prepare({kind:'adjustment',invoice})}>Solicitar ajuste</Button>}
+    {prepare && invoice.saldo_abierto>0 && <Button size="sm" variant="outline" onClick={()=>prepare({kind:'adjustment',invoice})}>Solicitar ajuste</Button>}
   </div>;
 }
 
-function BillingPanel({caseId,open,revision,prepare}:{caseId:string;open:boolean;revision:number;prepare:(draft:Draft)=>void}) {
-  const read = useCallback(()=>integrations.billing(caseId),[caseId]);
-  const result = useProvider(read,revision);
+function BillingPanel({read, readInvoice, revision = 0, prepare, directory = false}: {
+  read: () => Promise<BillingView | null>; readInvoice: InvoiceRead; revision?: number; prepare?: PrepareAdjustment; directory?: boolean;
+}) {
+  const result = useProvider(read, revision);
   const [selected,setSelected] = useState<string|null>(null);
+  if (result.data === null) return <p role="status">Esta cuenta aún no tiene registro en Facturación.</p>;
   if (!result.data) return <IntegrationLoading name="Facturación" {...result}/>;
   const {balance,invoices} = result.data;
   return <>
@@ -157,19 +164,32 @@ function BillingPanel({caseId,open,revision,prepare}:{caseId:string;open:boolean
       <div><dt>Próximo vencimiento</dt><dd>{balance.proxima_fecha_limite ?? 'Sin vencimientos pendientes'}</dd></div>
     </dl>
     <h3>Facturas</h3>
-    <ul>{invoices.map(invoice=><li key={invoice.factura_id}>
-      <strong>{invoice.periodo} · {money(invoice.valor_total)}</strong>
-      <span>{invoice.estado !== 'pagada' && invoice.saldo_abierto === 0 ? 'Saldada por ajuste' : invoice.estado}</span>
+    {invoices.length ? <ul className="integration-invoices">{invoices.map(invoice=><li key={invoice.factura_id}>
+      {directory ? <>
+        <div><strong>{invoice.periodo}</strong><span className="integration-ref">{invoice.factura_id}</span></div>
+        <strong className="integration-invoice-total">{money(invoice.valor_total)}</strong>
+      </> : <strong>{invoice.periodo} · {money(invoice.valor_total)}</strong>}
+      <span className="integration-invoice-state" data-state={invoice.estado}>
+        {invoice.estado !== 'pagada' && invoice.saldo_abierto === 0 ? 'Saldada por ajuste' : invoice.estado}
+      </span>
       <Button size="sm" variant="outline" aria-expanded={selected===invoice.factura_id} onClick={()=>setSelected(current=>current===invoice.factura_id?null:invoice.factura_id)}>
         Ver factura {invoice.factura_id}
       </Button>
-    </li>)}</ul>
-    {selected && <InvoicePanel caseId={caseId} refId={selected} open={open} revision={revision} prepare={prepare}/>}
+    </li>)}</ul> : <p>Sin facturas para esta cuenta.</p>}
+    {selected && <InvoicePanel key={selected} refId={selected} readInvoice={readInvoice} revision={revision} prepare={prepare}/>}
   </>;
+}
+
+export function DirectoryBillingPanel({customerId}: {customerId: string}) {
+  const read = useCallback(() => integrations.directoryBilling(customerId), [customerId]);
+  const readInvoice = useCallback((ref: string) => integrations.directoryInvoice(customerId, ref), [customerId]);
+  return <BillingPanel key={customerId} read={read} readInvoice={readInvoice} directory/>;
 }
 
 export function CaseIntegrationTabs({caseId,enabled,open,children}:{caseId:string;enabled:boolean;open:boolean;children:ReactNode}) {
   const [draft,setDraft] = useState<Draft|null>(null);
+  const readBilling = useCallback(() => integrations.billing(caseId), [caseId]);
+  const readInvoice = useCallback((ref: string) => integrations.invoice(caseId, ref), [caseId]);
   const [tab,setTab] = useState('summary');
   const [operations,setOperations] = useState<IntegrationOperation[]>([]);
   const [operationError,setOperationError] = useState('');
@@ -229,7 +249,7 @@ export function CaseIntegrationTabs({caseId,enabled,open,children}:{caseId:strin
     </Tabs.Content>
     <Tabs.Content value="billing" className="integration-panel">
       <Badge variant="secondary">Facturación · API mock</Badge>
-      <BillingPanel caseId={caseId} open={open} revision={revision} prepare={setDraft}/>
+      <BillingPanel key={caseId} read={readBilling} readInvoice={readInvoice} revision={revision} prepare={open ? setDraft : undefined}/>
       {history('billing')}
     </Tabs.Content>
     {draft && <ActionDialog draft={draft} confirm={confirm} close={()=>setDraft(null)}/>}

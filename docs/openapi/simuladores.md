@@ -1,6 +1,6 @@
 # Simuladores de CRM y facturación
 
-El CRM corre en `crm-simulator:8081/v1` y Facturación en `billing-simulator:8082/v1`. NestJS consume los 10 endpoints originales por HTTP privado. El navegador consulta NestJS con su sesión Better Auth y la titularidad del caso.
+El CRM corre en `crm-simulator:8081/v1` y Facturación en `billing-simulator:8082/v1`. NestJS consume los 10 endpoints originales por HTTP privado. El navegador consulta NestJS con su sesión Better Auth. Las lecturas desde un caso requieren titularidad y ámbito de atención. El directorio habilita la consulta administrativa de cuentas y facturas sintéticas en modo demo.
 
 [OpenAPI original de CRM](crm-api.yaml) · [OpenAPI original de facturación](facturacion-api.yaml)
 
@@ -30,8 +30,9 @@ La fecha de negocio es `DEMO_BUSINESS_DATE` y vale `2026-11-18` por defecto. Con
 - El asesor asignado abre un caso verificado. **CRM** muestra ficha, servicios, tickets, elegibilidad e historial de ofertas. **Facturación** muestra saldo, facturas, conceptos y créditos.
 - La confirmación del asesor encola el comando con la cuenta, revisión del caso y una clave estable. Para registrar una oferta, el asesor confirma que el cliente aceptó la alternativa. Un ajuste que deja el acumulado por factura por encima de **COP 50.000** pasa a aprobación. Administración decide con su propia sesión. Un ajuste exactamente de COP 50.000 acumulados puede pasar directamente.
 - El worker revalida el ámbito del caso antes del envío. Si llega a un resultado incierto, conserva **Pendiente de verificación**, consulta el recibo y reutiliza la clave al reintentar. El asesor ve **Confirmada** cuando existe el recibo.
+- **Directorio CRM** permite a administración y superadministración consultar la cuenta en modo demo. En la pestaña **Facturación** se muestran saldo, facturas, detalle y ajustes aplicados en modo lectura.
 - **Panel general** muestra por separado la disponibilidad actual, latencia de la sonda, solicitudes y errores de transporte de las últimas 24 horas. Una caída del CRM deja operativas la consulta de Facturación y la conversación.
 
-El BFF publica lecturas en `/api/v1/cases/{id}/integrations/{crm,billing,billing/invoices/{ref}}` y lecturas y confirmaciones en `/api/v1/cases/{id}/integrations/operations`. Administración consume `/api/v1/admin/integrations` y `/api/v1/admin/integrations/approvals`. Las respuestas de cuenta y la decisión de aprobación quedan dentro de la plataforma.
+El BFF publica lecturas en `/api/v1/cases/{id}/integrations/{crm,billing,billing/invoices/{ref}}` y lecturas y confirmaciones en `/api/v1/cases/{id}/integrations/operations`. La ficha del Directorio CRM lee `/api/v1/crm/customers/{id}/billing` y `/api/v1/crm/customers/{id}/billing/invoices/{ref}`. Administración consume `/api/v1/admin/integrations` y `/api/v1/admin/integrations/approvals`. Las respuestas de cuenta y la decisión de aprobación quedan dentro de la plataforma.
 
 [Despliegue en Docker y Dokploy](../../infra/README.md) · [Flujos de arquitectura](../02-arquitectura-docker.md)

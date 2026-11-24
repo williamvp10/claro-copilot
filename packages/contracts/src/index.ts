@@ -267,6 +267,10 @@ export type Dashboard = {
 };
 export type PromptRevision = { revision: string; status: 'active' | 'candidate' | 'passed' | 'failed'; prompts: Record<string, string> };
 export type Contact = { ref: string; display_name: string; enabled: boolean };
-export type Viewer = { id: string; name: string; role: z.infer<typeof Role>; capabilities?: string[]; specialties?: string[]; available?: boolean };
+export type Viewer = {
+  id: string; name: string; role: z.infer<typeof Role>;
+  capabilities?: string[]; specialties?: string[]; available?: boolean;
+  can_read_mock_billing?: boolean;
+};
 
 export * from './integrations.js';

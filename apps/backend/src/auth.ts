@@ -28,4 +28,9 @@ export async function getViewer(request: Request, auth: ReturnType<typeof create
   return { id: session.user.id, name: session.user.name, role: role.data, capabilities:operator.capabilities, specialties:operator.specialties, available:operator.available };
 }
 
+export function canReadMockBilling(viewer: Viewer) {
+  return process.env.DEMO_MODE === 'true' &&
+    !!viewer.capabilities?.some(capability => capability === 'admin' || capability === 'superadmin');
+}
+
 export const AUTH = Symbol('BETTER_AUTH');

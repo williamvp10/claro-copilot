@@ -7,7 +7,7 @@ import type { Request, Response } from 'express';
 import { type DataSource } from 'typeorm';
 import { randomUUID } from 'node:crypto';
 import { CloseCase, DecideProposal, OpenCase, SendMessage, Text, VerifyHolder, WebVerificationStart, WebVerificationConfirm, Id, ConfirmIntegration, InvoiceId, OperationKey, DashboardFilters, type CaseEvent, type WebChatEvent, type Dashboard, type EvalJob, type EvalStatus, type Viewer } from '@claro/contracts';
-import { AUTH, getViewer, type createAuth } from './auth.js';
+import { AUTH, canReadMockBilling, getViewer, type createAuth } from './auth.js';
 import { Cases, constantEqual } from './cases.js';
 import { createDatabase, DATABASE } from './database.js';
 import { readDashboard, projectComparison } from './dashboard.js';
@@ -221,7 +221,10 @@ class PlatformController {
   }
 
   @Get('me')
-  me(@Req() req: Request) { return this.viewer(req); }
+  async me(@Req() req: Request): Promise<Viewer> {
+    const viewer = await this.viewer(req);
+    return { ...viewer, can_read_mock_billing: canReadMockBilling(viewer) };
+  }
 
   @Get('contacts')
   async contacts(@Req() req: Request) { return this.cases.contacts(await this.viewer(req)); }

@@ -1,10 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronRight, ContactRound, History, Layers, ReceiptText, Search, Smartphone, Tag, Ticket, Wifi, X } from 'lucide-react';
+import { Tabs } from 'radix-ui';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { DirectoryBillingPanel } from './integrations';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
 import { key } from '@/lib/api';
-import type { CaseMlSignals, CaseSnapshot, Intent } from '@claro/contracts';
+import type { CaseMlSignals, CaseSnapshot, CrmView, Intent } from '@claro/contracts';
+import styles from './customer-directory.module.css';
 
 const endpoint='/api/v1';
 async function request<T>(path:string, init?:RequestInit):Promise<T>{
@@ -30,21 +34,352 @@ export function EscalationQueue({openCase,viewerId,canManage=false,capabilities=
  return <div className="admin-page evo-page"><header className="ops-header"><div><span className="eyebrow">CONTINUIDAD DE ATENCIÓN</span><h1>Cola de escalamientos</h1><p>Solicitudes y traspasos disponibles para tu equipo.</p></div><Button variant="outline" onClick={()=>void load()}>Actualizar</Button></header>{error&&<p className="alert error" role="alert">{error}</p>}{!items&&!error?<p role="status">Cargando cola…</p>:items?.length?<div className="evo-list">{items.map(row=><article className="ops-plot" key={row.id}><div className="evo-row"><div><span className="eyebrow">{destinations[row.destination]??row.destination}</span><h3>{row.case_id}</h3><p>{row.reason_code} · {new Date(row.created_at).toLocaleString('es-CO',{timeZone:'America/Bogota'})}</p></div><span className="badge amber">{row.status.replaceAll('_',' ')}</span></div><div className="ops-actions">{['solicitado','en_cola'].includes(row.status)&&(row.destination==='supervision'?capabilities.includes('supervisor'):capabilities.includes('n2')&&specialties.includes(row.destination))&&<Button disabled={!!busy} onClick={()=>void transition(row,'claim')}>Tomar caso</Button>}{row.status==='en_cola'&&(row.requested_by===viewerId||canManage)&&<Button variant="outline" disabled={!!busy} onClick={()=>void transition(row,'cancel')}>Cancelar solicitud</Button>}{canManage&&['en_cola','tomado'].includes(row.status)&&<Reassign row={row} done={()=>void load()}/>} {row.status==='tomado'&&row.owner_id===viewerId&&<><Button variant="outline" onClick={()=>openCase(row.case_id)}>Abrir caso</Button><Button disabled={!!busy} onClick={()=>void transition(row,'resolve')}>Marcar resuelto</Button></>}</div></article>)}</div>:<div className="ops-empty">No hay escalamientos en esta cola.</div>}</div>;
 }
 function Reassign({row,done}:{row:Escalation;done:()=>void}){const [open,setOpen]=useState(false),[operator,setOperator]=useState(''),[reason,setReason]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);async function submit(e:React.FormEvent){e.preventDefault();setBusy(true);try{await post(`/escalations/${encodeURIComponent(row.id)}/reassign`,{case_revision:row.case_revision,operator_id:operator,reason});setOpen(false);done()}catch(e){setError(errorText(e))}finally{setBusy(false)}}return open?<form className="evo-form" onSubmit={submit}><label>Identificador del operador<input required value={operator} onChange={e=>setOperator(e.target.value)}/></label><label>Motivo<input required minLength={3} value={reason} onChange={e=>setReason(e.target.value)}/></label>{error&&<p className="alert error" role="alert">{error}</p>}<div className="ops-actions"><Button disabled={busy}>Confirmar reasignación</Button><Button type="button" variant="outline" onClick={()=>setOpen(false)}>Cancelar</Button></div></form>:<Button variant="outline" onClick={()=>setOpen(true)}>Reasignar</Button>}
-type CustomerCase={id:string;status:string;updated_at:string;ticket_refs:string[]};
-type Customer={revision?:number;cliente_id?:string;id?:string;nombre?:string;display_name?:string;estado?:string;ciudad?:string;servicios?:Array<Record<string,unknown>>;tickets_recientes?:Array<Record<string,unknown>>;ofertas_retencion_12m?:Array<Record<string,unknown>>;cases?:CustomerCase[]};
-function customerId(row:Customer){return row.cliente_id??row.id??''}
-export function CustomerDirectory({openCase,openEscalations,startCase,eligibleContacts=[],authorizedCases=[],canManage=false}:{openCase:(id:string)=>void;openEscalations:()=>void;startCase?:(id:string)=>void;eligibleContacts?:string[];authorizedCases?:string[];canManage?:boolean}){
- const [rows,setRows]=useState<Customer[]>(),[selected,setSelected]=useState<Customer>(),[search,setSearch]=useState(''),[query,setQuery]=useState(''),[error,setError]=useState(''),[detailError,setDetailError]=useState(''),[escalationError,setEscalationError]=useState(''),[customerForm,setCustomerForm]=useState<'new'|'edit'|null>(null),[reload,setReload]=useState(0),[offset,setOffset]=useState(0),[loading,setLoading]=useState(true),[detailLoading,setDetailLoading]=useState(false),[escalations,setEscalations]=useState<Escalation[]>([]),[escalationsLoading,setEscalationsLoading]=useState(false);
- const detailSequence=useRef(0);
- useEffect(()=>{const timer=window.setTimeout(()=>{setOffset(0);setQuery(search.trim())},300);return()=>window.clearTimeout(timer)},[search]);
- useEffect(()=>{let live=true;setLoading(true);setError('');const params=new URLSearchParams({offset:String(offset),limit:'25'});if(query)params.set('q',query);request<Customer[]|{items:Customer[]}>(`/crm/customers?${params}`).then(data=>{if(live)setRows(Array.isArray(data)?data:data.items)}).catch(e=>{if(live){setRows(undefined);setError(errorText(e))}}).finally(()=>{if(live)setLoading(false)});return()=>{live=false}},[query,offset,reload]);
- async function select(id:string){const sequence=++detailSequence.current;setDetailError('');setDetailLoading(true);setSelected(undefined);try{const detail=await request<{customer:Customer;case_history?:Array<{id?:string;case_id?:string;status?:string;updated_at?:string;ticket_refs?:string[]}>}>(`/crm/customers/${encodeURIComponent(id)}`);if(sequence!==detailSequence.current)return;setSelected({...detail.customer,cases:detail.case_history?.map(row=>({id:row.case_id??row.id??'',status:row.status??'',updated_at:row.updated_at??'',ticket_refs:row.ticket_refs??[]})).filter(row=>row.id)})}catch(e){if(sequence===detailSequence.current)setDetailError(errorText(e))}finally{if(sequence===detailSequence.current)setDetailLoading(false)}}
- useEffect(()=>{if(!selected?.cases?.length){setEscalations([]);setEscalationError('');setEscalationsLoading(false);return}let live=true;setEscalationError('');setEscalationsLoading(true);request<Escalation[]>('/escalations').then(rows=>{if(live)setEscalations(rows)}).catch(e=>{if(live){setEscalations([]);setEscalationError(errorText(e))}}).finally(()=>{if(live)setEscalationsLoading(false)});return()=>{live=false}},[selected]);
- return <div className="admin-page evo-page"><header className="ops-header"><div><span className="eyebrow">INTEGRACIONES MOCK</span><h1>Directorio CRM</h1><p>Consulta las cuentas autorizadas y su historial.</p></div>{canManage&&<Button onClick={()=>setCustomerForm('new')}>Nuevo cliente</Button>}</header><div className="evo-split"><section className="ops-plot"><label className="evo-search">Buscar cliente<input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Nombre o identificador" maxLength={100}/></label>{error&&<p className="alert error" role="alert">{error} <Button variant="outline" onClick={()=>setReload(x=>x+1)}>Reintentar</Button></p>}{loading?<p role="status">Consultando CRM…</p>:rows?.length?<div className="evo-list">{rows.map(row=><button className="evo-customer" key={customerId(row)} aria-pressed={customerId(selected??{})===customerId(row)} onClick={()=>void select(customerId(row))}><strong>{row.nombre??row.display_name??customerId(row)}</strong><span>{customerId(row)} · {row.estado??'Cliente'}</span></button>)}</div>:!error&&<p>Sin clientes para mostrar.</p>}<div className="ops-actions"><Button variant="outline" disabled={loading||offset===0} onClick={()=>setOffset(x=>Math.max(0,x-25))}>Anterior</Button><span>{rows?.length?`Registros ${offset+1}–${offset+rows.length}`:'Sin registros en esta página'}</span><Button variant="outline" disabled={loading||!rows||rows.length<25} onClick={()=>setOffset(x=>x+25)}>Siguiente</Button></div></section><section className="ops-plot">{detailLoading?<p role="status">Consultando ficha…</p>:detailError?<p className="alert error" role="alert">{detailError}</p>:selected?<><span className="eyebrow">CRM · API mock</span><h2>{selected.nombre??selected.display_name??customerId(selected)}</h2><p>{customerId(selected)} · {selected.estado} {selected.ciudad&&`· ${selected.ciudad}`}</p>{canManage&&<Button variant="outline" onClick={()=>setCustomerForm('edit')}>Gestionar cliente</Button>}{startCase&&eligibleContacts.includes(customerId(selected))&&<Button variant="outline" onClick={()=>startCase(customerId(selected))}>Iniciar caso</Button>}{(['servicios','tickets_recientes','ofertas_retencion_12m'] as const).map((field,i)=><div key={field}><h3>{['Servicios','Tickets recientes','Ofertas'][i]}</h3>{selected[field]?.length?<ul className="evo-records">{selected[field]!.map((item,index)=><li key={index}>{Object.entries(item).map(([k,v])=><span key={k}><b>{k.replaceAll('_',' ')}:</b> {String(v)}</span>)}</li>)}</ul>:<p>Sin registros disponibles.</p>}</div>)}<h3>Historial de casos</h3>{escalationsLoading&&<p role="status">Consultando escalamientos…</p>}{escalationError&&<p className="alert error" role="alert">No se pudo consultar el seguimiento de escalamientos: {escalationError}</p>}{selected.cases?.length?<ul className="evo-records">{selected.cases.map(c=>{const matching=escalations.filter(row=>row.case_id===c.id);return <li key={c.id}><div><strong>{c.id}</strong><p>{c.status==='open'?'Abierto':c.status==='closed'?'Cerrado':c.status}{c.updated_at&&` · Actualizado ${new Date(c.updated_at).toLocaleString('es-CO',{timeZone:'America/Bogota'})}`}</p><p>{c.ticket_refs.length?`Tickets: ${c.ticket_refs.join(', ')}`:'Sin tickets registrados con recibo.'}</p>{matching.map(item=><p key={item.id}>Escalamiento: {destinations[item.destination]??item.destination} · {item.status.replaceAll('_',' ')} · {item.reason_code}</p>)}{!matching.length&&!escalationError&&!escalationsLoading&&<p>Sin escalamientos visibles para este caso.</p>}<div className="ops-actions">{authorizedCases.includes(c.id)?<Button variant="outline" onClick={()=>openCase(c.id)}>Abrir caso {c.id}</Button>:<span>La conversación requiere asignación o acceso por caso.</span>}{matching.length>0&&<Button variant="outline" onClick={openEscalations}>Ver cola de escalamientos</Button>}</div></div></li>})}</ul>:<p>Sin casos en el historial autorizado.</p>}</>:<div className="ops-empty">Selecciona un cliente para consultar su ficha.</div>}</section></div>{customerForm&&<CustomerForm customer={customerForm==='edit'?selected:undefined} close={()=>setCustomerForm(null)} done={()=>{setCustomerForm(null);setReload(x=>x+1);if(selected)void select(customerId(selected))}}/>}</div>;
+type CustomerCase = { id: string; status: string; updated_at: string; ticket_refs: string[] };
+type Customer = CrmView['customer'] & { revision: number; cases: CustomerCase[] };
+type CustomerRow = Pick<Customer, 'cliente_id' | 'nombre' | 'estado'>;
+type CustomerResponse = {
+  customer: Omit<Customer, 'cases'>;
+  case_history?: Array<Omit<CustomerCase, 'id'> & { case_id: string }>;
+};
+
+const pageSize = 25;
+const crmCurrency = new Intl.NumberFormat('es-CO', {style: 'currency', currency: 'COP', maximumFractionDigits: 0});
+const crmCalendar = new Intl.DateTimeFormat('es-CO', {day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC'});
+const crmDate = (date: string) => crmCalendar.format(new Date(date + 'T00:00:00Z'));
+const crmLabel = (value: string) => {
+  const text = value.replaceAll('_', ' ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+};
+const ticketCategories = {
+  soporte_tecnico: 'Soporte técnico', facturacion: 'Facturación', consulta_planes: 'Consulta de planes',
+  cancelacion: 'Cancelación', portabilidad: 'Portabilidad'
+};
+
+function CustomerStatus({state}: {state: string}) {
+  const tone = ['activo', 'abierto'].includes(state) ? 'active' : state === 'suspendido' ? 'warning' : 'neutral';
+  return <span className={styles.status} data-tone={tone}>{crmLabel(state)}</span>;
+}
+
+function CustomerDetailTabs({id, canReadBilling, children}: {id: string; canReadBilling: boolean; children: ReactNode}) {
+  if (!canReadBilling) return <div className={styles.detailContent}>{children}</div>;
+  return <Tabs.Root key={id} defaultValue="crm">
+    <Tabs.List className={styles.tabs} aria-label="Ficha del cliente">
+      <Tabs.Trigger value="crm"><ContactRound aria-hidden="true"/>CRM</Tabs.Trigger>
+      <Tabs.Trigger value="billing"><ReceiptText aria-hidden="true"/>Facturación</Tabs.Trigger>
+    </Tabs.List>
+    <Tabs.Content value="crm" className={styles.detailContent}>{children}</Tabs.Content>
+    <Tabs.Content value="billing" className={`integration-panel ${styles.detailContent} ${styles.billing}`}>
+      <DirectoryBillingPanel customerId={id}/>
+    </Tabs.Content>
+  </Tabs.Root>;
+}
+
+function CustomerRecords({customer}: {customer: Customer}) {
+  return <>
+    <div className={styles.recordGrid}>
+      <section aria-labelledby="crm-services">
+        <h3 id="crm-services" className={styles.sectionTitle}><Layers aria-hidden="true"/>Servicios</h3>
+        {customer.servicios.length ? <ul className={styles.services}>{customer.servicios.map(service => {
+          const home = service.tipo === 'hogar';
+          const Icon = home ? Wifi : Smartphone;
+          return <li key={service.servicio_id} className={styles.service}>
+            <div className={styles.serviceTop}>
+              <span className={styles.serviceIcon}><Icon aria-hidden="true"/></span>
+              <div className={styles.serviceName}><span>{home ? 'Hogar' : 'Móvil'} · {service.servicio_id}</span><h4>{service.plan}</h4></div>
+              <CustomerStatus state={service.estado}/>
+            </div>
+            <dl className={styles.serviceFacts}>
+              <div><dt>Mensualidad</dt><dd>{crmCurrency.format(service.valor_mensual)}</dd></div>
+              <div><dt>Activación</dt><dd>{crmDate(service.fecha_activacion)}</dd></div>
+              {service.permanencia_hasta && <div><dt>Permanencia hasta</dt><dd>{crmDate(service.permanencia_hasta)}</dd></div>}
+            </dl>
+          </li>;
+        })}</ul> : <p className={styles.sectionEmpty}>Esta cuenta no tiene servicios registrados.</p>}
+      </section>
+      <section aria-labelledby="crm-tickets">
+        <h3 id="crm-tickets" className={styles.sectionTitle}><Ticket aria-hidden="true"/>Tickets recientes</h3>
+        {customer.tickets_recientes.length ? <ul className={styles.recordList}>{customer.tickets_recientes.map(ticket =>
+          <li key={ticket.ticket_id}>
+            <div className={styles.recordHeading}>
+              <h4>{ticketCategories[ticket.categoria]}</h4>
+              <CustomerStatus state={ticket.estado}/>
+            </div>
+            <p>{ticket.ticket_id} · <time dateTime={ticket.fecha}>{crmDate(ticket.fecha)}</time></p>
+            {(ticket.prioridad === 'prioritaria' || ticket.escalar_a) && <p className={styles.ticketNote}>
+              {ticket.prioridad === 'prioritaria' && <span>Prioritario</span>}
+              {ticket.escalar_a && <span>{ticket.escalar_a === 'nivel2' ? 'Nivel 2' : crmLabel(ticket.escalar_a)}</span>}
+            </p>}
+          </li>
+        )}</ul> : <p className={styles.sectionEmpty}>Esta cuenta no tiene tickets recientes.</p>}
+      </section>
+    </div>
+    {customer.ofertas_retencion_12m.length > 0 && <section aria-labelledby="crm-offers">
+      <h3 id="crm-offers" className={styles.sectionTitle}><Tag aria-hidden="true"/>Ofertas de retención</h3>
+      <ul className={styles.recordList}>{customer.ofertas_retencion_12m.map((offer, index) => (
+        <li key={`${offer.codigo}-${offer.fecha}-${index}`}>
+          <div className={styles.recordHeading}>
+            <h4>{offer.descripcion}</h4>
+            <span className={styles.offerCode}>{offer.codigo}</span>
+          </div>
+          {offer.fecha && <p><time dateTime={offer.fecha}>{crmDate(offer.fecha)}</time></p>}
+        </li>
+      ))}</ul>
+    </section>}
+  </>;
+}
+
+type DirectoryProps = {
+  openCase: (id: string) => void; openEscalations: () => void; startCase?: (id: string) => void;
+  eligibleContacts?: string[]; authorizedCases?: string[]; canManage?: boolean; canReadBilling?: boolean;
+};
+
+export function CustomerDirectory({
+  openCase, openEscalations, startCase, eligibleContacts = [], authorizedCases = [], canManage = false, canReadBilling = false
+}: DirectoryProps) {
+  const [rows, setRows] = useState<CustomerRow[]>([]);
+  const [selected, setSelected] = useState<Customer>();
+  const [search, setSearch] = useState('');
+  const [query, setQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [error, setError] = useState('');
+  const [detailError, setDetailError] = useState('');
+  const [requestedId, setRequestedId] = useState('');
+  const [escalationError, setEscalationError] = useState('');
+  const [customerForm, setCustomerForm] = useState<'new' | 'edit' | null>(null);
+  const [reload, setReload] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [escalations, setEscalations] = useState<Escalation[]>([]);
+  const [escalationsLoading, setEscalationsLoading] = useState(false);
+  const detailSequence = useRef(0);
+  const searchInput = useRef<HTMLInputElement>(null);
+  const searchToggle = useRef<HTMLButtonElement>(null);
+  const results = useRef<HTMLUListElement>(null);
+  const accountHeading = useRef<HTMLHeadingElement>(null);
+  const focusAccount = useRef(false);
+  const focusResults = useRef(false);
+  const pendingSearch = loading || search.trim() !== query;
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setOffset(0);
+      setQuery(search.trim());
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError('');
+    const params = new URLSearchParams({offset: String(offset), limit: String(pageSize)});
+    if (query) params.set('q', query);
+    request<CustomerRow[] | {items: CustomerRow[]}>(`/crm/customers?${params}`, {signal: controller.signal})
+      .then(data => {
+        if (!controller.signal.aborted) setRows(Array.isArray(data) ? data : data.items);
+      })
+      .catch(failure => {
+        if (!controller.signal.aborted) {
+          setRows([]);
+          setError(errorText(failure));
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [offset, query, reload]);
+
+  useEffect(() => {
+    if (!searchOpen || pendingSearch || !focusResults.current) return;
+    focusResults.current = false;
+    results.current?.querySelector('button')?.focus();
+  }, [searchOpen, pendingSearch]);
+
+  async function select(id: string, moveFocus = false) {
+    const sequence = ++detailSequence.current;
+    focusAccount.current = moveFocus;
+    setRequestedId(id);
+    setSearchOpen(false);
+    setDetailError('');
+    setDetailLoading(true);
+    setSelected(undefined);
+    try {
+      const detail = await request<CustomerResponse>(`/crm/customers/${encodeURIComponent(id)}`);
+      if (sequence !== detailSequence.current) return;
+      setSelected({...detail.customer, cases: (detail.case_history ?? []).map(({case_id, ...row}) => ({...row, id: case_id}))});
+    } catch (failure) {
+      if (sequence === detailSequence.current) setDetailError(errorText(failure));
+    } finally {
+      if (sequence === detailSequence.current) setDetailLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!detailLoading && focusAccount.current) {
+      const active = document.activeElement;
+      if (active === document.body || active === searchInput.current) accountHeading.current?.focus({preventScroll: true});
+      focusAccount.current = false;
+    }
+  }, [detailLoading]);
+
+  useEffect(() => {
+    setEscalations([]);
+    setEscalationError('');
+    setEscalationsLoading(Boolean(selected?.cases.length));
+    if (!selected?.cases.length) return;
+    const controller = new AbortController();
+    request<Escalation[]>('/escalations', {signal: controller.signal})
+      .then(items => { if (!controller.signal.aborted) setEscalations(items); })
+      .catch(failure => { if (!controller.signal.aborted) setEscalationError(errorText(failure)); })
+      .finally(() => { if (!controller.signal.aborted) setEscalationsLoading(false); });
+    return () => controller.abort();
+  }, [selected]);
+
+  function handleSearchKeys(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === 'Escape' && searchOpen) {
+      event.preventDefault();
+      focusResults.current = false;
+      (event.target === searchInput.current ? searchInput.current : searchToggle.current)?.focus();
+      setSearchOpen(false);
+    }
+    if (event.key === 'ArrowDown' && event.target === searchInput.current) {
+      event.preventDefault();
+      if (searchOpen && !pendingSearch) results.current?.querySelector('button')?.focus();
+      else {
+        focusResults.current = true;
+        setSearchOpen(true);
+      }
+    }
+    if (event.key === 'Enter' && event.target === searchInput.current && searchOpen && !pendingSearch && rows.length === 1) {
+      event.preventDefault();
+      void select(rows[0].cliente_id, true);
+    }
+  }
+
+  return <div className={`admin-page evo-page ${styles.page}`}>
+    <header className={styles.pageHeader}>
+      <h1>Directorio CRM</h1>
+      {canManage && <Button onClick={() => setCustomerForm('new')}>Nuevo cliente</Button>}
+    </header>
+    <div className={styles.searchRegion} role="search" aria-label="Directorio de clientes"
+      onBlur={event => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          focusResults.current = false;
+          setSearchOpen(false);
+        }
+      }}
+      onKeyDown={handleSearchKeys}>
+      <label htmlFor="crm-customer-search">Buscar cliente</label>
+      <div className={styles.searchField}>
+        <Search aria-hidden="true"/>
+        <input ref={searchInput} id="crm-customer-search" type="search" value={search}
+          placeholder="Nombre o identificador, p. ej. C-1001" maxLength={100} autoComplete="off"
+          onFocus={() => setSearchOpen(true)} onClick={() => setSearchOpen(true)}
+          onChange={event => { setSearch(event.target.value); setSearchOpen(true); }}/>
+        {search && <button type="button" className={styles.clearSearch} aria-label="Limpiar búsqueda"
+          onClick={() => { setSearch(''); searchInput.current?.focus(); setSearchOpen(true); }}>
+          <X aria-hidden="true"/>
+        </button>}
+        <button ref={searchToggle} type="button" className={styles.toggleSearch}
+          aria-label="Ver clientes" aria-expanded={searchOpen} aria-controls="crm-search-results"
+          onClick={() => setSearchOpen(open => !open)}>
+          <span>Ver clientes</span><ChevronDown aria-hidden="true"/>
+        </button>
+      </div>
+      <div id="crm-search-results" className={styles.searchResults} hidden={!searchOpen} aria-busy={pendingSearch}>
+        {pendingSearch ? <p className={styles.searchFeedback} role="status">Consultando CRM…</p>
+          : error ? <div className={styles.searchFeedback}>
+            <p role="alert">{error}</p>
+            <Button variant="outline" onClick={() => setReload(value => value + 1)}>Reintentar búsqueda</Button>
+          </div>
+          : rows.length ? <>
+            <ul className={styles.searchOptions} ref={results} aria-label="Resultados de clientes">
+              {rows.map(row => <li key={row.cliente_id}>
+                <button type="button" className={styles.searchOption} aria-current={selected?.cliente_id === row.cliente_id || undefined}
+                  onClick={() => void select(row.cliente_id, true)}>
+                  <span><strong>{row.nombre}</strong><small>{row.cliente_id}</small></span>
+                  <CustomerStatus state={row.estado}/>
+                  <ChevronRight aria-hidden="true"/>
+                </button>
+              </li>)}
+            </ul>
+            {(offset > 0 || rows.length === pageSize) && <div className={styles.searchPagination}>
+              <Button size="sm" variant="outline" disabled={offset === 0} onClick={() => setOffset(value => value - pageSize)}>Anterior</Button>
+              <span role="status">Registros {offset + 1}–{offset + rows.length}</span>
+              <Button size="sm" variant="outline" disabled={rows.length < pageSize} onClick={() => setOffset(value => value + pageSize)}>Siguiente</Button>
+            </div>}
+          </> : <div className={styles.searchFeedback}>
+            <p role="status">{query ? 'No hay coincidencias. Prueba con otro nombre o identificador.' : 'No hay clientes disponibles en esta página.'}</p>
+            {offset > 0 && <Button variant="outline" onClick={() => setOffset(value => value - pageSize)}>Anterior</Button>}
+          </div>}
+      </div>
+    </div>
+    <section className={styles.workspace} aria-label="Ficha del cliente" aria-busy={detailLoading}>
+      {detailLoading ? <div className={styles.empty} role="status"><div className={styles.emptyIcon}><ContactRound aria-hidden="true"/></div><p>Consultando ficha…</p></div>
+        : detailError ? <div className={styles.empty}>
+          <h2 ref={accountHeading} tabIndex={-1}>La ficha no está disponible</h2>
+          <p role="alert">{detailError}</p>
+          <Button variant="outline" onClick={() => void select(requestedId, true)}>Reintentar ficha</Button>
+        </div>
+        : selected ? <>
+          <header className={styles.accountHeader}>
+            <div className={styles.accountIdentity}>
+              <span className={styles.accountIcon}><ContactRound aria-hidden="true"/></span>
+              <div>
+                <h2 ref={accountHeading} tabIndex={-1}>{selected.nombre}</h2>
+                <p><span className={styles.accountRef}>{selected.cliente_id}</span><span>{selected.ciudad}</span><CustomerStatus state={selected.estado}/></p>
+              </div>
+            </div>
+            <div className={styles.accountActions}>
+              {canManage && <Button variant="outline" onClick={() => setCustomerForm('edit')}>Gestionar cliente</Button>}
+              {startCase && eligibleContacts.includes(selected.cliente_id) && <Button variant="outline" onClick={() => startCase(selected.cliente_id)}>Iniciar caso</Button>}
+            </div>
+          </header>
+          <CustomerDetailTabs id={selected.cliente_id} canReadBilling={canReadBilling}>
+            <CustomerRecords customer={selected}/>
+            <section aria-labelledby="crm-case-history">
+              <h3 id="crm-case-history" className={styles.sectionTitle}><History aria-hidden="true"/>Historial de casos</h3>
+              {escalationsLoading && <p className={styles.sectionEmpty} role="status">Consultando escalamientos…</p>}
+              {escalationError && <p className="alert error" role="alert">No se pudo consultar el seguimiento de escalamientos. {escalationError}</p>}
+              {selected.cases.length ? <ul className={styles.recordList}>{selected.cases.map(item => {
+                const matching = escalations.filter(row => row.case_id === item.id);
+                return <li key={item.id}>
+                  <h4>{item.id}</h4>
+                  <p>{item.status === 'open' ? 'Abierto' : item.status === 'closed' ? 'Cerrado' : crmLabel(item.status)}
+                    {item.updated_at && <> · Actualizado {new Date(item.updated_at).toLocaleString('es-CO', {timeZone: 'America/Bogota'})}</>}
+                  </p>
+                  <p>{item.ticket_refs.length ? `Tickets vinculados · ${item.ticket_refs.join(', ')}` : 'Sin tickets vinculados.'}</p>
+                  {matching.map(row => <p key={row.id}>
+                    {destinations[row.destination] ?? row.destination} · {crmLabel(row.status)} · {crmLabel(row.reason_code)}
+                  </p>)}
+                  <div className={styles.caseActions}>
+                    {authorizedCases.includes(item.id) ? <Button variant="outline" onClick={() => openCase(item.id)}>Abrir caso {item.id}</Button>
+                      : <span>La conversación requiere acceso al caso.</span>}
+                    {matching.length > 0 && <Button variant="outline" onClick={openEscalations}>Ver cola de escalamientos</Button>}
+                  </div>
+                </li>;
+              })}</ul> : <p className={styles.sectionEmpty}>Sin casos en el historial autorizado.</p>}
+            </section>
+          </CustomerDetailTabs>
+        </> : <div className={styles.empty}>
+          <div className={styles.emptyIcon}><ContactRound aria-hidden="true"/></div>
+          <h2>Selecciona un cliente</h2>
+          <p>Busca por nombre o identificador para abrir su ficha.</p>
+        </div>}
+    </section>
+    {customerForm && <CustomerForm customer={customerForm === 'edit' ? selected : undefined}
+      close={() => setCustomerForm(null)} done={() => {
+        setCustomerForm(null);
+        setReload(value => value + 1);
+        if (selected) void select(selected.cliente_id);
+      }}/>}
+  </div>;
 }
 
 function CustomerForm({customer,close,done}:{customer?:Customer;close:()=>void;done:()=>void}){
- const [id,setId]=useState(customerId(customer??{})),[name,setName]=useState(customer?.nombre??''),[type,setType]=useState('CC'),[document,setDocument]=useState(''),[phone,setPhone]=useState(''),[email,setEmail]=useState(''),[state,setState]=useState(customer?.estado??'activo'),[reason,setReason]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false),[receipt,setReceipt]=useState(''),[submission]=useState(()=>key());
+ const [id,setId]=useState(customer?.cliente_id ?? ''),[name,setName]=useState(customer?.nombre??''),[type,setType]=useState('CC'),[document,setDocument]=useState(''),[phone,setPhone]=useState(''),[email,setEmail]=useState(''),[state,setState]=useState<string>(customer?.estado??'activo'),[reason,setReason]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false),[receipt,setReceipt]=useState(''),[submission]=useState(()=>key());
  async function submit(e:React.FormEvent){e.preventDefault();if(!window.confirm('¿Confirmas esta operación sobre el cliente?'))return;setBusy(true);try{const body=customer?{revision:customer.revision,motivo:reason,idempotency_key:submission,nombre:name,...(phone?{celular:phone}:{}),...(email?{email}:{}),estado:state}:{cliente_id:id,nombre:name,tipo_documento:type,numero_documento:document,celular:phone,email,motivo:reason,idempotency_key:submission};const result=await request<{cliente_id:string;revision:number}>(customer?`/admin/customers/${encodeURIComponent(id)}`:'/admin/customers',{method:customer?'PATCH':'POST',body:JSON.stringify(body)});setReceipt(`${result.cliente_id} · revisión ${result.revision}`)}catch(e){setError(errorText(e))}finally{setBusy(false)}}
  return <Dialog open onOpenChange={open=>{if(!open)close()}}><DialogContent className="ops-plot evo-modal" aria-describedby={undefined}><DialogTitle className="sr-only">{customer?'Gestionar cliente':'Nuevo cliente'}</DialogTitle>{receipt?<><h2>Operación registrada</h2><p>Recibo: {receipt}</p><Button onClick={done}>Cerrar</Button></>:<form className="evo-form" onSubmit={submit}><h2>{customer?'Gestionar cliente':'Nuevo cliente'}</h2>{error&&<p className="alert error" role="alert">{error}</p>}<label>Identificador<input value={id} onChange={e=>setId(e.target.value)} disabled={!!customer} required/></label><label>Nombre<input value={name} onChange={e=>setName(e.target.value)} required/></label>{!customer&&<><label>Tipo de documento<select value={type} onChange={e=>setType(e.target.value)}>{['CC','CE','NIT','PAS'].map(x=><option key={x}>{x}</option>)}</select></label><label>Número de documento<input value={document} onChange={e=>setDocument(e.target.value)} required/></label></>}<label>Celular sintético<input value={phone} onChange={e=>setPhone(e.target.value)} required={!customer}/></label><label>Correo sintético<input type="email" value={email} onChange={e=>setEmail(e.target.value)} required={!customer}/></label>{customer&&<label>Estado<select value={state} onChange={e=>setState(e.target.value)}>{['activo','suspendido','retirado'].map(x=><option key={x}>{x}</option>)}</select></label>}<label>Motivo<textarea required value={reason} onChange={e=>setReason(e.target.value)}/></label><div className="ops-actions"><Button disabled={busy}>Confirmar y registrar</Button><Button type="button" variant="outline" onClick={close}>Cancelar</Button></div></form>}</DialogContent></Dialog>;
 }

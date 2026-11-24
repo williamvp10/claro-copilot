@@ -166,12 +166,16 @@ jobs:
           billing_mcp_pid=$!
           node apps/backend/dist/main.js > api-e2e.log 2>&1 &
           api_pid=$!
+          DEMO_MODE=false PORT=39183 node apps/backend/dist/main.js > api-non-demo-e2e.log 2>&1 &
+          non_demo_api_pid=$!
           node apps/backend/dist/worker.js > worker-e2e.log 2>&1 &
           worker_pid=$!
-          trap 'kill "$api_pid" "$worker_pid" "$simulators_pid" "$crm_mcp_pid" "$billing_mcp_pid" 2>/dev/null || true; cat api-e2e.log worker-e2e.log simulators-e2e.log crm-mcp-e2e.log billing-mcp-e2e.log' EXIT
+          trap 'kill "$api_pid" "$non_demo_api_pid" "$worker_pid" "$simulators_pid" "$crm_mcp_pid" "$billing_mcp_pid" 2>/dev/null || true; cat api-e2e.log api-non-demo-e2e.log worker-e2e.log simulators-e2e.log crm-mcp-e2e.log billing-mcp-e2e.log' EXIT
           node --input-type=module -e 'for(let i=0;i<60;i++){try{if((await fetch(process.env.BETTER_AUTH_URL+"/readyz")).ok)process.exit(0)}catch{} await new Promise(r=>setTimeout(r,500))}process.exit(1)'
           pnpm --filter @claro/backend test:integration
           pnpm --filter @claro/backend test:mcp
+          export PLATFORM_NON_DEMO_E2E_TARGET=http://127.0.0.1:39183
+          node --input-type=module -e 'for(let i=0;i<60;i++){try{if((await fetch(process.env.PLATFORM_NON_DEMO_E2E_TARGET+"/readyz")).ok)process.exit(0)}catch{} await new Promise(r=>setTimeout(r,500))}process.exit(1)'
           pnpm --filter @claro/backend test:evolution
   ml-checks:
     runs-on: ubuntu-latest
