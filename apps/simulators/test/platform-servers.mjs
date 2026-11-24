@@ -3,18 +3,25 @@ import { createSimulator } from '../server.mjs';
 import { database } from '../storage.mjs';
 
 // Test-only facade. Keep fault headers inaccessible from the platform and expose a loopback toggle.
-const outage = { crm:false,billing:false };
+const outage = { crm:'off',billing:'off' };
 for (const [service,prefix,port] of [['crm','CRM',8081],['billing','BILLING',8082]]) {
   const url = process.env[prefix+'_DATABASE_URL'];
   const key = process.env[prefix+'_API_KEY'];
   const pool = database(url);
   const facade = express();
   facade.post('/test-outage/:state',(req,res)=>{
-    outage[service] = req.params.state === 'on';
+    const state=req.params.state;
+    if (!['off','on','delay'].includes(state)) return res.sendStatus(400);
+    outage[service] = state;
     res.json({ok:true});
   });
   facade.use((req,res,next)=>{
-    if (outage[service]) return res.status(503).json({codigo:'NO_DISPONIBLE',mensaje:'Fallo de prueba'});
+    if (outage[service] === 'delay') {
+      const response=setTimeout(()=>res.status(503).json({codigo:'NO_DISPONIBLE',mensaje:'Fallo de prueba'}),5000).unref();
+      res.once('close',()=>clearTimeout(response));
+      return;
+    }
+    if (outage[service] === 'on') return res.status(503).json({codigo:'NO_DISPONIBLE',mensaje:'Fallo de prueba'});
     if (service==='crm' && req.method==='POST' && /^manual:/.test(req.get('Idempotency-Key')??'')) {
       req.headers['x-simulator-fault'] = 'lost-after-commit';
     }

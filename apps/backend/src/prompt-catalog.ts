@@ -11,6 +11,7 @@ type PromptDefinition = {
   output_contract: string;
   template: string;
   format?: 'jev_question_json';
+  optional?: true;
 };
 type Step = { id: string; mode: string; prompt_refs: string[] };
 type Owner = { id: string; kind: string; steps: Step[]; prompts: Record<string, PromptDefinition> };
@@ -102,7 +103,7 @@ export function promptEntry(key: string, template: string, source: PromptSource,
 }
 
 export function bootstrapManifest(legacy: Record<string, unknown> = {}): PromptManifest {
-  return Object.fromEntries([...definitions].map(([key, definition]) => {
+  return Object.fromEntries([...definitions].filter(([, definition]) => !definition.optional).map(([key, definition]) => {
     const old = legacy[key];
     // Prior revisions stored a style override for the public writer; preserve it beside the reviewed baseline.
     const inherited = key === 'public_answer' && typeof old === 'string' && old.trim()
@@ -123,8 +124,10 @@ export function effectiveManifest(row: Pick<PromptRevisionRow, 'prompts' | 'mani
 }
 
 export function hasCompleteManifest(row: Pick<PromptRevisionRow, 'prompts' | 'manifest'>) {
-  return row.manifest !== null && Object.keys(row.manifest).length === definitions.size
-    && Object.keys(effectiveManifest(row)).length === definitions.size;
+  if (!row.manifest) return false;
+  const effective = effectiveManifest(row);
+  return Object.keys(row.manifest).length === Object.keys(effective).length
+    && [...definitions].every(([key, definition]) => definition.optional || key in effective);
 }
 
 export function runPromptConfig(row: Pick<PromptRevisionRow, 'revision' | 'prompts' | 'manifest'>): RunPromptConfig {

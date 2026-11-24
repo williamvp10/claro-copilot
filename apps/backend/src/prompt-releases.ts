@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import type { DataSource, EntityManager } from 'typeorm';
 import { DATABASE } from './database.js';
 import { langfusePromptClient } from './langfuse-prompts.js';
+import { runtimeSha256 } from './runtime-revision.js';
 import {
   digestText, effectiveManifest, hasCompleteManifest, manifestDigest, presentRevision, promptEntry, promptName, validPrompt,
   type PromptManifest, type PromptRevisionRow
@@ -135,6 +136,7 @@ export class PromptReleases {
     const result = { ...report?.proposed?.metrics, ...report?.review?.metrics };
     const currentCorpus = report ? await knowledgeCorpus(tx) : [];
     if (target.status !== 'passed' || target.base_revision !== active.revision || report?.evidence?.provider_mode !== 'live' ||
+        report.evidence.runtime_sha256 !== runtimeSha256 ||
         report.evidence.corpus_sha256 !== digestText(JSON.stringify(currentCorpus)) ||
         report.evidence.baseline_manifest_sha256 !== manifestDigest(effectiveManifest(active)) ||
         report.evidence.candidate_manifest_sha256 !== manifestDigest(effectiveManifest(target)) ||

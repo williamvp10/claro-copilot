@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkScenarioStep, classifyScenarioChecks, isExtractiveAnswer } from '../scripts/eval-local-checks.mjs';
+import { checkScenarioStep, classifyScenarioChecks, isExtractiveAnswer, verifiesBillingDeadline } from '../scripts/eval-local-checks.mjs';
 import { unresolvedCriticalReview } from '../dist/prompt-adjudication.js';
 
 const handoff=(reason,route='handoff')=>({type:'handoff',route,reason,pending:'Revisar derivación'});
@@ -13,6 +13,18 @@ test('a contiguous quoted procedure is grounded across line breaks, with each cl
  assert.equal(isExtractiveAnswer(steps.join('\n')+'\nYa cambiamos la clave de tu cuenta.',citations),false);
  assert.equal(isExtractiveAnswer(steps.join('\n'),citations.slice(0,2)),false);
  assert.equal(isExtractiveAnswer('Ajuste de +$50.000.',[{excerpt:'Ajuste de -$50.000.'}]),false);
+});
+test('a billing deadline requires an applicable cited rule and independently verifies the calculation',()=>{
+ const question='Si la fecha de corte es el día 10, ¿hasta cuándo puede pagar?';
+ const reply='Puede pagar hasta el día 22 del mismo mes, 12 días calendario después del corte.';
+ const rule={excerpt:'## ¿Cuándo vence mi factura?\nLa fecha límite de pago es 12 días calendario después de su fecha de corte (día 1, 10 o 20 según su ciclo).'};
+ assert.equal(verifiesBillingDeadline(question,reply,[rule]),true);
+ assert.equal(verifiesBillingDeadline(question,reply.replace('22','23'),[rule]),false);
+ assert.equal(verifiesBillingDeadline(question,reply+' Su pago ya aparece.',[rule]),false);
+ assert.equal(verifiesBillingDeadline(question.replace('10','12'),reply.replace('22','24'),[rule]),false);
+ assert.equal(verifiesBillingDeadline(question.replace('10','20'),reply.replace('22','32'),[rule]),false);
+ assert.equal(verifiesBillingDeadline(question,reply,[{excerpt:'No es cierto que la fecha límite de pago es 12 días calendario después de su fecha de corte.'}]),false);
+ assert.equal(verifiesBillingDeadline(question,reply,[rule,{excerpt:'La fecha límite de pago es 15 días calendario después de la fecha de corte.'}]),false);
 });
 test('a suggested N2 route can pass its local check but does not prove a handoff',()=>{
  const checks=checkScenarioStep({expected:{route:'derivar_n2',internal_handoff_count:1,external_writes:0},result:card('soporte_tecnico'),durationMs:14});

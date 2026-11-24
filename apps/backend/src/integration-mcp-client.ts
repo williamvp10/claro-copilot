@@ -1,7 +1,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { DataSource } from 'typeorm';
-import type { AgentPorts } from '@claro/contracts';
+import { TransientReadError, type AgentPorts, type Fact } from '@claro/contracts';
+import { isTransientMcpRead } from '@claro/agent';
 import { runContext } from './business.js';
 import { signCapability } from './mcp-capability.js';
 
@@ -17,16 +18,33 @@ export function integrationMcpPorts(db:DataSource, fallback:AgentPorts):AgentPor
   const capability=signCapability({run_id:runId,case_id:row.id,case_revision:turn.case_revision,aud:domain,exp:Date.now()+15000,actions:[tool]},key);
   const transport=new StreamableHTTPClientTransport(url,{requestInit:{headers:{Authorization:`Bearer ${token}`,'X-Case-Capability':capability},signal:AbortSignal.timeout(3500)}});
   const client=new Client({name:'claro-agent',version:'1.0.0'});
-  try { await client.connect(transport); const result=await client.callTool({name:tool,arguments:args},undefined,{timeout:3500}); if (result.isError || !result.structuredContent || typeof result.structuredContent !== 'object' || !('data' in result.structuredContent)) throw new Error('MCP read failed'); return result.structuredContent.data as T; }
+  try {
+   await client.connect(transport);
+   const result=await client.callTool({name:tool,arguments:args},undefined,{timeout:3500});
+   const content=result.structuredContent;
+   if (!content || typeof content!=='object') throw new Error('MCP read failed');
+   if (result.isError && 'code' in content && content.code==='read_temporarily_unavailable') throw new TransientReadError();
+   if (result.isError || !('data' in content)) throw new Error('MCP read failed');
+   return content.data as T;
+  } catch (error) {
+   if (isTransientMcpRead(error)) throw new TransientReadError();
+   throw error;
+  }
   finally { await client.close().catch(()=>undefined); }
  }
+ function unavailable(error:unknown,domain:'crm'|'billing'):Fact[] {
+  if (error instanceof TransientReadError) throw error;
+  return domain==='crm'
+   ? [{id:'crm-unavailable',label:'CRM',value:'API temporalmente indisponible'}]
+   : [{id:'facturación-unavailable',label:'Facturación',value:'Lectura sin confirmar'}];
+ }
  return {...fallback,
-  getCustomerContext:(id)=>call<Awaited<ReturnType<AgentPorts['getCustomerContext']>>>(id,'crm','crm.get_customer_context').catch(()=>[{id:'crm-unavailable',label:'CRM',value:'API temporalmente indisponible'}]),
-  listServices:(id)=>call<Awaited<ReturnType<NonNullable<AgentPorts['listServices']>>>>(id,'crm','crm.list_services').catch(()=>[{id:'crm-unavailable',label:'CRM',value:'API temporalmente indisponible'}]),
-  getBilling:(id)=>call<Awaited<ReturnType<AgentPorts['getBilling']>>>(id,'billing','billing.get_balance').catch(()=>[{id:'facturación-unavailable',label:'Facturación',value:'API temporalmente indisponible'}]),
-  listInvoices:(id)=>call<Awaited<ReturnType<NonNullable<AgentPorts['listInvoices']>>>>(id,'billing','billing.list_invoices').catch(()=>[{id:'facturación-unavailable',label:'Facturación',value:'API temporalmente indisponible'}]),
-  getInvoiceDetail:(id,invoiceId)=>call<Awaited<ReturnType<NonNullable<AgentPorts['getInvoiceDetail']>>>>(id,'billing','billing.get_invoice_detail',{invoice_id:invoiceId}).catch(()=>[{id:'facturación-unavailable',label:'Facturación',value:'Detalle no disponible o no autorizado'}]),
-  getTickets:(id)=>call<Awaited<ReturnType<AgentPorts['getTickets']>>>(id,'crm','crm.list_recent_tickets').catch(()=>[{id:'crm-unavailable',label:'CRM',value:'API temporalmente indisponible'}]),
-  evaluateRetention:(id)=>call<Awaited<ReturnType<AgentPorts['evaluateRetention']>>>(id,'crm','crm.evaluate_retention').catch(()=>({eligible:false,reason:'CRM temporalmente indisponible. Verifica la elegibilidad antes de ofrecer beneficios.',facts:[{id:'crm-unavailable',label:'CRM',value:'API temporalmente indisponible'}],policy:{id:'retention-unavailable',title:'Fuente pendiente',version:'pendiente',excerpt:'Verificar la política y elegibilidad antes de ofrecer beneficios.'},options:[]}))
+  getCustomerContext:(id)=>call<Fact[]>(id,'crm','crm.get_customer_context').catch(error=>unavailable(error,'crm')),
+  listServices:(id)=>call<Fact[]>(id,'crm','crm.list_services').catch(error=>unavailable(error,'crm')),
+  getBilling:(id)=>call<Fact[]>(id,'billing','billing.get_balance').catch(error=>unavailable(error,'billing')),
+  listInvoices:(id)=>call<Fact[]>(id,'billing','billing.list_invoices').catch(error=>unavailable(error,'billing')),
+  getInvoiceDetail:(id,invoiceId)=>call<Fact[]>(id,'billing','billing.get_invoice_detail',{invoice_id:invoiceId}).catch(error=>unavailable(error,'billing')),
+  getTickets:(id)=>call<Fact[]>(id,'crm','crm.list_recent_tickets').catch(error=>unavailable(error,'crm')),
+  evaluateRetention:(id)=>call<Awaited<ReturnType<AgentPorts['evaluateRetention']>>>(id,'crm','crm.evaluate_retention').catch(error=>({eligible:false,reason:'CRM temporalmente indisponible. Verifica la elegibilidad antes de ofrecer beneficios.',facts:unavailable(error,'crm'),policy:{id:'retention-unavailable',title:'Fuente pendiente',version:'pendiente',excerpt:'Verificar la política y elegibilidad antes de ofrecer beneficios.'},options:[]}))
  };
 }

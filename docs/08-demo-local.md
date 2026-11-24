@@ -118,13 +118,15 @@ node --env-file=.env.demo.local scripts/bootstrap-langfuse-calls.mjs
 
 El comando necesita la URL de Langfuse, el ID del proyecto y las dos claves de API del proyecto. Para crear Jev también necesita el correo y la contraseña de Administración. Inyecta `OPENROUTER_API_KEY` desde el almacén de secretos cuando haya que crear la conexión. Si ya existe, el comando verifica su configuración y la reutiliza. Puedes repetir la importación. Si un ítem existente o la definición de Jev difieren, el comando informa la discrepancia para revisión.
 
+Si el proyecto ya tiene un evaluador homónimo con otra definición, repite el comando con `--manifest-evaluator`. El importador registra o verifica `Jev · Llamadas v1 · Manifiesto` con el mismo modelo, preguntas y mapeos del JSON. Usa ese evaluador para ambas corridas y anota su ID y versión.
+
 Con `--dataset-only` cargas solo los casos mediante la API pública. Langfuse también permite importar datasets por CSV desde la interfaz. Para el evaluador **Decision model**, el importador usa la interfaz interna de Langfuse **4.83.0**, la versión fijada en Compose. En otra versión o con acceso por SSO, crea el evaluador desde la UI con el manifiesto y las instrucciones de la sección siguiente. [API de Langfuse](https://langfuse.com/docs/api-and-data-platform/features/public-api) · [Datasets de Langfuse](https://langfuse.com/docs/evaluation/experiments/datasets)
 
 ### Ejecutar el juez desde Langfuse
 
 1. Abre **Claro Copiloto → Experiments** y elige una corrida `llamadas-v1-jev-native-*`. Si aparece otra corrida en **Compare**, quítala con su botón **Remove**.
 2. Selecciona las 15 filas con **Select all** y pulsa **Evaluate**. El diálogo debe mostrar **15 experiment items across 1 experiment**.
-3. Elige **Jev · Llamadas v1** y pulsa **Run Evaluation**. Langfuse ejecuta el juez en segundo plano. Al terminar, recarga el experimento y consulta los scores de cada fila.
+3. Elige **Jev · Llamadas v1** o **Jev · Llamadas v1 · Manifiesto**, según lo que instalaste para el A/B, y pulsa **Run Evaluation**. Langfuse ejecuta el juez en segundo plano. Al terminar, recarga el experimento y consulta los scores de cada fila.
 4. En el frontend, entra con el usuario administrador a **Prompts y evaluaciones → Evaluaciones de llamadas con Jev**. Selecciona la corrida y pulsa **Actualizar** para leer los scores guardados en Langfuse.
 
 El evaluador usa la conexión **TypeSafe (System One) → OpenRouter**, con el modelo `typesafe/jev-1.14`. Su estado contiene la pregunta reformulada, la respuesta del agente y la rúbrica del caso. Los criterios registrados son `jev_native_required` y `jev_native_forbidden`. Un caso aprueba cuando cubre todos los puntos requeridos y queda libre de afirmaciones prohibidas. Una omisión completa o una infracción hace fallar el caso. Las demás combinaciones con ambos scores quedan en revisión. Los casos sin los dos scores permanecen pendientes. [Configuración de modelos de decisión en Langfuse](https://langfuse.com/docs/evaluation/evaluation-methods/decision-models)
@@ -143,6 +145,15 @@ Repite el replay después de cambiar rutas, prompts o el índice. El comando usa
 ```bash
 app --profile call-evals run --rm --no-deps call-evals --native-jev
 ```
+
+Para evaluar los prompts de objetivos, guarda el [cuerpo de la candidata](evolucion-mvp/prompts.candidata-objetivos.json) en `POST /api/v1/admin/prompts` con una sesión de administración. El backend devuelve la revisión y conserva la base activa. Si Langfuse está configurado, registra las versiones de las dos plantillas allí. Después de importar el dataset, ejecuta ambas revisiones con el mismo índice y fecha de negocio.
+
+```bash
+app --profile call-evals run --rm --no-deps call-evals --native-jev --revision="$base_revision"
+app --profile call-evals run --rm --no-deps call-evals --native-jev --revision="$candidate_revision"
+```
+
+Usa una imagen construida con el código que corresponda a cada variante. El replay guarda `runtime_sha256` a partir del código compilado y del lockfile. Usa `GIT_SHA` para añadir la referencia del código fuente. Con `AGENT_PROVIDERS=fixtures` el replay comprueba el grafo y las respuestas locales. Con `AGENT_PROVIDERS=live`, verifica las observaciones `decision.jev`, `decision.evidence`, `generation.openai` y `decision.objectives` junto con el hash de su plantilla. El resumen indica cuántas solicitudes tienen costo registrado por paso y el costo observado por conversación de la suite. [Protocolo de comparación](evolucion-mvp/comportamiento-del-agente.md#evaluación-del-agente-en-langfuse)
 
 ### Corridas desde el runner
 

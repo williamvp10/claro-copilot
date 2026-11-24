@@ -12,6 +12,7 @@ El worker NestJS usa `OPENAI_API_KEY` para la generación en vivo y `OPENROUTER_
 | Jev | Devuelve intención y complejidad como categorías con probabilidades. Es una llamada tipada; el grafo consume los valores y decide la transición permitida. |
 | LLM directo de OpenAI | Redacta y sintetiza con evidencia, y puede resolver un objetivo compuesto usando herramientas de lectura previamente habilitadas. El esfuerzo de razonamiento se fija en el perfil de la ruta. |
 | Reranker local | Reordena los pasajes autorizados para que el LLM reciba primero la evidencia más relevante. |
+| Selector remoto de evidencia | En la candidata, puede reordenar pasajes públicos aprobados si las comprobaciones locales todavía requieren una respuesta. Recibe señales categóricas de los pasajes. |
 | ML clásico | Devuelve predicción de intención y versión de modelo en paralelo, fuera de la latencia visible. La predicción se compara con Jev y etiquetas revisadas. |
 
 ### Flujo por turno
@@ -96,7 +97,8 @@ El ejemplo asume **2.000 tokens de entrada y 250 de salida facturable**, sin sum
 PostgreSQL filtra los pasajes publicados por audiencia, vigencia y canal. La recuperación consulta hasta 36 coincidencias léxicas con búsqueda de texto completo en español. Cuando la extensión pgvector está disponible, incorpora hasta 16 coincidencias de un vector léxico local de 128 posiciones y fusiona los resultados con RRF. El agente reordena localmente los candidatos por coincidencias de título y contenido, alias, cobertura y diversidad. El laboratorio muestra los cinco primeros resultados y la revisión activa. El agente considera hasta tres pasajes para componer la respuesta.
 
 - En **Administración → Conocimiento RAG → Chat de prueba**, seleccionar **Asesor** y preguntar «Política de retención de clientes». Se restringe la búsqueda a `POL-RET-2026` y una consulta general prioriza los criterios de elegibilidad. El alcance Cliente conserva la política interna fuera de la recuperación.
-- Una consulta amplia de planes utiliza el catálogo vigente y pregunta si el cliente busca hogar o móvil. En la conversación de hogar puede pedir el tamaño de la vivienda y presentar una opción con el precio de la fuente. La conversación conserva el contexto en web y Telegram. Las consultas específicas conservan la redacción con OpenAI cuando está habilitada y la evidencia está aprobada.
+- Una consulta amplia de planes utiliza el catálogo vigente y pregunta si el cliente busca hogar o móvil. En la conversación de hogar puede pedir el tamaño de la vivienda y presentar una opción con el precio de la fuente. La conversación conserva el contexto en web y Telegram.
+- En la atención de la candidata, el subgrafo comprueba la aplicabilidad de los pasajes y busca una respuesta local completa con sus citas. Cuando hace falta redactar o extraer una respuesta de respaldo, puede reordenar los pasajes aplicables con el selector remoto si hay al menos dos públicos aprobados. La redacción con OpenAI requiere evidencia pública aprobada y el prompt correspondiente.
 - En **Administración → Prompts y evaluaciones**, editar **Respuesta pública con OpenAI** (`public_answer`). El catálogo versionado contiene instrucciones de tono, síntesis y citas. Guardar crea una candidata que se evalúa contra la revisión activa. Las transiciones de OTP de demo y asignación se gestionan en la aplicación.
 
 ## Evolución propuesta de recuperación y re-ranking
@@ -111,6 +113,8 @@ PostgreSQL filtra los pasajes publicados por audiencia, vigencia y canal. La rec
 ## Trazas, controles de administración y promoción
 
 El panel debe exponer perfiles de modelo, esfuerzo permitido, límites, revisión de prompt, configuración de recuperación y Evals por candidata. Plataforma publica una revisión aprobada con ID inmutable. El span `decision.jev` en Langfuse asocia `run_id`, revisión, clase, probabilidades, motivo de aceptación o abstención, modelo efectivo, latencia y costo de OpenRouter. En la misma traza, las generaciones registran los modelos efectivos, motivos de selección, tokens y costo. Recuperación registra candidatos filtrados, latencia y degradación del re-ranking, citas y resultado final. Exponer costos y p95 agregados; guardar identificadores opacos y evitar guardar texto sensible de entrada en spans de decisión. [SDD de plataforma](../plataforma/diseno.md) · [Observabilidad y operación](../plataforma/observabilidad.md) · [Langfuse Evals](https://langfuse.com/docs/evaluation/overview)
+
+Jev aporta su costo en `usage.cost`, incluso en una respuesta cuyo resultado se descarta por incertidumbre. Se conservan los tokens, el ID opaco de la solicitud y la confianza por separado de la probabilidad de la clase elegida. Para OpenAI el informe estima el costo con los tokens devueltos y las tarifas configuradas. Las llamadas sin uso disponible aparecen en la cobertura de costos. El gasto registrado de evaluación semántica se presenta aparte del gasto de atención. [Formato de respuesta de OpenRouter](https://openrouter.ai/docs/guides/community/jev-tutorial#step-3-read-the-answers)
 
 | Verificación | Prueba antes de publicar |
 | --- | --- |

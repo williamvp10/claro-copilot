@@ -1,17 +1,23 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
-import { createAgent, createOpenAIPublicWriter, createJevDecisionAdapter, createJevSemanticEvaluator, evolveContext, recordQuestion } from '@claro/agent';
+import { resolve } from 'node:path';
+import { createAgent, createOpenAIPublicWriter, createOpenAIObjectivePlanner, createJevDecisionAdapter, createJevSemanticEvaluator, evolveContext, isModelObservation, recordQuestion } from '@claro/agent';
 import { createDatabase } from '../dist/database.js';
 import { activeKnowledgeRevision, databaseKnowledge, knowledgeCorpus } from '../dist/knowledge.js';
 import { exportAgentSpan } from '../dist/telemetry.js';
 import { effectiveManifest, manifestDigest, runPromptConfig } from '../dist/prompt-catalog.js';
+import { runtimeSha256 } from '../dist/runtime-revision.js';
 import { catalogueRegressions } from './catalogue-regressions.mjs';
-import { checkScenarioStep, classifyScenarioChecks, isExtractiveAnswer, normalizeEvidence } from './eval-local-checks.mjs';
+import { checkScenarioStep, classifyScenarioChecks, normalizeEvidence } from './eval-local-checks.mjs';
+import { citationKey, publishedCitations, verifyPublishedAnswer } from './eval-grounding.mjs';
 
-const [goldenPath, scenariosPath, candidateId, outputPath] = process.argv.slice(2);
-if (!goldenPath || !scenariosPath || !candidateId || !outputPath) {
-  throw new Error('Usage: quality:compare GOLDEN.jsonl SCENARIOS.jsonl CANDIDATE_ID REPORT.json');
+const [goldenPath, scenariosPath, candidateId, outputPath, evidenceFlag, evidencePath, ...extra] = process.argv.slice(2);
+if (!goldenPath || !scenariosPath || !candidateId || !outputPath || extra.length ||
+    (evidenceFlag && (evidenceFlag!=='--review-evidence' || !evidencePath ||
+      [goldenPath,scenariosPath,outputPath].some(path=>resolve(path)===resolve(evidencePath))))) {
+  throw new Error('Usage: quality:compare GOLDEN.jsonl SCENARIOS.jsonl CANDIDATE_ID REPORT.json [--review-evidence EVIDENCE.json]');
 }
+const reviewEvidence=evidencePath ? [] : undefined;
 const sha = value => createHash('sha256').update(value).digest('hex');
 const readSuite = async (path, count) => {
   const text = await readFile(path, 'utf8');
@@ -28,6 +34,7 @@ const jev = key ? {apiKey:key,model:process.env.JEV_MODEL || 'typesafe/jev-1.14'
 let judge;
 const decision = jev && createJevDecisionAdapter(jev);
 const writer = live && createOpenAIPublicWriter({apiKey:process.env.OPENAI_API_KEY});
+const planner = live && createOpenAIObjectivePlanner(process.env.OPENAI_API_KEY);
 const normalized = normalizeEvidence;
 const contents = result => result.type === 'answer' ? result.answer : result.type === 'handoff' ? result.reason :
   result.type === 'card' ? [result.card.summary, ...result.card.facts.map(x=>x.value)].join(' ') : '';
@@ -36,17 +43,17 @@ const fallbackPolicy = {id:'evaluation-placeholder',title:'Política',version:'0
 const db = await createDatabase().initialize();
 const jobId = process.env.PROMPT_EVAL_JOB_ID;
 
-function fixture(revision, verified, channel, businessDate, knowledge, advisor = false) {
+function fixture(revision, verified, channel, businessDate, knowledge, advisor = false, pendingSupport = false) {
   const messages = [], calls = [], events = [];
   let currentTurn, intake, conversation_memory;
   const read = name => async () => { calls.push(name); return []; };
   const agent = createAgent({
-    readCaseForRun:async()=>({verified,messages,pending:null,intake,conversation_memory}),
+    readCaseForRun:async()=>({verified,messages,pending:null,intake,conversation_memory,pending_support_handoff:pendingSupport}),
     getAgentConfig:async()=>revision,
     getCustomerContext:read('obtenerCliente'),listServices:read('listarServicios'),getBilling:read('obtenerSaldo'),listInvoices:read('listarFacturas'),getInvoiceDetail:read('obtenerFactura'),getTickets:read('listarTickets'),
     evaluateRetention:async()=>{calls.push('evaluateRetention');return ({eligible:false,reason:'Requiere replay de plataforma',facts:[],options:[],policy:fallbackPolicy});},
     createProposal:async()=>{ calls.push('proposal'); throw new Error('Requires platform-controlled approval'); }
-  }, {knowledge:{revision:knowledge.revision,catalog:knowledge.catalog?.bind(knowledge),search:async (...args)=>{calls.push('search_public_kb');return knowledge.search(...args);}}, requireApprovedPrompts:live, ...(writer ? {writer} : {}), ...(decision && !verified && !advisor ? {decision} : {}), observe:(_, item)=>events.push(item)});
+  }, {knowledge:{revision:knowledge.revision,catalog:knowledge.catalog?.bind(knowledge),search:async (...args)=>{calls.push('search_public_kb');return knowledge.search(...args);}}, requireApprovedPrompts:live, ...(writer ? {writer} : {}), ...(planner ? {planner} : {}), ...(decision && !verified && !advisor ? {decision} : {}), observe:(_, item)=>events.push(item)});
   const session = { calls, events, durationMs:undefined, async run(actor,text) {
     calls.length=0;
     events.length=0;
@@ -54,6 +61,7 @@ function fixture(revision, verified, channel, businessDate, knowledge, advisor =
     messages.push({id:turn_id,turn_seq:messages.length+1,actor,text,created_at:new Date().toISOString()});
     if (actor==='cliente') intake=evolveContext(text,intake);
     const mode = verified || advisor || actor === 'asesor' ? 'asistido' : 'autoservicio';
+    session.evidenceContext={audience:mode==='asistido'?'asesor':'cliente',channel,businessDate};
     currentTurn={
       run_id:randomUUID(),case_id:'edd',conversation_id:'edd',turn_id,channel,actor,turn_seq:messages.length,
       case_revision:1,attention_mode:mode,audience:mode==='asistido'?'asesor':'cliente',scope_ref:verified?'verified':'unverified',
@@ -74,14 +82,15 @@ function fixture(revision, verified, channel, businessDate, knowledge, advisor =
   return session;
 }
 
-async function score(id, input, result, session, required, forbidden, authorizesReads, expectedSourceIds, judgeEvidence, publicTurn, expectedAbstention = false) {
+async function score(id, input, result, session, required, forbidden, authorizesReads, expectedSourceIds, published, publicTurn, expectedAbstention = false) {
   const answer = contents(result), citations = cited(result);
   const usedPrivateRead = session.calls.some(call=>['obtenerCliente','obtenerSaldo','listarFacturas','obtenerFactura','listarServicios','listarTickets','evaluateRetention'].includes(call)) && !authorizesReads;
   const forbiddenHit = forbidden.some(value=>normalized(answer).includes(normalized(value)));
   const deterministic = !usedPrivateRead && !forbiddenHit && result.type !== 'failed';
   const expectedFacts = required.length > 0 && required.every(value=>normalized(answer).includes(normalized(value)));
-  const semantic = judge && publicTurn && !authorizesReads && deterministic && citations.length > 0 && required.length > 0
-    && citations.every(citation => judgeEvidence.has(JSON.stringify([citation.id,citation.version])))
+  const sources = !authorizesReads && deterministic ? publishedCitations(citations,published,session.evidenceContext) : [];
+  const semantic = judge && publicTurn && sources.length > 0 && required.length > 0 &&
+    sources.every(source=>source.scope==='public' && source.provider_approved===true)
     ? await judge.evaluate({question:input,answer,evidence:citations.map(x=>x.excerpt),requiredFacts:required,forbiddenFacts:forbidden,deterministicPassed:true})
     : null;
   const retrieval = session.events.find(item=>item.name==='retrieval');
@@ -89,18 +98,24 @@ async function score(id, input, result, session, required, forbidden, authorizes
   const recall = expectedSourceIds.length
     ? expectedSourceIds.filter(aliases=>aliases.some(prefix=>top.some(value=>value.startsWith(prefix)))).length/expectedSourceIds.length
     : null;
-  const extractive = (result.type === 'answer' || result.type === 'card') && isExtractiveAnswer(answer,citations);
-  const grounded = extractive ? true : semantic?.status === 'pass' && semantic.decisions.length ? semantic.decisions.every((x)=>
-    x.criterion.startsWith('required') ? x.choice==='presente' : x.choice==='ausente') : null;
+  const groundedMethod = sources.length && (result.type==='answer' || result.type==='card')
+    ? verifyPublishedAnswer({question:input,answer,sources}) : null;
+  const grounded = groundedMethod ? true : null;
   const abstention = expectedAbstention && result.type==='handoff' && result.route==='fuera_de_alcance' && citations.length===0;
-  const correct = deterministic && (abstention || (expectedFacts && citations.length>0 && (recall===null || recall===1) && semantic?.status!=='fail'));
+  const correct = deterministic && (abstention || ((authorizesReads ? citations.length : sources.length)>0 &&
+    expectedFacts && (recall===null || recall===1) && semantic?.status!=='fail'));
+  const requests=session.events.filter(item=>isModelObservation(item.name) &&
+    (item.name!=='decision.jev' || item.metadata.provider_attempted==='yes'));
+  const costs=requests.flatMap(item=>typeof item.metadata.cost_usd==='number' ? [item.metadata.cost_usd] : []);
   return { id, route:result.route, result:result.type, citations:citations.map(x=>x.id), usedPrivateRead, forbiddenHit,
     score:correct?'verified_exact':deterministic?'review':'failed', elapsed_ms:session.durationMs, semantic:semantic?.status ?? 'unavailable',
-    recall, grounded, grounded_method:extractive?'extractive':grounded!==null?'jev':null, top_5:top,
+    recall, grounded, grounded_method:groundedMethod, top_5:top,
     fact_matches:required.filter(value=>normalized(answer).includes(normalized(value))).length, required_fact_count:required.length,
     remote_generation:session.events.some(item=>item.name==='generation.openai' && item.metadata.status==='accepted'),
     generation_statuses:session.events.filter(item=>item.name==='generation.openai').map(item=>String(item.metadata.status)),
-    cost_usd:session.events.reduce((sum,item)=>sum+Number(item.metadata.cost_usd ?? 0),0) };
+    cost_usd:costs.reduce((sum,value)=>sum+value,0),model_requests:requests.length,model_requests_with_cost:costs.length,
+    judged:!!semantic?.decisions.length,
+    ...(typeof semantic?.usage?.cost_usd==='number' ? {judge_cost_usd:semantic.usage.cost_usd} : {}) };
 }
 
 const sourcesByName = {
@@ -134,28 +149,34 @@ async function batch(rows, run) {
   return results;
 }
 
-async function replay(revision, knowledge, judgeEvidence) {
+async function replay(revision, knowledge, published, pendingReviews) {
   const questions=await batch(golden.rows,async row=>{
     const scope = row.herramientas_esperadas.length > 0;
     const advisor = scope || row.fuentes.some(source=>advisorReference.test(source));
     const session = fixture(revision,scope,advisor?'web':'telegram',date,knowledge,advisor);
     const result = await session.run('cliente', row.pregunta);
     const item = await score(row.id,row.pregunta,result,session,row.puntos_clave ?? [],[],scope,scope ? [] : evidencePrefixes(row.fuentes),
-      judgeEvidence,!advisor,row.tipo==='fuera_de_alcance');
+      published,!advisor,row.tipo==='fuera_de_alcance');
+    if (pendingReviews && !scope && item.score!=='failed' && (item.score==='review' || (item.citations.length && item.grounded!==true))) {
+      pendingReviews.push({id:row.id,audience:advisor?'asesor':'cliente',question:row.pregunta,
+        expected_answer:row.respuesta_esperada,required_facts:row.puntos_clave ?? [],answer:contents(result),citations:cited(result),
+        observed:{score:item.score,grounded:item.grounded,recall_at_5:item.recall}});
+    }
     return scope ? {...item,score:'platform_replay_required'} : item;
   });
   const conversations=await batch(scenarios.rows,async row=>{
     const verified = row.input.identity_status === 'verified';
     const channel = row.input.channel === 'consola' ? 'web' : row.input.channel;
-    const advisor = row.input.channel === 'consola';
-    const session = fixture(revision,verified,channel,row.input.business_date || date,knowledge,advisor);
+    const pendingSupport=row.input.previous_handoff==='nivel_2' && row.input.case_state==='pendiente';
+    const advisor = row.input.channel === 'consola' || pendingSupport;
+    const session = fixture(revision,verified,channel,row.input.business_date || date,knowledge,advisor,pendingSupport);
     const steps=[];
     for (const [index, step] of row.input.steps.entries()) {
       const expected=row.expected.find(item=>item.after_step===index+1);
       if (step.type !== 'message') { steps.push({step:index+1,score:'platform_replay_required',checks:[{name:'control_event',status:'unverified',scope:'platform_replay',detail:'Requires the real approval, effect and receipt'}]}); continue; }
       const result=await session.run(step.actor,step.text);
       const observation=await score(row.id,step.text,result,session,expected?.required_facts ?? [],expected?.forbidden_facts ?? [],verified,
-        evidencePrefixes(expected?.allowed_citation_sources),judgeEvidence,!advisor && step.actor==='cliente');
+        evidencePrefixes(expected?.allowed_citation_sources),published,!advisor && step.actor==='cliente');
       const checks=checkScenarioStep({expected,result,calls:session.calls,events:session.events,durationMs:session.durationMs,verified,
         fixtureDependent:Boolean(verified || row.input.fixture || row.input.mock_variant || row.input.case_state || row.input.previous_handoff),
         sourcePrefixes:evidencePrefixes(expected?.allowed_citation_sources)});
@@ -183,7 +204,12 @@ async function replay(revision, knowledge, judgeEvidence) {
     unresolved_critical:conversations.filter(x=>x.critical && x.steps.some(step=>step.score!=='verified_exact')).length,
     local_elapsed_ms:turns.filter(x=>Number.isFinite(x.elapsed_ms)).map(x=>x.elapsed_ms),
     latency_scope:'isolated agent turn; not end-to-end, p95 or release evidence',
-    cost_usd:[...questions,...conversations.flatMap(x=>x.steps)].reduce((sum,x)=>sum+(x.cost_usd??0),0)
+    cost_usd:turns.reduce((sum,x)=>sum+(x.cost_usd??0),0),
+    model_requests:turns.reduce((sum,x)=>sum+(x.model_requests??0),0),
+    model_requests_with_cost:turns.reduce((sum,x)=>sum+(x.model_requests_with_cost??0),0),
+    judged_turns:turns.filter(x=>x.judged).length,
+    judged_turns_with_cost:turns.filter(x=>typeof x.judge_cost_usd==='number').length,
+    judge_cost_usd:turns.reduce((sum,x)=>sum+(x.judge_cost_usd??0),0)
   } };
 }
 
@@ -197,8 +223,8 @@ try {
     const referenceRubric = baseConfig.prompts.check_semantic_criterion;
     judge = jev && referenceRubric ? createJevSemanticEvaluator({ ...jev, semanticTemplate: referenceRubric }) : null;
     const documents = await knowledgeCorpus(tx);
-    const judgeEvidence = new Set(documents.filter(({document}) =>
-      document.scope==='public' && document.provider_approved===true).map(({id,version})=>JSON.stringify([id,version])));
+    const published=new Map(documents.map(row=>[citationKey(row),row.document]));
+    const approvedPassages=documents.filter(({document})=>document.scope==='public' && document.provider_approved===true).length;
     let pendingQuery = Promise.resolve();
     const searchDb={query: (...args) => {
       const started = pendingQuery.then(() => tx.query(...args));
@@ -207,7 +233,12 @@ try {
     }};
     const knowledge=databaseKnowledge(searchDb);
     const indexComparison=process.env.KNOWLEDGE_EVAL_BASELINE==='legacy' && activeKnowledgeRevision()!=='legacy';
-    const [baseline,proposed] = await Promise.all([replay(baseConfig,indexComparison?databaseKnowledge(searchDb,'legacy'):knowledge,judgeEvidence),replay(indexComparison?baseConfig:candidateConfig,knowledge,judgeEvidence)]);
+    const baselineSources=indexComparison
+      ? new Map((await knowledgeCorpus(tx,'legacy')).map(row=>[citationKey(row),row.document])) : published;
+    const [baseline,proposed] = await Promise.all([
+      replay(baseConfig,indexComparison?databaseKnowledge(searchDb,'legacy'):knowledge,baselineSources),
+      replay(indexComparison?baseConfig:candidateConfig,knowledge,published,reviewEvidence)
+    ]);
     const regressions = (config,adapter) => catalogueRegressions((channel,day,source)=>
       fixture(config,false,channel,day,source).run,adapter);
     const [baselineRegressions,candidateRegressions]=await Promise.all([
@@ -219,20 +250,30 @@ try {
       proposed.questions.every(x=>!x.usedPrivateRead && !x.forbiddenHit) &&
       proposed.conversations.every(x=>x.steps.every(step=>!step.usedPrivateRead && !step.forbiddenHit && step.score!=='failed'));
     const result = { gate:passed?'passed':'review_required', evidence:{
-      date, index_revision:activeKnowledgeRevision(), ...(indexComparison?{comparison:'legacy_vs_contextual'}:{}), golden_sha256:golden.sha256, scenarios_sha256:scenarios.sha256, corpus_sha256:sha(JSON.stringify(documents)),
+      date, index_revision:activeKnowledgeRevision(), runtime_sha256:runtimeSha256,
+      ...(indexComparison?{comparison:'legacy_vs_contextual'}:{}), golden_sha256:golden.sha256, scenarios_sha256:scenarios.sha256, corpus_sha256:sha(JSON.stringify(documents)),
       rubric:baseConfig.prompt_metadata.check_semantic_criterion?.sha256 ?? 'unavailable',
       baseline_manifest_sha256:manifestDigest(effectiveManifest(base)),
       candidate_manifest_sha256:manifestDigest(effectiveManifest(candidate)),
       provider_mode:writer&&judge?'live':'local',
       models: live ? { decisions:jev.model, generation:['gpt-6-luna','gpt-6.1-terra','gpt-6.2-sol'] } : null,
-      golden_count:30, complementary_count:19, provider_approved_passages:judgeEvidence.size
+      golden_count:30, complementary_count:19, provider_approved_passages:approvedPassages
     }, baseline, proposed, catalogue_regressions:{baseline:baselineRegressions,candidate:candidateRegressions} };
     if (!indexComparison) await tx.query(`INSERT INTO prompt_evaluation(candidate_revision,base_revision,report) VALUES ($1,$2,$3)
       ON CONFLICT(candidate_revision) DO UPDATE SET report=EXCLUDED.report,completed_at=now()`,[candidate.revision,base.revision,result]);
     return result;
   });
-  await writeFile(outputPath, JSON.stringify(report,null,2)+'\n', { mode:0o600, flag:'wx' });
-  console.log(JSON.stringify({ gate:report.gate, baseline:report.baseline.metrics, candidate:report.proposed.metrics, catalogue:report.catalogue_regressions.candidate }));
+  const reportText=JSON.stringify(report,null,2)+'\n';
+  await writeFile(outputPath,reportText,{mode:0o600,flag:'wx'});
+  let reviewEvidenceSha;
+  if (reviewEvidence) {
+    const packet=JSON.stringify({version:1,revision:report.proposed.revision,report_sha256:sha(reportText),
+      evidence:report.evidence,cases:reviewEvidence.sort((a,b)=>a.id.localeCompare(b.id))},null,2)+'\n';
+    await writeFile(evidencePath,packet,{mode:0o600,flag:'wx'});
+    reviewEvidenceSha=sha(packet);
+  }
+  console.log(JSON.stringify({ gate:report.gate, baseline:report.baseline.metrics, candidate:report.proposed.metrics,
+    catalogue:report.catalogue_regressions.candidate,...(reviewEvidenceSha ? {review_evidence_sha256:reviewEvidenceSha} : {}) }));
 } finally {
   await db.destroy();
 }

@@ -77,7 +77,9 @@ pnpm --filter @claro/backend quality:compare GOLDEN.jsonl SCENARIOS.jsonl CANDID
 pnpm --filter @claro/backend quality:review CANDIDATE_ID REVIEW.json
 ```
 
-The comparison runs locally by default. Set `PROMPT_EVAL_PROVIDERS=live` only for suites and evidence authorized for processing by the configured providers. Record the authorization with the release evidence. The semantic judge receives minimized facts only for public steps with approved cited evidence. Record platform replay outcomes for private steps. The review JSON includes the three comparison hashes under evidence. Golden entries use correct, grounded and artifact. Critical scenario entries use passed and artifact. Reference the controlled platform replay or reviewed case evidence by artifact ID. The administrator can activate a candidate with a passing report against the current baseline.
+Agrega `--review-evidence EVIDENCE.json` a `quality:compare` para generar un archivo local con las preguntas documentales pendientes, la respuesta de la candidata y las citas que usó. El archivo incluye la huella SHA-256 del informe y se crea con permisos `0600`. Los casos de cuenta GQ‑25 a GQ‑28 se verifican en plataforma. El archivo sirve de evidencia para adjudicar casos.
+
+The comparison runs locally by default. Set `PROMPT_EVAL_PROVIDERS=live` only for suites and evidence authorized for processing by the configured providers. Record the authorization with the release evidence. The semantic judge receives minimized facts only for public steps with approved cited evidence. Record platform replay outcomes for private steps. Copy the golden, scenario, corpus and runtime hashes into `evidence` in the review JSON. Golden entries use correct, grounded and artifact. Critical scenario entries use passed and artifact. Reference the controlled platform replay or reviewed case evidence by artifact ID. Activation requires a passing report for the current baseline and running build. A replay for a new report must carry its runtime hash in the worker events that save and publish the result. Historical comparisons remain visible for review.
 
 ## Evidence for the defense
 
@@ -102,7 +104,7 @@ Generar `corpus.json` y `manifest.json` en un directorio privado con `packages/a
 
 Para descargar originales con Docker, fijar `KNOWLEDGE_ORIGINALS_DIR` a la ruta del host y añadir `-f infra/compose.knowledge-originals.yaml` a los mismos comandos de Compose. Dar acceso de lectura al usuario del API y mantener privado el directorio padre. En ejecución nativa basta con exportar la ruta a ese proceso. La aplicación muestra el inventario y los pasajes aunque el montaje esté ausente. La descarga pasa por la autorización de Admin y comprueba el hash de los bytes que entrega.
 
-En **Conocimiento RAG → Chat de prueba**, seleccionar audiencia, canal y fecha. Cada pregunta usa la revisión activa y el mismo adaptador y reordenamiento de conocimiento que el worker. El modo extractivo está disponible de inicio. `RAG_LAB_LIVE_ENABLED=true` y `OPENAI_API_KEY` habilitan una opción explícita para audiencia cliente, con extractos públicos aprobados y el presupuesto del redactor. Los ensayos quedan en la vista actual y sus respuestas muestran la latencia, la evidencia recuperada y las citas usadas.
+En **Conocimiento RAG → Chat de prueba**, seleccionar audiencia, canal y fecha. Cada pregunta usa la revisión activa y comparte el adaptador y el reordenamiento local del worker. El modo extractivo está disponible de inicio. `RAG_LAB_LIVE_ENABLED=true` y `OPENAI_API_KEY` habilitan una opción explícita para audiencia cliente, con extractos públicos aprobados y el presupuesto del redactor. Los ensayos quedan en la vista actual y sus respuestas muestran la latencia, la evidencia recuperada y las citas usadas. La atención del worker aplica el [orden de respuesta y selección de evidencia de la candidata](../docs/agente/enrutamiento-y-reranking.md#recuperación-de-la-demo).
 
 Configurar `INTEGRATION_MCP_TOKEN` con al menos 24 caracteres y `INTEGRATION_MCP_SIGNING_KEY` con al menos 32. CRM y Facturación tienen un proceso MCP privado cada uno. Cada proceso recibe las credenciales de su propia API mock. El worker emite una capacidad firmada, acotada a una tool, el run, el caso y su revisión. El servidor revalida el titular y la asignación antes de consultar. Las escrituras pasan por NestJS y el outbox.
 
@@ -139,9 +141,24 @@ Para CC‑E10, usa el ingreso de prueba autenticado `/api/v1/demo/incoming` con 
 node apps/backend/scripts/verify-platform-replay.mjs CANDIDATE CC-E11 CASE_ID PROPOSAL_ID ELIGIBILITY_RUN ACCEPTANCE_RUN
 node apps/backend/scripts/verify-platform-replay.mjs CANDIDATE CC-E13 CASE_ID PROPOSAL_ID SUPPORT_RUN
 node apps/backend/scripts/verify-platform-replay.mjs CANDIDATE CC-E10 CASE_ID - RUN_ID --scenario-suite SCENARIOS.jsonl
+node apps/backend/scripts/verify-platform-replay.mjs CANDIDATE CC-E18 CASE_ID PROPOSAL_ID RUN_ID --scenario-suite SCENARIOS.jsonl
 ```
 
-CC‑E03, CC‑E10 y CC‑E12 usan la misma forma del comando con `-` y la suite original. Los comprobantes verifican revisión, caso, fecha, rúbrica y huellas del informe. Según el escenario, comprueban lecturas y ausencia de efectos, o aprobación y recibo del mock. El juicio sobre la respuesta se registra en la adjudicación humana. El gate exige una comparación conectada y conserva como pendientes los casos que requieren evidencia adicional.
+CC‑E03, CC‑E07, CC‑E10, CC‑E12 y CC‑E14 usan la misma forma del comando con `-` y la suite original. CC‑E07 y CC‑E14 parten de C‑1001 por Telegram con titularidad verificada y un mensaje literal del asesor en la consola. Para CC‑E07, toma la derivación desde Supervisión y conserva el ajuste pendiente. Para CC‑E14, activa la caída de Facturación del simulador de pruebas durante ese turno. El verificador exige dos lecturas fallidas, un saldo pendiente en la ficha y cero efectos. Los comprobantes verifican revisión, caso, fecha, rúbrica y huellas del informe. El juicio sobre la respuesta se registra en la adjudicación humana. El gate exige una comparación conectada y conserva como pendientes los casos que requieren evidencia adicional.
+
+CC‑E04 también usa `-` y la suite original. Registra un contacto con `ref = 'C-1005'`, `fixture = 'C-1001'` y sin asesor asignado en la base de demo aislada. Envía el mensaje literal de la suite por Telegram. Tras la indicación de verificar la titularidad en el chat web, toma el caso desde el asesor y conserva la titularidad sin verificar. El verificador liga la respuesta pública al único traspaso y comprueba que la referencia escrita no dio acceso a los sistemas de cuenta.
+
+CC‑E15 y CC‑E19 también usan el comando con `-`, la suite original y el fixture C‑1013 por Telegram. Para CC‑E15, confirma una toma previa por Soporte N2 y reproduce el mensaje de espera mientras el caso siga abierto. Para CC‑E19, toma la derivación desde Supervisión y verifica el síntoma y la duración en el resumen que quedó en la ficha.
+
+Para CC‑E18, usa C‑1013 por Telegram con titularidad verificada y el caso en modo asistido. Reproduce el mensaje literal del cliente y usa el ID de la propuesta que muestra la consola. Verifica mientras siga pendiente de aprobación. El comprobante exige lecturas asociadas al turno y cero escrituras externas. Si la ficha explica el aumento, el verificador vuelve a calcular la comparación con los conceptos de las dos facturas de la cuenta. Si falta ese respaldo, la ficha debe dejar la causa pendiente.
+
+Para CC‑E17, registra en la base de demo aislada un contacto de ingreso con `ref = 'C-1012'`, `fixture = 'C-1013'` y sin asesor asignado. Usa los datos de C‑1012 del archivo original de clientes sintéticos. Envía por el ingreso autenticado «Mi documento es {documento}, mi teléfono es {teléfono} y mi correo es {correo}.» con los dos números sin separadores, seguido por el mensaje literal de la suite. Conserva la titularidad sin verificar. Deja que se publique la respuesta, toma el caso desde el asesor y luego confirma la toma desde Soporte N2.
+
+Apunta la exportación del worker de demo a un receptor local de OpenTelemetry y guarda el cuerpo JSON recibido por cada ejecución como `RUN_ID.json`. El verificador compara ambos cuerpos con las huellas de exportación que registró el worker, inspecciona la respuesta y el resumen, y guarda solo la evidencia saneada.
+
+```sh
+node apps/backend/scripts/verify-platform-replay.mjs CANDIDATE CC-E17 CASE_ID - PUBLIC_RUN ADVISOR_RUN --scenario-suite SCENARIOS.jsonl --canary-source CUSTOMERS.json --trace-dir CAPTURES
+```
 
 Para las preguntas de cuenta, inicia el API con el ID golden como `LOCAL_PROMPT_REPLAY_SCENARIO` y reproduce la pregunta literal con titularidad verificada. Usa el mismo informe A/B y la suite golden correspondiente. GQ‑25, GQ‑26 y GQ‑27 verifican lecturas y cero efectos. En GQ‑28 se comprueba el ticket solo después de que el asesor lo apruebe y el mock devuelva el recibo. La visita sigue pendiente de coordinación. El verificador guarda hechos de la ejecución en la plataforma, y la adjudicación registra por separado el juicio sobre la respuesta.
 

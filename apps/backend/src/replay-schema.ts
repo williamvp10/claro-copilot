@@ -45,3 +45,44 @@ export class PromptGoldenEvidence1795260000015 implements MigrationInterface {
  )`); }
  async down(db:QueryRunner) { await db.query('DROP TABLE prompt_golden_evidence'); }
 }
+
+/** A billing outage records read attempts and the absence of effects. */
+export class PromptBillingOutageEvidence1795260000019 implements MigrationInterface {
+ async up(db:QueryRunner) { await extendZeroEffectConstraint(db, ",'CC-E14'"); }
+ async down(db:QueryRunner) { await extendZeroEffectConstraint(db, ''); }
+}
+
+export class PromptHandoffContextEvidence1795260000020 implements MigrationInterface {
+ async up(db:QueryRunner) { await extendZeroEffectConstraint(db, ",'CC-E14','CC-E15','CC-E19'"); }
+ async down(db:QueryRunner) { await extendZeroEffectConstraint(db, ",'CC-E14'"); }
+}
+
+export class PromptPendingProposalEvidence1795260000021 implements MigrationInterface {
+ async up(db:QueryRunner) { await extendZeroEffectConstraint(db, ",'CC-E14','CC-E15','CC-E19'",true); }
+ async down(db:QueryRunner) { await extendZeroEffectConstraint(db, ",'CC-E14','CC-E15','CC-E19'"); }
+}
+
+export class PromptAdjustmentReviewEvidence1795260000022 implements MigrationInterface {
+ async up(db:QueryRunner) { await extendZeroEffectConstraint(db, ",'CC-E07','CC-E14','CC-E15','CC-E19'",true); }
+ async down(db:QueryRunner) { await extendZeroEffectConstraint(db, ",'CC-E14','CC-E15','CC-E19'",true); }
+}
+
+export class PromptPrivacyReplayEvidence1795260000023 implements MigrationInterface {
+ async up(db:QueryRunner) { await extendZeroEffectConstraint(db, ",'CC-E07','CC-E14','CC-E15','CC-E17','CC-E19'",true); }
+ async down(db:QueryRunner) { await extendZeroEffectConstraint(db, ",'CC-E07','CC-E14','CC-E15','CC-E19'",true); }
+}
+
+export class PromptAuthenticatedHandoffEvidence1795260000024 implements MigrationInterface {
+ async up(db:QueryRunner) { await extendZeroEffectConstraint(db, ",'CC-E04','CC-E07','CC-E14','CC-E15','CC-E17','CC-E19'",true); }
+ async down(db:QueryRunner) { await extendZeroEffectConstraint(db, ",'CC-E07','CC-E14','CC-E15','CC-E17','CC-E19'",true); }
+}
+
+async function extendZeroEffectConstraint(db:QueryRunner, extra:string, pending=false) {
+ const pendingClause=pending ? "OR (proof_kind='pending_proposal' AND scenario_id='CC-E18' AND proposal_id IS NOT NULL AND operation_id IS NULL)" : '';
+ await db.query(`ALTER TABLE prompt_platform_evidence DROP CONSTRAINT prompt_platform_evidence_kind_check,
+   ADD CONSTRAINT prompt_platform_evidence_kind_check CHECK (
+     (proof_kind='confirmed_effect' AND scenario_id IN ('CC-E11','CC-E13') AND proposal_id IS NOT NULL AND operation_id IS NOT NULL)
+     OR (proof_kind='zero_effect' AND scenario_id IN ('CC-E03','CC-E10','CC-E12'${extra}) AND proposal_id IS NULL AND operation_id IS NULL)
+     ${pendingClause}
+   )`);
+}

@@ -2,7 +2,7 @@ import { knowledgeCorpus } from './knowledge.js';
 import { createHash } from 'node:crypto';
 import type { DataSource } from 'typeorm';
 import { effectiveManifest, manifestDigest } from './prompt-catalog.js';
-import { replayReportFingerprint } from './prompt-replay-evidence.js';
+import { assertReplayRuntime, replayReportFingerprint } from './prompt-replay-evidence.js';
 import { simulators } from './simulator-client.js';
 
 const sha=(value:string)=>createHash('sha256').update(value).digest('hex');
@@ -32,6 +32,7 @@ export async function verifyGoldenPlatform(db:DataSource,input:{candidate:string
   if (!row?.snapshot?.verified || !row.snapshot.owner_id || (row.account_ref??row.contact_ref)!==fixture) throw Error('case scope mismatch');
   const [run]=await tx.query('SELECT id,case_id,turn FROM agent_run WHERE id=$1',[input.runId]);
   if (!run || run.case_id!==input.caseId || run.turn?.config_revision!==input.candidate || run.turn?.business_date!==evidence.date || run.turn?.text!==question.pregunta || run.turn?.scope_ref!=='verified' || run.turn?.actor!=='cliente' || run.turn?.attention_mode!=='asistido' || run.turn?.audience!=='asesor') throw Error('golden run mismatch');
+  await assertReplayRuntime(tx,input.caseId,[input.runId],evidence.runtime_sha256);
   const [queued]=await tx.query(`SELECT created_at FROM attention_event WHERE case_id=$1 AND kind='candidate_replay_queued' AND metadata->>'run_id'=$2 AND metadata->>'candidate_revision'=$3 AND metadata->>'scenario_id'=$4 AND metadata->>'fixture'=$5`,[input.caseId,input.runId,input.candidate,input.goldenId,fixture]);
   if(!queued) throw Error('trusted candidate replay marker missing');
   const start=new Date(queued.created_at),[{closed_at}]=await tx.query('SELECT transaction_timestamp() AS closed_at'),end=new Date(closed_at);

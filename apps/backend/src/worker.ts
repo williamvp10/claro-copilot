@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { setTimeout as wait } from 'node:timers/promises';
 import { Logger, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { createAgent, createJevDecisionAdapter, createOpenAIPublicWriter, createOpenAIEvidenceSelector, recordQuestion, type AgentObservation } from '@claro/agent';
+import { createAgent, isModelObservation, recordQuestion, type AgentObservation } from '@claro/agent';
 import { RunResult, type AgentTurn, type Citation, type RunResume } from '@claro/contracts';
 import { createClient } from 'redis';
 import type { DataSource } from 'typeorm';
@@ -12,6 +12,7 @@ import { audit, createDatabase, enqueue, type CaseJob } from './database.js';
 import { addMessage, loadCase, saveCase, stillCurrent, latestAnalyzable, isLegacyKnowledgeWait } from './cases.js';
 import { businessPorts, runContext } from './business.js';
 import { integrationMcpPorts } from './integration-mcp-client.js';
+import { agentProviders } from './agent-providers.js';
 import { readRunPromptConfig } from './prompt-catalog.js';
 import { configuredKnowledge } from './knowledge.js';
 import { exportAgentSpan } from './telemetry.js';
@@ -19,6 +20,7 @@ import { executeAgentIntegration, executeIntegration } from './integration-opera
 import { accountVerificationPrompt } from './demo-accounts.js';
 import { predictIntent, predictChurn, sendLabel } from './ml-advisory.js';
 import { observeSimulators, SimulatorFailure } from './simulator-client.js';
+import { runtimeSha256 } from './runtime-revision.js';
 
 @Module({})
 class WorkerModule {}
@@ -32,9 +34,6 @@ if (redis) {
   redis.on('error', () => logger.warn('Redis unavailable'));
   await redis.connect().catch(() => undefined);
 }
-const live = process.env.AGENT_PROVIDERS === 'live';
-const routerKey = process.env.OPENROUTER_API_KEY;
-const openaiKey = process.env.OPENAI_API_KEY;
 const observations = new Map<string, AgentObservation[]>();
 const basePorts = businessPorts(db);
 const ports = process.env.CRM_MCP_URL && process.env.BILLING_MCP_URL ? integrationMcpPorts(db, basePorts) : basePorts;
@@ -42,11 +41,8 @@ const runner = createAgent({
   ...ports,
   getAgentConfig: revision => readRunPromptConfig(db, revision)
 }, {
-  requireApprovedPrompts: live,
+  ...agentProviders(),
   knowledge: configuredKnowledge(db).adapter,
-  decision: live && routerKey ? createJevDecisionAdapter({ apiKey: routerKey, model: process.env.JEV_MODEL || 'typesafe/jev-1.14' }) : undefined,
-  writer: live && openaiKey ? createOpenAIPublicWriter({apiKey:openaiKey}) : undefined,
-  evidenceSelector: live && openaiKey ? createOpenAIEvidenceSelector({apiKey:openaiKey,models:{economico:'gpt-6-luna',intermedio:'gpt-6.1-terra',complejo:'gpt-6.2-sol'}}) : undefined,
   observe: (runId, item) => {
     const list = observations.get(runId);
     if (list) list.push(item);
@@ -57,7 +53,14 @@ const runner = createAgent({
       return row ? RunResult.parse(row.result) : undefined;
     },
     async put(key, value) {
-      await db.query('INSERT INTO agent_checkpoint VALUES ($1,$2) ON CONFLICT DO NOTHING', [key, value]);
+      if (!key.startsWith('run:')) {
+        await db.query('INSERT INTO agent_checkpoint VALUES ($1,$2) ON CONFLICT DO NOTHING', [key,value]);
+        return;
+      }
+      await db.query(`WITH saved AS (INSERT INTO agent_checkpoint VALUES ($1,$2) ON CONFLICT DO NOTHING RETURNING id)
+        INSERT INTO attention_event(case_id,kind,metadata)
+        SELECT run.case_id,'agent_result_checkpointed',jsonb_build_object('run_id',run.id,'runtime_sha256',$4::text)
+        FROM saved JOIN agent_run run ON run.id=$3`,[key,value,key.slice(4),runtimeSha256]);
     }
   }
 });
@@ -101,9 +104,13 @@ async function project(turn: AgentTurn, result: RunResult) {
       if (conversationalVerification) {
         row.account_inquiry ??= result.route === 'facturacion' ? 'invoice' : 'assistance';
       } else if (result.type === 'handoff') {
+        if (result.commercial_plan && row.handoff_pending && !isLegacyKnowledgeWait(row)) return;
         row.handoff_pending = result.pending;
         row.snapshot.handoff_reason = result.pending.slice(0,300);
-        await audit(tx, row.id, 'handoff');
+        if (result.commercial_plan) {
+          row.snapshot.conversation_memory={segment:result.commercial_plan.segment,selected_plan:result.commercial_plan};
+          await audit(tx,row.id,'handoff_requested',{channel:turn.channel,reason:'commercial_purchase',run_id:turn.run_id});
+        } else await audit(tx, row.id, 'handoff');
       }
       if (result.type==='answer' && result.conversation_memory) row.snapshot.conversation_memory=result.conversation_memory;
       if (result.route!=='consulta_planes') delete row.snapshot.conversation_memory;
@@ -149,7 +156,7 @@ async function project(turn: AgentTurn, result: RunResult) {
       await audit(tx,row.id,'conversation_publication',metadata);
       await audit(tx,row.id,'conversation_completed',metadata);
     }
-    await audit(tx, row.id, 'agent_completed', { run_id: turn.run_id, route: result.route, clarification });
+    await audit(tx, row.id, 'agent_completed', { run_id: turn.run_id, route: result.route, clarification, runtime_sha256:runtimeSha256 });
     await saveCase(tx, row);
   });
 }
@@ -224,13 +231,14 @@ async function deliver(job: Extract<CaseJob, {kind: 'deliver'}>) {
 async function handle(job: CaseJob) {
   switch (job.kind) {
     case 'run': {
-      if (job.payload.observed_context) {
+      if (job.payload.observed_context && job.payload.observed_context.decision!=='prepare_commercial_handoff') {
         const at=Date.now();
         const metadata=job.payload.observed_context;
         const config=await readRunPromptConfig(db,job.payload.config_revision);
-        if (await exportAgentSpan(job.payload,at,'context',metadata.decision,[{name:'context',started:at,ended:at,
-          metadata:{decision:metadata.decision,question_id:metadata.question_id ?? '',agent_id:'copiloto'}}],config.prompt_metadata)) {
-          await audit(db.manager,job.case_id,'langfuse_exported',{run_id:job.payload.run_id});
+        const traceSha = await exportAgentSpan(job.payload,at,'context',metadata.decision,[{name:'context',started:at,ended:at,
+          metadata:{decision:metadata.decision,question_id:metadata.question_id ?? '',agent_id:'copiloto'}}],config.prompt_metadata);
+        if (traceSha) {
+          await audit(db.manager,job.case_id,'langfuse_exported',{run_id:job.payload.run_id,trace_sha256:traceSha});
         }
         break;
       }
@@ -244,12 +252,13 @@ async function handle(job: CaseJob) {
       await project(job.payload, result);
       await audit(db.manager, job.case_id, 'agent_latency', { ms: Date.now() - started, run_id:job.payload.run_id, route:result.route });
       for (const item of spans) {
-        if (item.name === 'generation.openai' || item.name === 'decision.jev' || item.name.startsWith('tool.')) {
+        if (isModelObservation(item.name) || item.name.startsWith('tool.')) {
           await audit(db.manager, job.case_id, item.name, { ...item.metadata, route:result.route, run_id:job.payload.run_id, ms: item.ended - item.started });
         }
       }
-      if (await exportAgentSpan(job.payload, started, result.route, result.type, spans, promptConfig.prompt_metadata)) {
-        await audit(db.manager, job.case_id, 'langfuse_exported', {run_id:job.payload.run_id});
+      const traceSha = await exportAgentSpan(job.payload, started, result.route, result.type, spans, promptConfig.prompt_metadata);
+      if (traceSha) {
+        await audit(db.manager, job.case_id, 'langfuse_exported', {run_id:job.payload.run_id,trace_sha256:traceSha});
       }
       if (redis?.isReady) {
         await redis.set(`conversation:${job.payload.conversation_id}`, JSON.stringify({ lastRun: job.payload.run_id }), { expiration: { type: 'EX', value: 86400 } }).catch(() => undefined);

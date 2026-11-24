@@ -155,7 +155,8 @@ export default function CustomerChat() {
           {message.citations?.map(citation => citation.source
             ? <a key={citation.id} className={styles.sourceLink}
                 href={`/fuentes/${citation.source.publication}/${citation.source.key}?pasaje=${encodeURIComponent(citation.id)}`}
-                target="_blank" rel="noreferrer"><FileText size={14} aria-hidden="true" /> Ver fuente · {citation.title.split(' · ')[0]}</a>
+                target="_blank" rel="noreferrer"><FileText size={14} aria-hidden="true" /> {/^catalogo-v\d+$/.test(citation.source.key)
+                  ? `Ver o descargar catálogo · ${citation.version}` : `Ver fuente · ${citation.title.split(' · ')[0]}`}</a>
             : <details key={citation.id} className={styles.citation}>
                 <summary><FileText size={14} />{citation.title} · {citation.version}</summary><p>{citation.excerpt}</p>
               </details>)}

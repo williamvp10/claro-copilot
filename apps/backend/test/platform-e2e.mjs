@@ -183,8 +183,19 @@ try {
   await post(`/cases/${eligible.id}/messages`, {text:'Puedo ofrecer el descuento del 30 %.',idempotency_key:randomUUID()});
   await cards(eligible.id, x=>x.card?.next_action.includes('Esperar la decisión'));
   await incoming('C-1004','Acepto el descuento del 30 %.');
+  const withdrawn=(await cards(eligible.id,x=>x.card?.proposal?.status==='pending_approval')).card.proposal;
+  await incoming('C-1004','Ya no quiero cancelar. Mejor quiero cambiarme a un plan más barato.');
+  await request(api+`/proposals/${withdrawn.id}/decision`,{cookie,method:'POST',status:409,
+    body:{decision:'approved',revision:withdrawn.revision,idempotency_key:randomUUID()}});
+  const [expired]=(await db.query("SELECT proposal->>'status' AS status FROM retention_proposal WHERE id=$1",[withdrawn.id])).rows;
+  assert.equal(expired.status,'expired');
+  assert.equal(await count(eligible.id,'retention_confirmed'),0);
+  await incoming('C-1004','Quiero cancelar el servicio.');
+  await cards(eligible.id,x=>x.card?.reason_codes.includes('retention_eligible') && !x.card.proposal);
+  await incoming('C-1004','Acepto el descuento del 30 %.');
   const proposed = await cards(eligible.id, x=>x.card?.proposal?.status==='pending_approval');
   const p = proposed.card.proposal;
+  assert.notEqual(p.id,withdrawn.id);
   const confirm = {decision:'approved',revision:p.revision,idempotency_key:randomUUID()};
   assert.equal(await count(eligible.id,'retention_confirmed'), 0);
   await Promise.all([post(`/proposals/${p.id}/decision`,confirm),post(`/proposals/${p.id}/decision`,confirm)]);

@@ -1,6 +1,7 @@
 import type { DataSource } from 'typeorm';
 import { z } from 'zod';
 import { Intent } from '@claro/contracts';
+import { modelObservationNames } from '@claro/agent';
 import { browserEndpoint, projectComparison } from './dashboard.js';
 import { readModelMetrics, traceIdentifier } from './telemetry.js';
 
@@ -263,6 +264,7 @@ async function apiHealth(days: number): Promise<Partial<Health>> {
 }
 
 type Timing = {date:string|null;kind:string;p95:number;sample:number};
+type ModelCosts = {date:string|null;usd:number|null;conversations:number;requests:number;measured:number};
 async function technical(db: DataSource, filters: Filters) {
   const [timing, costs, probes, freshness] = await Promise.all([
     db.query(`
@@ -276,11 +278,17 @@ async function technical(db: DataSource, filters: Filters) {
         FROM eligible GROUP BY GROUPING SETS ((date,kind),(kind)) ORDER BY date,kind`,windowParams(filters)) as Promise<Timing[]>,
     db.query(`
       WITH bounds AS (${timeline}),cases AS (${scopedCases}), grouped AS (
-        SELECT e.case_id,(e.created_at AT TIME ZONE $4)::date::text AS date,(e.metadata->>'cost_usd')::float AS amount
+        SELECT e.case_id,e.kind,(e.created_at AT TIME ZONE $4)::date::text AS date,
+          CASE WHEN e.kind=ANY($5::text[]) AND jsonb_typeof(e.metadata->'cost_usd')='number'
+            THEN (e.metadata->>'cost_usd')::float END AS amount,
+          e.kind=ANY($5::text[]) AND (e.kind<>'decision.jev' OR e.metadata->>'provider_attempted'='yes') AS request
         FROM attention_event e JOIN cases c ON c.id=e.case_id CROSS JOIN bounds b
-        WHERE e.created_at>=((b.today-($1::int-1))::timestamp AT TIME ZONE $4) AND e.kind='generation.openai'
-          AND jsonb_typeof(e.metadata->'cost_usd')='number' AND ($3='all' OR c.category=$3)
-      ) SELECT date,sum(amount)::float AS usd,count(DISTINCT case_id)::int AS total FROM grouped GROUP BY GROUPING SETS ((date),()) ORDER BY date`,windowParams(filters)),
+        WHERE e.created_at>=((b.today-($1::int-1))::timestamp AT TIME ZONE $4) AND
+          (e.kind='agent_latency' OR e.kind=ANY($5::text[])) AND
+          ($3='all' OR COALESCE(e.metadata->>'route',c.category)=$3)
+      ) SELECT date,sum(amount)::float AS usd,count(DISTINCT case_id)::int AS conversations,
+          count(*) FILTER(WHERE request)::int AS requests,count(amount)::int AS measured
+        FROM grouped GROUP BY GROUPING SETS ((date),()) ORDER BY date`,[...windowParams(filters),modelObservationNames]) as Promise<ModelCosts[]>,
     apiHealth(filters.days),
     db.query(`SELECT published_at,manifest->>'detected_at' AS detected_at FROM knowledge_publication
       WHERE published_at>=now()-$1::int*interval '1 day' AND manifest ? 'detected_at' ORDER BY published_at DESC LIMIT 30`,[filters.days])
@@ -290,7 +298,7 @@ async function technical(db: DataSource, filters: Filters) {
     return {value:total?.p95,sample:total?.sample,denominator:total?.sample,
       series:timing.flatMap(row=>row.kind===kind && row.date ? [{date:row.date,value:row.p95,sample:row.sample}] : [])};
   };
-  const cost = costs.find((row:{date:string|null})=>row.date===null);
+  const cost = costs.find(row=>row.date===null);
   const fresh = freshness.flatMap((row:{published_at:Date;detected_at:string})=>{
     const ms = new Date(row.published_at).getTime()-new Date(row.detected_at).getTime();
     return Number.isFinite(ms) && ms>=0 ? [{date:new Date(row.published_at).toISOString(),value:ms/60_000}] : [];
@@ -303,9 +311,15 @@ async function technical(db: DataSource, filters: Filters) {
     metric('first_token_p95','Primer token p95','ms',platform,{status:'pending_instrumentation'}),
     metric('worker_p95','Latencia del worker p95','ms',platform,latency('agent_latency')),
     metric('availability','Disponibilidad de API','%','Prometheus · up',{...probes,target:'≥ 99 %'}),
-    metric('cost_per_conversation','Costo de generación por conversación instrumentada','USD',platform,{
-      value:cost?.total?cost.usd/cost.total:null,sample:cost?.total,denominator:cost?.total,
-      series:costs.flatMap((row:{date:string|null;usd:number;total:number})=>row.date && row.total ? [{date:row.date,value:row.usd/row.total,sample:row.total}] : [])}),
+    metric('cost_per_conversation','Costo observado de modelos por conversación instrumentada','USD',platform,{
+      value:cost?.conversations && cost.usd!==null ? cost.usd/cost.conversations : null,
+      sample:cost?.conversations,denominator:cost?.conversations,
+      series:costs.flatMap(row=>row.date && row.conversations && row.usd!==null
+        ? [{date:row.date,value:row.usd/row.conversations,sample:row.conversations}] : [])}),
+    metric('model_cost_coverage','Solicitudes a modelos con costo registrado','%',platform,{
+      value:cost?.requests ? 100*cost.measured/cost.requests : null,sample:cost?.measured,denominator:cost?.requests,
+      series:costs.flatMap(row=>row.date && row.requests
+        ? [{date:row.date,value:100*row.measured/row.requests,sample:row.requests}] : [])}),
     metric('generation_budget','Presupuesto de generación por turno','USD','Política de generación',{status:'target_only',target:'USD 0,02 por turno'}),
     metric('freshness','Detección a publicación del índice','min','PostgreSQL · Publicación de conocimiento',{
       value:fresh.at(-1)?.value,sample:fresh.length,series:fresh,target:'≤ 15 min',status:fresh.length?'measured':'pending_instrumentation'})

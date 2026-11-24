@@ -29,7 +29,7 @@ export function accountInquiry(text: string): AccountInquiry | null {
 }
 
 export function requestedAdvisor(text: string) {
-  return /\b(?:hablar|comunicarme|comunicar|atencion)\s+(?:con|de)\s+(?:un |una )?(?:asesor|asesora|humano|persona)\b|\b(?:quiero|necesito|prefiero|pasame con|comunican?me con)\s+(?:un |una |el |la )?asesor(?:a)?\b|^\s*asesor(?:a)?[.!?]?\s*$/i
+  return /\b(?:hablar|comunicarme|comunicar|atencion)\s+(?:con|de)\s+(?:un |una )?(?:asesor|asesora|humano|persona)\b|\b(?:quiero|necesito|prefiero|pasame con|comunican?me con)\s+(?:que me (?:ayude|atienda) )?(?:un |una |el |la )?asesor(?:a)?\b|^\s*asesor(?:a)?[.!?]?\s*$/i
     .test(text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
 }
 

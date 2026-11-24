@@ -3,6 +3,7 @@ import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
+import { TransientReadError } from '@claro/contracts';
 import { createDatabase } from './database.js';
 import { assertActiveCaseOperator, businessPorts, runContext } from './business.js';
 import { constantEqual, stillCurrent } from './cases.js';
@@ -34,8 +35,14 @@ app.post('/mcp', async (req,res) => {
         const current = await runContext(db.manager,cap.run_id,false);
         if (!stillCurrent(current.row,current.turn) || !current.row.snapshot.verified || !current.row.snapshot.owner_id || current.turn.audience !== 'asesor' || cap.exp <= Date.now()) throw new Error('scope denied');
         await assertActiveCaseOperator(db.manager,current.row);
-        const data = await read(selector ? args.invoice_id : undefined);
-        return {structuredContent:{data},content:[{type:'text' as const,text:JSON.stringify({data})}]};
+        try {
+          const data = await read(selector ? args.invoice_id : undefined);
+          return {structuredContent:{data},content:[{type:'text' as const,text:JSON.stringify({data})}]};
+        } catch (error) {
+          if (!(error instanceof TransientReadError)) throw error;
+          return {isError:true,structuredContent:{code:'read_temporarily_unavailable'},
+            content:[{type:'text' as const,text:'Read source temporarily unavailable'}]};
+        }
       });
     };
     if (domain === 'crm') {

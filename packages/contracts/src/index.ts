@@ -33,7 +33,9 @@ export const CatalogPlan = z.object({
 export type CatalogPlan = z.infer<typeof CatalogPlan>;
 export const ConversationMemory = z.object({
   segment: CatalogSegment.optional(), anchor_plan: z.string().min(1).max(80).optional(),
-  preference: z.literal('lower_price').optional(), pending: z.literal('compare_prices').optional(), package_validity: PackageValidity.optional()
+  preference: z.literal('lower_price').optional(), pending: z.literal('compare_prices').optional(), package_validity: PackageValidity.optional(),
+  selected_plan: CatalogPlan.optional(),
+  purchase_confirmation: z.boolean().optional()
 });
 export type ConversationMemory = z.infer<typeof ConversationMemory>;
 export const KnowledgeTags = z.object({
@@ -96,7 +98,8 @@ export const AdvisorCard = z.object({
   pending: z.array(z.string()), next_action: z.string(), reason_codes: z.array(z.string()), suggested_escalation: z.object({destination:z.enum(['soporte_tecnico','supervision']),reason_code:z.string().min(3).max(120)}).optional(), advisor_draft: z.string().optional(), advisor_draft_run_id: z.string().optional(),
   advisor_draft_case_revision: z.number().int().positive().optional(), advisor_draft_turn_seq: z.number().int().positive().optional(),
   advisor_draft_status: z.enum(['current','stale']).optional(), handoff_summary: z.string().optional(), proposal: Proposal.optional(),
-  context_question: ContextQuestion.optional()
+  context_question: ContextQuestion.optional(),
+  objectives: z.array(Intent).max(5).optional(), closure_summary: z.string().max(4000).optional()
 });
 export type AdvisorCard = z.infer<typeof AdvisorCard>;
 export const CaseSummary = z.object({
@@ -168,13 +171,14 @@ export const AgentTurn = z.object({
   turn_seq: z.number().int().positive(), case_revision: z.number().int().positive(),
   attention_mode: AttentionMode, audience: Audience, scope_ref: Id, config_revision: Id,
   business_date: z.iso.date(), text: Text, traceparent: z.string().optional(),
-  observed_context: z.object({decision:z.enum(['ask','handoff']),question_id:Id.optional()}).optional()
+  observed_context: z.object({decision:z.enum(['ask','handoff','prepare_commercial_handoff']),question_id:Id.optional()}).optional()
 });
 export type AgentTurn = z.infer<typeof AgentTurn>;
 export const RunResult = z.discriminatedUnion('type', [
   z.object({ type: z.literal('answer'), answer: Text, citations: z.array(Citation), route: Id, needs_clarification: z.literal(true).optional(), context_question: ContextQuestion.optional(),
     conversation_memory: ConversationMemory.optional(), catalog_answer: z.literal(true).optional() }),
-  z.object({ type: z.literal('handoff'), reason: Text, pending: Text, route: Id, verification_required: z.literal(true).optional() }),
+  z.object({ type: z.literal('handoff'), reason: Text, pending: Text, route: Id, verification_required: z.literal(true).optional(),
+    commercial_plan: CatalogPlan.optional() }),
   z.object({ type: z.literal('card'), card: AdvisorCard, route: Id }),
   z.object({ type: z.literal('failed'), reason: Id, route: Id })
 ]);
@@ -190,8 +194,12 @@ export type AgentConfig = {
   models?: Partial<Record<'economico' | 'intermedio' | 'complejo', string>>;
 };
 export type Retention = { eligible: boolean; reason: string; facts: Fact[]; policy: Citation; options: { id: string; title: string; detail: string }[] };
+export type ConfirmedReceipt = { kind: 'ticket' | 'offer' | 'adjustment'; reference: string };
+export class TransientReadError extends Error {
+  constructor() { super('Read source temporarily unavailable'); }
+}
 export interface AgentPorts {
-  readCaseForRun(runId: string): Promise<{ messages: Message[]; verified: boolean; pending: string | null; intake?: CaseIntake; conversation_memory?: ConversationMemory }>;
+  readCaseForRun(runId: string): Promise<{ messages: Message[]; verified: boolean; pending: string | null; intake?: CaseIntake; conversation_memory?: ConversationMemory; confirmed_receipts?: ConfirmedReceipt[]; pending_support_handoff?: boolean }>;
   getAgentConfig(revision: string): Promise<AgentConfig>;
   getCustomerContext(runId: string): Promise<Fact[]>;
   listServices?(runId: string): Promise<Fact[]>;
@@ -224,10 +232,12 @@ export type DashboardDay = {
 };
 export type EvalMetrics = {
   accuracy: number | null; groundedness: number | null; recall_at_5: number | null;
-  unresolved_critical?: number; cost_usd?: number
+  unresolved_critical?: number; cost_usd?: number;
+  model_requests?:number; model_requests_with_cost?:number;
+  judged_turns?:number; judged_turns_with_cost?:number; judge_cost_usd?:number
 };
 export type EvalComparison = {
-  evidence?: { golden_sha256?:string; scenarios_sha256?:string; corpus_sha256?:string };
+  evidence?: { golden_sha256?:string; scenarios_sha256?:string; corpus_sha256?:string; runtime_sha256?:string };
   gate: string; baseline: EvalMetrics; candidate: EvalMetrics;
   cases: { id: string; baseline: string; candidate: string; human_review: boolean }[];
   date?: string; rubric?: string; provider_mode?: string

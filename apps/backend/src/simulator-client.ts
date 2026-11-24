@@ -28,6 +28,11 @@ export class SimulatorFailure extends Error {
   }
 }
 
+export function isTransientSimulatorRead(error: SimulatorFailure): boolean {
+  return error.code !== 'API_NO_CONFIGURADA' &&
+    (error.status === 408 || error.status >= 500 || (error.status === 429 && error.retryAfter === 0));
+}
+
 async function request<T>(service: Simulator, path: string, schema: z.ZodType<T>, options: Options = {}): Promise<T> {
   const prefix = prefixes[service];
   const base = process.env[prefix + '_API_URL'];

@@ -1,4 +1,5 @@
 import type { CaseIntake, ContextQuestion, Intent } from '@claro/contracts';
+import { changesCancellationToPlan, portabilityRequest } from './objectives.js';
 
 const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
 const measuredSpeed = /\b(?:me da|me marca|me llegan?)\s+\d{1,4}\s*(?:megas?|mbps)\b/;
@@ -15,6 +16,8 @@ export const contextQuestions = [
     'El motivo es una falla y falta la frecuencia.','Ya indicó la frecuencia o pidió continuar.', 'propuesta',['TRX-0031']),
   question('soporte_tecnico','medio','¿Mediste la velocidad por Wi-Fi o con un equipo conectado por cable?','Elegir la comprobación de velocidad adecuada.',
     'Hay lentitud y se desconoce el medio de medición.','El cliente ya indicó cómo midió.', 'observada',['TRX-0001','TRX-0006','TRX-0030','TRX-0042','TRX-0046']),
+  question('soporte_tecnico','alcance_intermitencia','¿Las videollamadas también se cortan en otro dispositivo o solo en uno?','Distinguir si el síntoma se limita a un dispositivo.',
+    'La medición por cable fue normal y se reportan cortes en videollamadas.','Ya indicó en cuántos dispositivos ocurre.', 'propuesta',[]),
   question('soporte_tecnico','duracion','¿Hace cuánto está roja la luz LOS?','Determinar si aplica el escalamiento de soporte.',
     'La luz LOS está roja y se desconoce la duración.','Hay duración suficiente o se activa un escalamiento prioritario.', 'propuesta',['TRX-0009','TRX-0043']),
   question('soporte_tecnico','cable','¿Ves el cable delgado de fibra doblado o desconectado?','Comprobar visualmente el cable en una falla de fibra.',
@@ -49,11 +52,12 @@ export function questionById(id?:string): ContextQuestion|undefined {
 
 export function contextIntent(input:string):Intent|undefined {
   const text=normalize(input);
+  if (changesCancellationToPlan(text)) return 'consulta_planes';
   if (/\b(?:cancel\w*|dar de baja|retirar el servicio)\b/.test(text) && !/\bpolitica de retencion\b/.test(text)) return 'cancelacion';
-  if (/\b(?:portab\w*|portar\w*|mismo numero)\b/.test(text)) return 'portabilidad';
-  if (/\b(?:factur\w*|saldo|cobro|cargo|pague|pago|pse)\b/.test(text)) return 'facturacion';
-  if (measuredSpeed.test(text) || /\b(?:e[ -]?202|los roja?|wi[ -]?fi|lent\w*|intermiten\w*|se cae|sin internet|sin senal|decodificador|modem)\b/.test(text)) return 'soporte_tecnico';
-  if (/\b(?:planes?|fibra|pospago|prepago|paquetes?)\b/.test(text)) return 'consulta_planes';
+  if (portabilityRequest.test(text)) return 'portabilidad';
+  if (/\b(?:factur\w*|saldo|cobro|cargo|pague|pagar|pago|pse|fecha de corte)\b/.test(text)) return 'facturacion';
+  if (measuredSpeed.test(text) || /\b(?:e[ -]?202|los roja?|wi[ -]?fi|lent\w*|intermiten\w*|se cae|sin internet|sin senal|decodificador|decobox|modem|control parental)\b/.test(text)) return 'soporte_tecnico';
+  if (/\b(?:planes?|fibra|pospago|prepago|paquetes?|(?:claro )?max (?:\d+ gb|ilimitado))\b/.test(text)) return 'consulta_planes';
   return undefined;
 }
 
@@ -69,7 +73,7 @@ export function evolveContext(input:string, previous?:CaseIntake, intentHint?:In
     ? {...previous,facts:{...previous.facts},asked:[...previous.asked]}
     : {intent,facts:{},asked:[]};
   const known=current.facts;
-  if (/\b(?:prefiero no|no quiero (?:decir|responder|explicar)|omitir|salt(?:ar|emos)|solo (?:quiero )?cancelar|igual quiero cancelar|proceda|hagale|contin[uú]a)\b/.test(text)) current.skip=true;
+  if (/\b(?:prefiero no|no quiero (?:decir|responder|explicar)|omitir|salt(?:ar|emos)|solo (?:quiero )?cancelar|igual quiero cancelar|proceda|hagale|continua|continue)\b/.test(text)) current.skip=true;
   if (intent==='cancelacion') {
     if (/\b(?:mud\w*|traslad\w*|sin cobertura|no (?:hay|tienen) cobertura)\b/.test(text)) known.motivo='Mudanza o cobertura';
     else if (/\b(?:fall\w*|intermiten\w*|cae|corta|funciona|sin internet|inestable)\b/.test(text)) known.motivo='Fallas del servicio';
@@ -89,12 +93,19 @@ export function evolveContext(input:string, previous?:CaseIntake, intentHint?:In
     else if (measuredSpeed.test(text) || /\b(?:lent\w*|velocidad|med[ií])\b/.test(text)) known.sintoma='Lentitud';
     if (/\b(?:por|via|conectad[oa] por) (?:el )?cable\b/.test(text) || text==='cable') known.medio='Cable';
     else if (/\bwi[ -]?fi\b/.test(text)) known.medio='Wi-Fi';
+    if (known.medio==='Cable' && /\bvelocidad\b[^.!?]{0,22}\b(?:es |esta |sale )?(?:normal|bien)\b/.test(text) &&
+        !/\bvelocidad\b[^.!?]{0,22}\bno\s+(?:es |esta |sale )?(?:normal|bien)\b/.test(text)) known.velocidad='Normal según el cliente';
+    if (/\bvideollamadas?\b/.test(text) && /\b(?:intermiten\w*|(?:se )?(?:caen|cortan))\b/.test(text)) known.sintoma='Cortes en videollamadas';
+    if (known.sintoma==='Cortes en videollamadas' &&
+        /\b(?:en (?:otro|varios|todos los|dos) (?:equipo|dispositivo)s?|solo en (?:mi |un )?(?:equipo|dispositivo|celular|computador|uno))\b/.test(text)) {
+      known.alcance_intermitencia='Alcance informado';
+    }
     const duration=text.match(/\b(\d{1,3}|un|una|dos|media|varias|diez|treinta)\s*(minutos?|horas?)\b/);
     if (duration) known.duracion=duration[0];
     if (/\b(?:cable|fibra)\b/.test(text) && /\b(?:doblad\w*|desconectad\w*|bien conectado)\b/.test(text)) known.cable='Estado del cable informado';
     if (current.pending==='imagen') {
-      if (/\b(?:volvio|ya veo|se arreglo|funciona|si)\b/.test(text) && !/^no\b/.test(text)) known.imagen='Imagen recuperada';
-      else if (/\b(?:sigue igual|no (?:volvio|funciona|veo)|no)\b/.test(text)) known.imagen='Imagen aún ausente';
+      const outcome=text.match(/\b(?:sigue igual|no (?:volvio|regreso|funciona|veo|se arreglo)|(?:aun|todavia) no|volvio|regreso|ya veo|se arreglo|funciona)\b|^si(?=[,.! ]|$)|^no[.! ]*$/g)?.at(-1);
+      if (outcome) known.imagen=/\bno\b|sigue igual/.test(outcome) ? 'Imagen aún ausente' : 'Imagen recuperada';
     }
   }
   if (intent==='facturacion') {
@@ -121,7 +132,7 @@ export function evolveContext(input:string, previous?:CaseIntake, intentHint?:In
   }
   if (intent==='portabilidad') {
     if (/\b(?:a claro|para claro|hacia claro|traer (?:mi|el) numero)\b/.test(text)) known.direccion='Hacia Claro';
-    if (/\b(?:otro operador|salir de claro)\b/.test(text)) known.direccion='Hacia otro operador';
+    if (/\b(?:otro operador|cambiar de operador|salir de claro)\b/.test(text)) known.direccion='Hacia otro operador';
     if (/\b(?:intento|intenta\w*|rechaz\w*|solicite|bloquead\w*)\b/.test(text)) known.incidencia='Incidencia en portabilidad';
     if (/\b(?:quiero|como)\b/.test(text) && /\b(?:portar\w*|portabilidad|mismo numero)\b/.test(text) && !/\b(?:deuda|tarda|dias|plazo|requisito)\b/.test(text)) known.objetivo='Orientación de portabilidad';
     if (/\b(?:ya (?:inicie|esta|solicite)|en tramite)\b/.test(text)) known.tramite='Solicitud iniciada';
@@ -141,6 +152,7 @@ export function nextContextQuestion(intake?:CaseIntake):ContextQuestion|undefine
   if (intent==='soporte_tecnico') {
     if (facts.equipo==='Decodificador' && !facts.codigo) id='codigo';
     if (facts.sintoma==='Lentitud' && !facts.medio) id='medio';
+    if (facts.sintoma==='Cortes en videollamadas' && facts.medio==='Cable' && facts.velocidad && !facts.alcance_intermitencia) id='alcance_intermitencia';
     if (facts.sintoma==='Luz LOS roja' && !facts.duracion) id='duracion';
     else if (facts.sintoma==='Luz LOS roja' && !facts.cable) id='cable';
   }

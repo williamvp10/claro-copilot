@@ -1,18 +1,28 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { CatalogPlan, Citation, KnowledgeSearchFilters, KnowledgeTags } from '@claro/contracts';
+import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { CatalogPlan, Citation, KnowledgeSearchFilters, KnowledgeTags, TransientReadError } from '@claro/contracts';
 import type { KnowledgeAdapter, KnowledgeDocument } from './index.js';
 
 export type KnowledgeMcpOptions = {url:string; token?:string; trustedLocal?:boolean; timeoutMs?:number; fetch?:typeof globalThis.fetch; revision?:string};
+
+export function isTransientMcpRead(error: unknown): boolean {
+ if (error instanceof McpError) return error.code===ErrorCode.RequestTimeout;
+ if (error instanceof StreamableHTTPError) return error.code===408 || (error.code ?? 0)>=500;
+ if (error instanceof Error && error.name==='TimeoutError') return true;
+ const cause=error instanceof TypeError ? error.cause : undefined;
+ return typeof cause==='object' && cause!==null && 'code' in cause &&
+  ['ECONNRESET','ECONNREFUSED','ETIMEDOUT','UND_ERR_CONNECT_TIMEOUT','UND_ERR_SOCKET'].includes(String(cause.code));
+}
 // Closed vocabulary prevents arbitrary names, addresses and account numbers being transmitted.
 const vocabulary = new Set((
   'internet fibra hogar plan planes triple play max movil moviles pospago precio cuanto cuanta incluye bono ' +
   'instalacion reconecta reconexion permanencia penalidad clausula regulacion prorrateo costo cargo compensacion ' +
   'ajuste tarifa pqr plazo pin nip deuda deudas requisitos usuario clave contrasena recargo suspender restablezco ' +
   'restablecer reinicio fabrica control parental antiguedad nuevo actuales cambiar cobertura velocidad promocion ' +
-  'descuento factura pago soporte modem wifi decodificador television televisor tv senal error refrescar reiniciar ' +
+  'descuento factura pago financiado financiacion soporte modem wifi decodificador television televisor tv senal error refrescar reiniciar ' +
   'pantalla canal canales azul negro rojo luz luces intermitente parpadea sin con no funciona repetidor ilimitado ' +
-  'datos minutos mensajes red portabilidad cancelar cancelacion politica retencion elegibilidad requisitos mora visita ticket'
+  'datos minutos mensajes red portabilidad cancelar cancelacion politica retencion elegibilidad requisitos mora visita ticket esim roaming compatibilidad apple watch intermitencia videollamada videollamadas recurrencia recurrentes fallas prioritaria'
 ).split(' '));
 export function safeKnowledgeQuery(query:string):string {
  const normalized=query.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
@@ -58,6 +68,9 @@ export function createKnowledgeMcpAdapter(options:KnowledgeMcpOptions):Knowledge
    const result=await client.callTool({name,arguments:{...args,...(options.revision && options.revision!=='legacy' ? {revision:options.revision} : {})}},undefined,{timeout});
    if (result.isError) throw new Error('Knowledge tool failed');
    return result.structuredContent;
+  } catch (error) {
+   if (isTransientMcpRead(error)) throw new TransientReadError();
+   throw error;
   } finally { await client.close().catch(()=>undefined); }
  }
  return {

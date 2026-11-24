@@ -4,7 +4,7 @@ import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createKnowledgePipeline } from '@claro/agent';
-import { indexedOriginal } from '../dist/knowledge-admin.js';
+import { indexedOriginal, KnowledgeSourceController } from '../dist/knowledge-admin.js';
 import { KnowledgeManifest, knowledgeHash, validatePublicationFiles } from '../dist/knowledge-publication.js';
 
 const excerpt='Fibra 500 ofrece 500 Mbps por $109.900.';
@@ -40,6 +40,24 @@ test('only the bytes with the published digest may be downloaded',async()=>{
     await symlink(join(dir,'target'),path);
     assert.equal((await indexedOriginal(dir,source,true)).status,'mismatch');
   } finally { await rm(dir,{recursive:true,force:true}); }
+});
+
+test('a missing catalog PDF keeps its public source metadata available',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'claro-missing-pdf-'));
+  const previous=process.env.KNOWLEDGE_ORIGINALS_DIR;
+  process.env.KNOWLEDGE_ORIGINALS_DIR=dir;
+  const files={'catalogo-v1':{...manifest.files['catalogo-v1'],viewable:true}};
+  const controller=new KnowledgeSourceController({query:async()=>[{manifest:{...manifest,files}}]});
+  try {
+    const metadata=await controller.view(manifest.sha256,'catalogo-v1');
+    assert.equal(metadata.version,document.version);
+    assert.equal(metadata.pdf_available,false);
+    await assert.rejects(controller.pdf(manifest.sha256,'catalogo-v1',{},'1'),{status:404});
+  } finally {
+    if(previous===undefined)delete process.env.KNOWLEDGE_ORIGINALS_DIR;
+    else process.env.KNOWLEDGE_ORIGINALS_DIR=previous;
+    await rm(dir,{recursive:true,force:true});
+  }
 });
 
 test('lab and agent share validity and audience filters and fall back when generation fails',async()=>{

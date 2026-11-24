@@ -43,7 +43,7 @@ El caso guarda en PostgreSQL el servicio activo, el plan de referencia, la prefe
 
 En la secuencia «¿Qué incluye Claro Max Ilimitado?» → «¿Tienen planes más económicos?» → «Dime tú», el agente conserva Ilimitado como referencia. Consulta las filas públicas del catálogo vigente mediante `list_catalog_plans` y calcula el ahorro en COP. La v1 ofrece Claro Max 25 GB por $49.900 al mes y la v2 ofrece Claro Max 30 GB por el mismo precio. Frente a Ilimitado son $50.000 menos al mes. La fuente va aparte del mensaje. Si el servicio aún no está definido, el agente da una opción mensual para hogar y otra para móvil y pregunta cuál interesa. En prepago compara el precio del paquete e indica su vigencia.
 
-Cuando el catálogo no confirma un precio, el agente lo explica y ofrece hablar con un asesor. Una conversación que quedó en espera por falta de evidencia puede volver a autoservicio cuando la comparación queda respaldada y todavía no tiene asesor. La observación de Langfuse `tool.list_catalog_plans` registra el origen de la referencia, la versión del catálogo y el motivo para responder, preguntar u ofrecer la derivación.
+Cuando el catálogo no confirma un precio, el agente lo explica y ofrece hablar con un asesor. Una conversación que quedó en espera por falta de evidencia puede volver a autoservicio cuando la comparación queda respaldada y todavía no tiene asesor. En la candidata con presupuesto de lecturas, `tool.list_catalog_plans` registra los intentos y `catalogue.selection` registra el origen de la referencia, la versión y el motivo para responder, preguntar u ofrecer la derivación. En las revisiones anteriores, la traza de selección se guarda en `tool.list_catalog_plans`.
 
 La comparación de prompts incorpora siete regresiones de catálogo además de las 30 preguntas golden y los 19 escenarios complementarios. La prueba de plataforma ejecuta web y el webhook simulado de Telegram con un reinicio del worker entre turnos.
 
@@ -206,3 +206,41 @@ El asesor asignado puede añadir una pregunta sugerida al borrador. Los datos de
 Claro Copiloto se presenta al abrir la atención. La verificación opcional de demo acepta un alias como `11111` y un código de seis dígitos. Confirma la identidad en el mismo hilo. Las consultas generales de catálogo siguen disponibles durante el autoservicio.
 
 El recorrido pregunta qué incluye Claro Max Ilimitado, consulta si puede cambiarlo y después acepta con «Hágale». La ficha de catálogo aporta el precio y las condiciones del plan. La FAQ aporta el costo del cambio y el ciclo en que aplicaría. La solicitud final se deriva a un asesor para tramitarla. Las citas se adjuntan aparte y los canales de voz y chat aplican su propio límite de redacción.
+
+## Catálogo y contratación por chat
+
+El flujo comercial distingue exploración, listado, detalle, comparación, selección, descarga y contratación. LangGraph usa `list_catalog_plans` para responder a partir de las filas públicas vigentes. Para una pregunta sobre condiciones, busca información aplicable al plan seleccionado. La memoria guarda la elección y su cita hasta que cambie el objetivo. El consentimiento para seguir con un asesor tras un cambio de edición exige la confirmación del turno correspondiente. El worker publica una espera y la toma del caso genera una ficha privada para completar el trámite. [Prompts candidatos](../evolucion-mvp/prompts.candidata-catalogo.json)
+
+### Suite COM y datos de prueba
+
+La suite independiente conserva diez conversaciones y su rúbrica por turno. COM-01 cubre saludo, listado móvil, elección de 60 GB, Claro Video, descarga de la edición citada, solicitud de contratación y reintento. El verificador comprueba el SHA-256 del PDF entregado, la elección persistida, una espera, la ficha que ve el asesor y cero lecturas privadas u operaciones externas. [Casos COM](catalogo-contratacion-evals.v1.jsonl) · [Verificador y publicador](../../apps/backend/scripts/eval-commercial-web.mjs)
+
+Preparar bases sintéticas aisladas a partir del índice contextual publicado. Usar los mismos datos por fixture para base y candidata.
+
+| Fixture | Preparación |
+| --- | --- |
+| `standard` | API del chat con `DEMO_BUSINESS_DATE=2026-11-24`, v1.0 vigente, v2.0 disponible desde diciembre y originales revisados montados por SHA-256. |
+| `edition-change` | Misma base, sesión e índice de `standard`. Una segunda API usa `DEMO_BUSINESS_DATE=2026-12-01`. El runner envía allí los turnos de contratación y confirmación. |
+| `conflict` | Copia de `standard` con un segundo pasaje público pospago, vigente y de la misma edición, que ofrece el plan de 60 GB por $79.900. Prepago conserva su fuente autorizada. |
+| `reserved` | Copia de `standard` con la fila `Conecta 42 GB 42 GB $57.700` en lugar de la fila de 25 GB. Esta oferta existe solo en el fixture de prueba. |
+
+Para servir los PDF, preparar el corpus con `--contextual --originals-dir` y montar el directorio revisado mediante `infra/compose.knowledge-originals.yaml`. El visor informa cuando falta el archivo. El endpoint de descarga verifica los bytes antes de devolverlos. [Operación de fuentes](../../infra/README.md#conocimiento-rag-en-administración)
+
+El archivo privado de destinos contiene `advisor` con `email` y `password` de un asesor sintético y `fixtures` con las cuatro claves de la tabla. Cada destino indica `origin`, la URL local del chat o de su API, y `database`, la conexión PostgreSQL local de la base aislada. Fija `revision` al ID de la revisión activa esperada para rechazar arranques con otra configuración. `edition-change` incluye `laterOrigin`; ambos orígenes usan el mismo hostname para mantener la sesión. Los servidores de prueba deben usar ese origen en `BETTER_AUTH_URL`. El campo opcional `runtime` identifica un build histórico que no emitía su huella por turno.
+
+```sh
+node --env-file=.env.demo.local scripts/bootstrap-langfuse-calls.mjs --catalogue --manifest-evaluator
+DEMO_MODE=true LANGFUSE_BASE_URL=http://localhost:39095 \
+  node --env-file=.env.demo.local apps/backend/scripts/eval-commercial-web.mjs \
+  /ruta/privada/destinos-candidata.json /ruta/privada/comercial-candidata.json --publish --require-pass
+```
+
+Para un replay base, usa las mismas condiciones con sus destinos y conserva el informe aunque falle una aserción. En Langfuse aplica **Jev · Llamadas v1 · Manifiesto** a los 10 ítems de cada experimento. Cada ítem requiere `jev_native_required = completo` y `jev_native_forbidden = limpio`. Comprueba los 20 scores por revisión y repite las 15 llamadas originales con su comando habitual. El informe local identifica la revisión, la huella del manifiesto y del código, los turnos públicos y las comprobaciones de plataforma. [Guía del demo](../08-demo-local.md#evaluar-las-llamadas-con-jev)
+
+Cuando un caso falla, ubica la etapa en la traza antes de editar. Si tomó una ruta equivocada, ajusta contexto o transición. Si falta una fila vigente, revisa el catálogo y sus filtros. Si llegó la fuente correcta, corrige la composición estructurada o el prompt según el paso que produjo la salida. Si falló el PDF o el traspaso, comprueba el endpoint o la proyección del caso. Repite el caso, una variante reservada y las dos suites con el cambio aislado.
+
+### Resultado validado en el demo
+
+El A/B usó el build desplegado como base y la revisión aislada `catalogue_eval_candidate_r4` como candidata. Los dos replays usaron los mismos fixtures sintéticos. Langfuse guardó 20 scores Jev por revisión. La base obtuvo 0/10 aprobados y la candidata, 10/10. El reporte de plataforma verificó los diez casos de la candidata. La prueba en navegador recorrió COM-01 hasta la espera de asesor y descargó `catalogo-v1.pdf`. [Experimentos de catálogo](http://localhost:39095/project/claro-copiloto/datasets/cmwuwwcmo0005qt4jv6tbhdbl/experiments)
+
+Con la misma huella del build, Jev aprobó 15/15 en el replay de las llamadas originales y guardó sus 30 scores. La traza del asesor registró el paso `prepare_handoff` y el SHA-256 de `handoff_summary`. La validación usó proveedores del agente en modo `fixtures` y el evaluador Jev nativo en Langfuse. [Llamadas originales](http://localhost:39095/project/claro-copiloto/datasets/cmwu2zjh30005qt47l6gvq48h/experiments) · [Traza del resumen](http://localhost:39095/project/claro-copiloto/traces/e744da213ffc0fb10567be796f55f5f2)
