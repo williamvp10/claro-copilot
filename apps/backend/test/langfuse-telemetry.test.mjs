@@ -19,8 +19,13 @@ test('Langfuse export links the version and omits case text', async t=>{
   });
   const requests=[];
   let acknowledgment = {};
+  let unavailable = false;
   t.mock.method(globalThis,'fetch',async (url,init)=>{
     requests.push({url:String(url),body:JSON.parse(init.body),redirect:init.redirect});
+    if (unavailable) {
+      unavailable = false;
+      return new Response(null,{status:503});
+    }
     return Response.json(acknowledgment);
   });
   const turn={run_id:'trace-test',conversation_id:'internal-conversation',channel:'web',audience:'cliente',config_revision:'test-v2',text:'Private transcript placeholder'};
@@ -79,6 +84,11 @@ test('Langfuse export links the version and omits case text', async t=>{
   assert.equal(await exportAgentSpan(turn,now,'consulta_planes','answer'),false);
   acknowledgment = {partialSuccess:{rejectedSpans:'0',errorMessage:'Aviso sin pérdida'}};
   assert.match(await exportAgentSpan(turn,now,'consulta_planes','answer'),/^[a-f0-9]{64}$/);
+  unavailable = true;
+  const beforeRetry = requests.length;
+  assert.match(await exportAgentSpan(turn,now,'consulta_planes','answer'),/^[a-f0-9]{64}$/);
+  assert.equal(requests.length,beforeRetry+2);
+  assert.deepEqual(requests.at(-2).body,requests.at(-1).body);
   const previouslySent = requests.length;
   delete process.env.LANGFUSE_BASE_URL;
   assert.equal(await exportAgentSpan(turn,now,'consulta_planes','answer'),false);

@@ -90,12 +90,15 @@ export async function exportAgentSpan(turn: AgentTurn, started: number, route: s
       resource:{attributes:[{key:'service.name',value:{stringValue:'claro-worker'}}]},
       scopeSpans:[{scope:{name:'claro-attention'},spans:[...rootSpans,...steps]}]
     }]});
-    const response = await fetch(endpoint, {
+    const send = () => fetch(endpoint, {
       method: 'POST', signal: AbortSignal.timeout(1500), redirect: 'error',
       headers: { 'Content-Type': 'application/json', 'X-Langfuse-Ingestion-Version': '4',
         Authorization: `Basic ${Buffer.from(`${publicKey}:${secret}`).toString('base64')}` },
       body: payload
     });
+    // Keep the same trace and span IDs if the collector temporarily fails to acknowledge the batch.
+    let response = await send().catch(() => null);
+    if (!response || response.status >= 500) response = await send();
     if (!response.ok) return false;
     const body = (await response.text()).trim();
     const ack = (body ? JSON.parse(body) : {}) as {
