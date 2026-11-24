@@ -4,6 +4,20 @@
 
 [Enrutamiento del agente](enrutamiento-y-reranking.md) · [Playbook y Evals](atencion-prompts-y-evals.md)
 
+## Ejecución actual y conexión con Langfuse
+
+En **Administración → Prompts y evaluaciones → Ejecutar evals**, la API encola la comparación. `eval-worker.mjs` carga las 30 preguntas golden y los 19 escenarios complementarios, y `compare-prompts.mjs` ejecuta ambas revisiones. El informe y el estado del gate se guardan en PostgreSQL. El perfil `local` aplica los checks de código. El perfil `live` requiere `OPENAI_API_KEY` y `OPENROUTER_API_KEY`, usa `JEV_MODEL` para el juez y exporta trazas si hay un destino Langfuse configurado. [Worker](../../apps/backend/scripts/eval-worker.mjs) · [Runner A/B](../../apps/backend/scripts/compare-prompts.mjs)
+
+El adaptador actual de Jev evalúa señales saneadas donde las fuentes y el turno son elegibles. El saneamiento elimina cifras e identificadores. Un veredicto favorable queda como señal para revisión. Importes, vigencia, permisos y efectos se comprueban con código y con recibos del replay de plataforma. [Adaptador semántico](../../packages/agent/src/providers.ts)
+
+Para llevar la comparación a **Experiments** de Langfuse, conservar el replay de LangGraph en el worker y publicar un experimento por revisión, con IDs de caso y turno, versión de corpus, rúbrica y scores vinculados. Un experimento vía SDK puede usar un dataset local. El SDK envía a Langfuse los campos del experimento, por lo que el adaptador debe proyectar solo los datos autorizados. [Experimentos vía SDK](https://langfuse.com/docs/evaluation/experiments/experiments-via-sdk)
+
+El demo local ejecuta **Jev · Llamadas v1** como evaluador nativo de decisión de Langfuse. La conexión **Jev OpenRouter** usa TypeSafe y el modelo `typesafe/jev-1.14`. El evaluador puntúa contenido requerido y afirmaciones prohibidas en el dataset sintético `claro-llamadas-v1`. Langfuse guarda ambos scores por caso y Administración consulta esos resultados. [Ejecutar desde la interfaz](../08-demo-local.md#ejecutar-el-juez-desde-langfuse) · [Evaluadores de modelos de decisión](https://langfuse.com/docs/evaluation/evaluation-methods/decision-models)
+
+La comparación de revisiones conserva el informe y la evidencia de plataforma. Cualquier uso de los scores nativos como gate requiere medir primero su concordancia con revisores humanos.
+
+Para el ajuste de prompts y subagentes, el [protocolo del próximo corte](../evolucion-mvp/comportamiento-del-agente.md#evaluación-del-agente-en-langfuse) establece cómo obtener las corridas nativas de base y candidata, comparar los 15 casos y completar la evidencia con pruebas de atención asistida.
+
 ## Dónde incluir Jev en el agente
 
 | Punto | Uso de Jev | Qué conserva el flujo en código |
@@ -21,7 +35,7 @@ El cross-encoder local se queda como reranker. Jev puede etiquetar relevancia de
 2. **Ejecutar aserciones deterministas.** Validar ruta, herramientas, argumentos, permisos, privacidad, aprobación, idempotencia y estado real. Una cita debe estar en el conjunto recuperado y ser visible y vigente. Comparar importes, plazos y códigos cuando estén normalizados. Ante un fallo crítico, registrar y bloquear promoción.
 3. **Usar Jev para la parte semántica.** Enviar una llamada por paso con rúbrica aplicable. Agrupar las decisiones sobre hechos requeridos, afirmaciones prohibidas y evidencia. La entrada es el enunciado saneado, la respuesta observada y extractos limitados. Excluir herramientas, trazas crudas y datos de cuenta.
 4. **Adjudicar casos dudosos.** Si Jev devuelve una clase ambigua, puntuaciones bajas, respuesta inconsistente o error de proveedor, marcar revisión o error. Conservar la disponibilidad y la cobertura por separado. Un paso sin rúbrica semántica no requiere llamada.
-5. **Publicar resultados.** Langfuse conserva scores semánticos, metadatos y uso de cada intento. CI registra resultados y exige gates. Antes de usar el juez automático como criterio de release, medir concordancia con revisores humanos. [Decisions API](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request) · [Choice de TypeSafe](https://docs.typesafe.ai/primitives/choice) · [Evals en Langfuse](https://langfuse.com/docs/evaluation/overview)
+5. **Publicar resultados.** El informe actual guarda los veredictos y la telemetría disponible. Vincular los scores a experimentos es la integración propuesta con Langfuse. CI registra resultados y exige gates. Antes de usar el juez automático como criterio de release, medir concordancia con revisores humanos. [Decisions API](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request) · [Choice de TypeSafe](https://docs.typesafe.ai/primitives/choice) · [Evals en Langfuse](https://langfuse.com/docs/evaluation/overview)
 
 | Rúbrica | Salida de Jev | Ejemplo |
 | --- | --- | --- |
@@ -67,4 +81,4 @@ Ejemplo de observación de E-202, compatible con CC-E01 y GQ-21.
 }
 ```
 
-La salida registra estado semántico, decisiones por pregunta, versión efectiva del modelo, versión de la rúbrica, latencia y uso. Distinguir `pass`, `fail`, `review`, `error` y `not_applicable`. CI registra el artefacto y Langfuse recibe los scores de pasos evaluados. [Gate de calidad](../06-calidad-y-release.md#promoción-de-develop-a-main)
+La salida distingue `pass`, `fail`, `review`, `error` y `not_applicable`. El informe fija la rúbrica, conserva las decisiones y guarda la latencia del paso y el costo de generación cuando están disponibles. La instrumentación del juez y la publicación de scores por paso completan la integración propuesta. [Gate de calidad](../06-calidad-y-release.md#promoción-de-develop-a-main)

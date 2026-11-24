@@ -1,8 +1,9 @@
-import type { Citation } from '@claro/contracts';
+import type { Channel, Citation } from '@claro/contracts';
+import { publicReplyLimit } from './public-reply.js';
 
 export type Profile = 'economico' | 'intermedio' | 'complejo';
 export type AgentObservation = {
-  name: 'retrieval' | 'decision.jev' | 'generation.openai' | 'effect' | `tool.${string}`;
+  name: 'retrieval' | 'context' | 'decision.jev' | 'generation.openai' | 'effect' | `tool.${string}`;
   started: number;
   ended: number;
   metadata: Record<string, string | number>;
@@ -10,7 +11,7 @@ export type AgentObservation = {
 export type Observe = (observation: AgentObservation) => void;
 export type Draft = { answer: string; citations: Citation[] };
 export interface PublicWriter {
-  write(topic: string, sources: Citation[], profile: Profile, prompt: string, observe?: Observe): Promise<Draft | null>;
+  write(topic: string, sources: Citation[], profile: Profile, prompt: string, observe?: Observe, channel?:Channel): Promise<Draft | null>;
 }
 
 const profiles = {
@@ -24,10 +25,10 @@ function numbers(text: string) {
   return [...text.matchAll(/\d+(?:[.,:/-]\d+)*(?:\s*%)?/g)].map(match => match[0].replace(/\s+/g, ''));
 }
 
-export function validateDraft(value: unknown, sources: Citation[]): Draft | null {
+export function validateDraft(value: unknown, sources: Citation[], channel:Channel='web'): Draft | null {
   if (!value || typeof value !== 'object') return null;
   const { answer, citation_ids } = value as { answer?: unknown; citation_ids?: unknown };
-  if (typeof answer !== 'string' || !answer.trim() || answer.length > 1000 || !Array.isArray(citation_ids)
+  if (typeof answer !== 'string' || !answer.trim() || answer.trim().length > publicReplyLimit(channel) || (answer.match(/\?/g)?.length ?? 0)>1 || !Array.isArray(citation_ids)
     || citation_ids.length === 0 || citation_ids.length > 3 || new Set(citation_ids).size !== citation_ids.length
     || /https?:\/\/|[\w.+-]+@[\w.-]+\.[a-z]{2,}|<[^>]*>/i.test(answer)) return null;
   const citations: Citation[] = [];
@@ -38,6 +39,7 @@ export function validateDraft(value: unknown, sources: Citation[]): Draft | null
   }
   const supported = new Set(citations.flatMap(citation => numbers(citation.excerpt)));
   if (numbers(answer).some(number => !supported.has(number))) return null;
+  if (answer.trim().length>180 && citations.some(item=>item.excerpt.replace(/\s+/g,' ').includes(answer.trim().replace(/\s+/g,' ')))) return null;
   return { answer: answer.trim(), citations };
 }
 
@@ -45,9 +47,9 @@ type Usage = { input_tokens?: number; output_tokens?: number };
 type ResponseBody = { status?: string; model?: string; usage?: Usage; output?: { type?: string; content?: { type?: string; text?: string }[] }[] };
 
 export function createOpenAIPublicWriter(options: { apiKey: string; fetch?: typeof fetch }): PublicWriter {
-  return { async write(topic, sources, profile, prompt, observe) {
-    const instructions = prompt.trim();
-    if (!sources.length || !instructions) return null;
+  return { async write(topic, sources, profile, prompt, observe, channel='web') {
+    if (!sources.length || !prompt.trim()) return null;
+    const instructions = `${prompt.trim()} El mensaje debe caber en ${publicReplyLimit(channel)} caracteres. Responde en un párrafo breve, en orden conversacional y con máximo una pregunta. Las citas se adjuntan aparte. Evita copiar tablas o pasajes completos.`;
     const deadline = Date.now() + 5700;
     const input = JSON.stringify({ tema: topic.slice(0, 512),
       pasajes: sources.slice(0, 3).map(({ id,title,excerpt }) => ({ id,title,extracto:excerpt.slice(0, 1400) })) });
@@ -85,7 +87,7 @@ export function createOpenAIPublicWriter(options: { apiKey: string; fetch?: type
         const values = body.output?.filter(x => x.type === 'message').flatMap(x => x.content ?? []).filter(x => x.type === 'output_text');
         const modelMatch = body.model === spec.model || body.model?.startsWith(`${spec.model}-`);
         const draft = modelMatch && body.status === 'completed' && values?.length === 1 && values[0].text
-          ? validateDraft(JSON.parse(values[0].text), sources) : null;
+          ? validateDraft(JSON.parse(values[0].text), sources, channel) : null;
         status = draft ? 'accepted' : 'invalid';
         if (draft) return draft;
       } catch {

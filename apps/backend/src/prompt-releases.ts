@@ -1,3 +1,4 @@
+import { knowledgeCorpus } from './knowledge.js';
 import {
   BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException,
   ServiceUnavailableException, Inject
@@ -132,7 +133,7 @@ export class PromptReleases {
       ) FOR UPDATE`, [target.revision, active.revision]);
     const report = version?.report;
     const result = { ...report?.proposed?.metrics, ...report?.review?.metrics };
-    const currentCorpus = report ? await tx.query('SELECT id,version,document FROM knowledge_document ORDER BY id,version') : [];
+    const currentCorpus = report ? await knowledgeCorpus(tx) : [];
     if (target.status !== 'passed' || target.base_revision !== active.revision || report?.evidence?.provider_mode !== 'live' ||
         report.evidence.corpus_sha256 !== digestText(JSON.stringify(currentCorpus)) ||
         report.evidence.baseline_manifest_sha256 !== manifestDigest(effectiveManifest(active)) ||

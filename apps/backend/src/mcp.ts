@@ -3,6 +3,7 @@ import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
+import { CatalogPlan, KnowledgeDigest, KnowledgeSearchFilters } from '@claro/contracts';
 import { createDatabase } from './database.js';
 import { databaseKnowledge } from './knowledge.js';
 import { constantEqual } from './cases.js';
@@ -29,13 +30,28 @@ app.post('/mcp', async (req, res) => {
     description:'Read published passages valid for the trusted worker audience and business date.',
     inputSchema: {
       query:z.string().trim().min(1).max(1024), business_date:z.iso.date(),
-      audience:z.enum(['cliente','asesor']), channel:z.enum(['telegram','web','whatsapp','voice'])
+      audience:z.enum(['cliente','asesor']), channel:z.enum(['telegram','web','whatsapp','voice']),
+      filters:KnowledgeSearchFilters.optional(), revision:KnowledgeDigest.optional()
     },
     outputSchema: {documents:z.array(z.object({}).passthrough())},
     annotations:{readOnlyHint:true, destructiveHint:false, openWorldHint:false}
-  }, async ({query, ...context}) => {
+  }, async ({query,revision,...context}) => {
+    if ((revision ?? 'legacy')!==knowledge.revision) throw new Error('Knowledge index differs from the requested revision');
     const documents = await knowledge.search(query, context);
     return {structuredContent:{documents},content:[{type:'text',text:JSON.stringify({documents})}]};
+  });
+  server.registerTool('list_catalog_plans', {
+    description:'Read the published public catalogue for a date and channel.',
+    inputSchema: {
+      business_date:z.iso.date(), channel:z.enum(['telegram','web','whatsapp','voice']),
+      revision:KnowledgeDigest.optional()
+    },
+    outputSchema: {plans:z.array(CatalogPlan)},
+    annotations:{readOnlyHint:true, destructiveHint:false, openWorldHint:false}
+  }, async ({revision,...context}) => {
+    if ((revision ?? 'legacy')!==knowledge.revision) throw new Error('Knowledge index differs from the requested revision');
+    const plans = await knowledge.catalog!(context);
+    return {structuredContent:{plans},content:[{type:'text',text:JSON.stringify({plans})}]};
   });
   const transport = new StreamableHTTPServerTransport({sessionIdGenerator:undefined, enableJsonResponse:true});
   res.once('close', () => { void transport.close(); });

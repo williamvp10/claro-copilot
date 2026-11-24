@@ -11,8 +11,8 @@ import type { ZodType } from 'zod';
 import { AUTH, getViewer, type createAuth } from './auth.js';
 import { clearPersonalData } from './cases.js';
 import { DATABASE, audit } from './database.js';
-import { configuredKnowledge, hasKnowledgeEmbedding } from './knowledge.js';
-import { KnowledgeManifest, knowledgeHash, type KnowledgeSourceFile } from './knowledge-publication.js';
+import { activeKnowledgeRevision, configuredKnowledge, hasKnowledgeEmbedding } from './knowledge.js';
+import { KnowledgeManifest, knowledgeHash, publiclyViewable, type KnowledgeSourceFile } from './knowledge-publication.js';
 import { readRunPromptConfig } from './prompt-catalog.js';
 
 type PublicationRow = { sha256:string; manifest:unknown; published_at:Date };
@@ -69,7 +69,7 @@ export class KnowledgeAdminController {
     const files=row && KnowledgeManifest.parse(row.manifest).files;
     const source=parse(KnowledgeSourceKey,key);
     if (!files || !Object.hasOwn(files,source)) throw new NotFoundException('La publicación no tiene una ficha para esta fuente');
-    return files[source];
+    return {file:files[source],contextual:KnowledgeManifest.parse(row.manifest).index_schema==='contextual-v1'};
   }
 
   @Get('publications')
@@ -78,7 +78,9 @@ export class KnowledgeAdminController {
     await this.authorize(req);
     const [rows,[index]]:[PublicationRow[],{count:number}[]]=await Promise.all([
       this.db.query('SELECT sha256,manifest,published_at FROM knowledge_publication ORDER BY published_at DESC,sha256 LIMIT 30'),
-      this.db.query("SELECT count(*)::int AS count FROM knowledge_document WHERE document->>'status'='ready'")
+      activeKnowledgeRevision()==='legacy'
+        ? this.db.query("SELECT count(*)::int AS count FROM knowledge_document WHERE document->>'status'='ready'")
+        : this.db.query("SELECT count(*)::int AS count FROM knowledge_contextual_document WHERE revision=$1 AND document->>'status'='ready'",[activeKnowledgeRevision()])
     ]);
     const root=process.env.KNOWLEDGE_ORIGINALS_DIR;
     const publications=[];
@@ -100,9 +102,11 @@ export class KnowledgeAdminController {
   @Header('Cache-Control','no-store')
   async passages(@Req() req:Request,@Param('digest') digest:string,@Param('key') key:string):Promise<KnowledgePassage[]> {
     await this.authorize(req);
-    const source=await this.source(digest,key);
-    const rows:{id:string;document:unknown}[]=await this.db.query('SELECT id,document FROM knowledge_document WHERE version=$1 AND id=ANY($2::text[])',
-      [source.version,source.passages.map(item=>item.id)]);
+    const {file:source,contextual}=await this.source(digest,key);
+    const params=[source.version,source.passages.map(item=>item.id)];
+    const rows:{id:string;document:unknown}[]=contextual
+      ? await this.db.query('SELECT id,document FROM knowledge_contextual_document WHERE version=$1 AND id=ANY($2::text[]) AND revision=$3',[...params,digest])
+      : await this.db.query('SELECT id,document FROM knowledge_document WHERE version=$1 AND id=ANY($2::text[])',params);
     const documents=new Map(rows.map(row=>[row.id,Citation.safeParse(row.document)]));
     return source.passages.map(passage=>{
       const citation=documents.get(passage.id);
@@ -113,7 +117,7 @@ export class KnowledgeAdminController {
   @Get('publications/:digest/sources/:key/original')
   async original(@Req() req:Request,@Res() res:Response,@Param('digest') digest:string,@Param('key') key:string) {
     const viewer=await this.authorize(req);
-    const source=await this.source(digest,key);
+    const {file:source}=await this.source(digest,key);
     const original=await indexedOriginal(process.env.KNOWLEDGE_ORIGINALS_DIR,source,true);
     if (original.status==='mismatch') throw new ConflictException('El original difiere del SHA-256 publicado');
     if (!original.bytes) throw new NotFoundException('El original no está disponible');
@@ -143,6 +147,43 @@ export class KnowledgeAdminController {
       ? key?'generation_fallback':'generation_disabled' : null;
     return {run_id,revision:config?.revision??null,transport,pgvector,retrieval_ms,latency_ms:Date.now()-started,
       mode:reply?.mode??null,reason,answer:reply?.answer??null,citations:reply?.used??[],
-      retrieved:evidence.ranked.slice(0,5).map(doc=>Citation.parse(doc))};
+      retrieved:evidence.ranked.slice(0,5).map(doc=>Citation.parse(doc)),search:evidence.search};
+  }
+}
+
+@Controller('api/v1/knowledge/sources')
+export class KnowledgeSourceController {
+  constructor(@Inject(DATABASE) private readonly db:DataSource) {}
+
+  private async lookup(digest:string,key:string):Promise<KnowledgeSourceFile> {
+    if (!KnowledgeDigest.safeParse(digest).success || !KnowledgeSourceKey.safeParse(key).success) throw new NotFoundException();
+    const [entry]:{manifest:unknown}[]=await this.db.query('SELECT manifest FROM knowledge_publication WHERE sha256=$1',[digest]);
+    const manifest=entry ? KnowledgeManifest.parse(entry.manifest) : null;
+    const file=manifest?.files && Object.hasOwn(manifest.files,key) ? manifest.files[key] : null;
+    if (!file || !publiclyViewable(key,file) || file.effective_from>businessDate()) throw new NotFoundException();
+    return file;
+  }
+
+  @Get(':digest/:key')
+  @Header('Cache-Control','no-store')
+  async view(@Param('digest') digest:string,@Param('key') key:string) {
+    const file=await this.lookup(digest,key);
+    const pdf=await indexedOriginal(process.env.KNOWLEDGE_ORIGINALS_DIR,file.derivative_pdf ?? file,true);
+    if (!pdf.bytes) throw new NotFoundException();
+    const sections=key==='faq' ? await this.db.query(`SELECT d.id,d.document->>'title' AS title,d.document->>'excerpt' AS text
+      FROM knowledge_contextual_document d WHERE revision=$1 AND version=$2 AND id=ANY($3::text[])
+        AND document->>'scope'='public' AND document->>'status'='ready' ORDER BY id`,[digest,file.version,file.passages.map(item=>item.id)]) : [];
+    return {title:file.title,version:file.version,archived:!!file.effective_to && file.effective_to<=businessDate(),
+      passages:file.passages.map(passage=>({id:passage.id,page:passage.metadata?.page})),sections};
+  }
+
+  @Get(':digest/:key/document')
+  async pdf(@Param('digest') digest:string,@Param('key') key:string,@Res() res:Response) {
+    const file=await this.lookup(digest,key);
+    const result=await indexedOriginal(process.env.KNOWLEDGE_ORIGINALS_DIR,file.derivative_pdf ?? file,true);
+    if (!result.bytes || !result.bytes.subarray(0,5).equals(Buffer.from('%PDF-'))) throw new NotFoundException();
+    res.set({'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Disposition':'inline',
+      'Content-Security-Policy':"default-src 'none'; frame-ancestors 'self'"})
+      .type('application/pdf').send(result.bytes);
   }
 }

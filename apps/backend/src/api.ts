@@ -11,13 +11,14 @@ import { AUTH, getViewer, type createAuth } from './auth.js';
 import { Cases, constantEqual } from './cases.js';
 import { createDatabase, DATABASE } from './database.js';
 import { readDashboard, projectComparison } from './dashboard.js';
+import { readLangfuseEvaluations } from './langfuse-evaluations.js';
 import { MetricFilters, MetricGroup, ReleaseEvidence, readMetricGroup } from './metrics.js';
 import { lockPromptReleases, PromptReleases } from './prompt-releases.js';
 import { adjudicatePromptRevision, PromptAdjudication } from './prompt-adjudication.js';
 import { PlatformEvolutionController } from './platform-evolution.js';
 import { IntegrationOperations } from './integration-operations.js';
 import { observeSimulators, simulators } from './simulator-client.js';
-import { KnowledgeAdminController } from './knowledge-admin.js';
+import { KnowledgeAdminController, KnowledgeSourceController } from './knowledge-admin.js';
 
 const Webhook = z.object({
   update_id: z.number().int().nonnegative(),
@@ -100,9 +101,18 @@ class WebChatController {
 
   @Post('session')
   async start(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    return this.startSession(req,res);
+  }
+
+  @Post('session/new')
+  async startNew(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    return this.startSession(req,res,true);
+  }
+
+  private async startSession(req: Request,res: Response,fresh = false) {
     this.origin(req);
     res.setHeader('Cache-Control', 'no-store');
-    const { token, snapshot } = await this.cases.startWeb(chatToken(req));
+    const { token, snapshot } = await this.cases.startWeb(chatToken(req),fresh);
     if (token) res.cookie(CHAT_COOKIE, token, {
       httpOnly: true, sameSite: 'strict', secure: process.env.BETTER_AUTH_URL?.startsWith('https:'),
       path: '/api/v1/web-chat', maxAge: 24 * 60 * 60 * 1000
@@ -345,6 +355,17 @@ class PlatformController {
     return readMetricGroup(this.db, parse(MetricGroup, group), parse(MetricFilters, query));
   }
 
+  @Get('admin/evaluations/langfuse')
+  async langfuseEvaluations(@Req() req: Request, @Query('experiment') experiment?: string) {
+    await this.admin(req);
+    if (experiment !== undefined) parse(z.uuid(), experiment);
+    try {
+      return await readLangfuseEvaluations(experiment);
+    } catch {
+      throw new ServiceUnavailableException('No se pudieron consultar las evaluaciones en Langfuse.');
+    }
+  }
+
   @Post('admin/releases/evidence')
   async releaseEvidence(@Req() req: Request, @Body() body: unknown) {
     const viewer = await this.admin(req);
@@ -439,7 +460,7 @@ class PlatformController {
 export class ApiModule {
   static create(auth: Auth): DynamicModule {
     return {
-      module: ApiModule, controllers: [PlatformController, PlatformEvolutionController, HealthController, WebChatController, KnowledgeAdminController],
+      module: ApiModule, controllers: [PlatformController, PlatformEvolutionController, HealthController, WebChatController, KnowledgeAdminController, KnowledgeSourceController],
       providers: [Cases, IntegrationOperations, PromptReleases, { provide: AUTH, useValue: auth }, {
         provide: DATABASE,
         async useFactory() {

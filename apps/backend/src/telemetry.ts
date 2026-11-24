@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AgentObservation } from '@claro/agent';
 import type { AgentTurn } from '@claro/contracts';
 import type { RunPromptConfig } from './prompt-catalog.js';
+import { activeKnowledgeRevision } from './knowledge.js';
 
 export const traceIdentifier = (runId: string) => createHash('sha256').update(runId).digest('hex').slice(0,32);
 
@@ -24,7 +25,8 @@ export async function exportAgentSpan(turn: AgentTurn, started: number, route: s
       'claro.route': route,
       'claro.audience': turn.audience,
       'claro.result': result,
-      'claro.config_revision': turn.config_revision
+      'claro.config_revision': turn.config_revision,
+      'claro.index_revision': activeKnowledgeRevision()
     };
     const root = createHash('sha256').update(`root:${turn.run_id}`).digest('hex').slice(0,16);
     const span = (spanId: string, name: string, from: number, to: number, metadata: Record<string,string|number>, parentSpanId?: string) => ({
@@ -46,6 +48,12 @@ export async function exportAgentSpan(turn: AgentTurn, started: number, route: s
           : item.name.startsWith('tool.') ? 'tool' : item.name === 'retrieval' ? 'retriever' : 'span',
         ...Object.fromEntries(Object.entries(item.metadata).map(([key,value]) => [`claro.${key}`,value]))
       };
+      if (item.name === 'tool.list_catalog_plans') {
+        for (const key of ['reference_resolution','catalog_version','decision','reason'] as const) {
+          const value = item.metadata[key];
+          if (typeof value==='string') metadata[`langfuse.observation.metadata.${key}`] = value;
+        }
+      }
       const promptRef = String(item.metadata.prompt_ref ?? (item.name === 'generation.openai' ? 'public_answer' : ''));
       const prompt = promptMetadata[promptRef];
       if (prompt) {

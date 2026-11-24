@@ -82,10 +82,22 @@ El score de intención es una separación de clases sin calibrar. La recomendaci
 
 1. Después de verificar al titular, resolver desde plataforma su referencia y el permiso del asesor. Consultar una foto fechada y calcular el historial con los datos disponibles hasta ese corte. El entrenamiento usa días completos, con el límite exclusivo al inicio del día siguiente. Llamar a FastAPI desde servidor. La ficha recibe prioridad, recomendación, fecha de corte y versión. Consultar la misma señal al cerrar. Recalcular si se dispone de una foto posterior y consistente.
 2. Proveer desde CRM, facturación, telemetría y el historial del cliente las variables que pide `ChurnPrediction`. Entre ellas están tipo de servicio, planes, cargo mensual, antigüedad, mora, caídas, uso, NPS y ofertas previas. Las ventanas de 30 y 90 días requieren conteos de las cinco categorías y de los casos con categoría aún indisponible. Los conteos deben reconciliar con `tickets_90d` y con `dias_desde_ultimo_ticket`. Mantener la distinción entre cero medido, dato faltante permitido y campo inaplicable.
-3. La población de los mocks es distinta de la de entrenamiento. El seed de demo construye fotos para C-1001, C-1004 y C-1007 con corte del 18 de noviembre de 2026, usando los servicios activos, mora, cargo, antigüedad, tickets y ofertas del fixture CRM. Un ticket abierto aporta historial en `categoria_no_disponible`. Usar un método de pago sintético donde el CRM carece del campo requerido. Mantener en `null` NPS, caídas y uso si el fixture no los mide. Las fotos están identificadas como sintéticas y requieren `DEMO_MODE=true`. Para una cuenta sin foto válida, mostrar **Seguimiento a 90 días · Sin datos disponibles** y continuar el caso. El payload interno contiene la fecha y variables del modelo. La referencia de cuenta se conserva dentro de NestJS.
+3. La población de los mocks es distinta de la de entrenamiento. El seed de demo genera las fotos del cuadro siguiente con corte del 18 de noviembre de 2026. Usa servicios activos, mora, cargo, antigüedad, tickets y ofertas del fixture CRM. Un ticket abierto aporta historial en `categoria_no_disponible`. El método de pago es sintético cuando falta en CRM. NPS, caídas y uso quedan en `null` cuando faltan. Las fotos requieren `DEMO_MODE=true`. Si falta una foto válida, el caso muestra **Seguimiento a 90 días · Sin datos disponibles**. La referencia de cuenta se conserva dentro de NestJS.
 4. En prioridad alta, revisar fallas repetidas, reclamos y compromisos después de resolver el motivo principal. Al cerrar, acordar con el cliente el seguimiento de cualquier pendiente y registrar fecha y responsable. En prioridad media, verificar pendientes y confirmar el próximo paso. En prioridad habitual, seguir el cierre estándar. Si el cliente expresa intención de baja, usar el flujo de retención aprobado y su comprobación de elegibilidad.
 
 El seguimiento usa `POST /api/v1/cases/:id/ml/follow-up` con `case_revision`, `event_id` y `status`. Para `agreed` requiere fecha de compromiso y una banda disponible para el titular. El servidor asigna como responsable al asesor que acuerda. Para `completed` requiere un acuerdo del mismo caso y titular. El asesor asignado puede completarlo desde la ficha de un caso cerrado. Una transacción permite un seguimiento por caso y titular y protege los reintentos concurrentes. Este registro es interno y queda asociado a la versión y corte que orientaron al asesor.
+
+| Alias para el OTP de demo | Cuenta en CRM y facturación | Prioridad con `churn-logistic-1` | Qué probar |
+| --- | --- | --- | --- |
+| `11111` · `cliente1@example.test` | C-1001 | Habitual | Saldo y plan activo de una cuenta convergente. |
+| `11002` · `cliente1002@example.test` | C-1002 | Alta | Cuenta móvil con dos tickets recientes. |
+| `11003` · `cliente1003@example.test` | C-1003 | Alta | Cancelación de una cuenta móvil con 56 días de mora. |
+| `22222` · `cliente2@example.test` | C-1004 | Media | Retención elegible en una cuenta de fibra. |
+| `11005` · `cliente1005@example.test` | C-1005 | Habitual | Cuenta convergente sin tickets recientes ni mora. |
+| `33333` · `cliente3@example.test` | C-1007 | Alta | Retención denegada con 45 días de mora. |
+| `11020` · `cliente1020@example.test` | C-1020 | Media | Cuenta de fibra con dos tickets recientes. |
+
+Usar **Nuevo chat** entre pruebas. Tras verificar con cualquier código de seis dígitos, solicitar un asesor o iniciar el flujo de cancelación y tomar el caso desde la bandeja. La ficha muestra el seguimiento a 90 días y la sugerencia de intención cuando FastAPI completa la inferencia. Para comprobar el estado sin foto, usar `11013`.
 
 | Banda de churn | Regla en `churn-logistic-1` |
 | --- | --- |

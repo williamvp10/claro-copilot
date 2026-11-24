@@ -12,6 +12,7 @@ Especificación del siguiente corte para administración, atención, CRM y confi
 - [Tableros y contrato de métricas](tableros.md)
 - [Traspaso de intención y churn a 90 días](ml-intencion-y-churn.md)
 - [Agente, decisiones, herramientas y prompts](agente-y-prompts.md)
+- [Próximo corte del agente: instrucción base, herramientas existentes y doce pruebas de generalización](comportamiento-del-agente.md)
 - [Catálogo JSON de agentes, pasos, tools y plantillas](prompts.claro-copiloto.json)
 - [Arquitectura propuesta del agente en Archify](diagramas/arquitectura-agente.html)
 - [Arquitectura propuesta de plataforma en Archify](diagramas/arquitectura-plataforma.html)

@@ -1,3 +1,4 @@
+import { knowledgeCorpus } from './knowledge.js';
 import { createHash } from 'node:crypto';
 import type { DataSource } from 'typeorm';
 import { effectiveManifest, manifestDigest } from './prompt-catalog.js';
@@ -20,7 +21,7 @@ export async function verifyGoldenPlatform(db:DataSource,input:{candidate:string
   const [base]=await tx.query('SELECT * FROM prompt_revision WHERE revision=$1 AND activated',[evaluation.base_revision]);
   const evidence=evaluation.report?.evidence;
   if (!base || !evidence || evidence.baseline_manifest_sha256!==manifestDigest(effectiveManifest(base)) || evidence.candidate_manifest_sha256!==manifestDigest(effectiveManifest(evaluation)) || evidence.rubric!==effectiveManifest(base).check_semantic_criterion?.sha256 || !/^\d{4}-\d{2}-\d{2}$/.test(evidence.date??'')) throw Error('manifest or rubric mismatch');
-  const documents=await tx.query('SELECT id,version,document FROM knowledge_document ORDER BY id,version');
+  const documents=await knowledgeCorpus(tx);
   if (evidence.corpus_sha256!==sha(JSON.stringify(documents)) || evidence.golden_sha256!==sha(input.goldenSuiteText) || !/^[a-f0-9]{64}$/.test(evidence.scenarios_sha256??'')) throw Error('suite or corpus mismatch');
   let suite:any[];
   try { suite=input.goldenSuiteText.split(/\r?\n/).filter(Boolean).map(line=>JSON.parse(line)); } catch { throw Error('invalid golden suite'); }

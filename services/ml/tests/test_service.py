@@ -115,3 +115,16 @@ def test_advisory_tracking_is_opt_in_and_records_local_runs(tmp_path, monkeypatc
     assert record.data.params["clients_sha256"] == "synthetic-clients-hash"
     assert {item.path for item in client.list_artifacts(tracked["run_id"])} == {"model", "evaluation", "manifest"}
     assert json.loads(open(client.download_artifacts(tracked["run_id"], "evaluation/evaluation.json")).read()) == evaluation
+    registered = client.get_model_version(manifest["registered_model"], manifest["registered_version"])
+    assert registered.run_id == tracked["run_id"]
+    assert client.get_logged_model(manifest["model_id"]).source_run_id == registered.run_id
+
+    from app.inference_trace import record_inference
+
+    record_inference("churn", manifest, 1.0, {"priority": "alta"})
+    mlflow.flush_trace_async_logging()
+    trace, = client.search_traces(experiment_ids=[tracked["experiment_id"]])
+    assert trace.info.tags["claro.model_version"] == "with-tracking"
+    assert trace.info.tags["claro.training_run_id"] == tracked["run_id"]
+    assert manifest["model_id"] in trace.info.trace_metadata.values()
+    assert trace.data.spans[0].outputs == {"priority": "alta"}

@@ -1,0 +1,59 @@
+services:
+  api:
+    ports: ['127.0.0.1:${API_PORT:-39093}:3000']
+  ml:
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_ENABLE_ASYNC_TRACE_LOGGING: 'true'
+      MLFLOW_HTTP_REQUEST_TIMEOUT: '5'
+      MLFLOW_HTTP_REQUEST_MAX_RETRIES: '1'
+      OPENBLAS_NUM_THREADS: '1'
+    ports: ['127.0.0.1:${ML_API_PORT:-39094}:8000']
+    depends_on:
+      mlflow: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import json; from urllib.request import urlopen; status = json.load(urlopen('http://127.0.0.1:8000/readyz', timeout=5)); assert status['model_version'] and status['churn_model_version']"]
+      interval: 10s
+      timeout: 8s
+      retries: 18
+  mlflow:
+    environment:
+      MLFLOW_SERVER_ENABLE_JOB_EXECUTION: 'false'
+      OPENBLAS_NUM_THREADS: '1'
+    healthcheck:
+      test: [CMD, python, -c, "from urllib.request import urlopen; urlopen('http://127.0.0.1:5000/health', timeout=3)"]
+      interval: 10s
+      timeout: 8s
+      retries: 24
+      start_period: 60s
+  ml-job:
+    environment:
+      OPENBLAS_NUM_THREADS: '1'
+    depends_on:
+      mlflow: {condition: service_healthy}
+  call-evals:
+    profiles: [call-evals]
+    image: ${CLARO_IMAGE:-claro-copiloto:local}
+    restart: 'no'
+    entrypoint: [node, apps/backend/scripts/eval-calls.mjs]
+    environment:
+      DATABASE_URL: ${PLATFORM_DATABASE_URL}
+      DEMO_MODE: ${DEMO_MODE:-true}
+      DEMO_BUSINESS_DATE: ${DEMO_BUSINESS_DATE:-2026-11-18}
+      KNOWLEDGE_INDEX_REVISION: ${KNOWLEDGE_INDEX_REVISION:-legacy}
+      ML_API_URL: ${ML_API_URL:-}
+      ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      JEV_MODEL: ${JEV_MODEL:-typesafe/jev-1.14}
+    volumes:
+      - ../apps/backend/scripts/eval-calls.mjs:/app/apps/backend/scripts/eval-calls.mjs:ro
+      - ../docs/agente/llamadas-evals.v1.jsonl:/app/docs/agente/llamadas-evals.v1.jsonl:ro
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+networks:
+  default:
+    ipam:
+      config: [{subnet: '${DEMO_PRIVATE_SUBNET:-10.254.93.0/24}'}]

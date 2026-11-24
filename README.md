@@ -4,6 +4,8 @@ Claro Copiloto es un asistente de atención al cliente para telecomunicaciones. 
 
 La misma conversación guardada alimenta ambos modos. Quien tiene a cargo el caso controla la respuesta pública, y la consola muestra en privado el contexto, las fuentes y las acciones disponibles.
 
+Para abrir los servicios y probar las trazas de modelos y las evaluaciones con Jev, usa la [guía del demo local con Docker](docs/08-demo-local.md).
+
 ## Cómo funciona
 
 | Modo | Experiencia |

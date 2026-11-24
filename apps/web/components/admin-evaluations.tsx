@@ -3,11 +3,17 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { EvalStatus, PromptRevision } from '@claro/contracts';
 import { api } from '@/lib/api';
+import { LangfuseEvaluationsPanel } from './langfuse-evaluations';
 import { Button } from './ui/button';
 
 type ManifestEntry={name:string;version:number|null;sha256:string;source:string;owner:string;variables:string[];output_contract:string;data_scope:string};
 type CatalogRevision=PromptRevision & {manifest?:Record<string,ManifestEntry>;changed_keys?:string[];base_revision?:string;created_at?:string;approved_at?:string|null};
 const statusText:Record<string,string>={active:'Activa',candidate:'Candidata',passed:'Aprobada',failed:'Fallida',queued:'En cola',running:'En ejecución',completed:'Completada',review_required:'Revisión pendiente',verified_exact:'Coincide',platform_replay_required:'Requiere replay',review:'Revisión',review_required_semantic:'Revisión semántica'};
+const promptLabels:Record<string,string>={
+  public_answer:'Respuesta pública con OpenAI',account_answer:'Respuesta con datos de cuenta',
+  advisor_reply:'Borrador privado del asesor',advisor_empathy:'Reconocer un inconveniente',
+  handoff_summary:'Resumen privado del traspaso'
+};
 
 export function AdminEvaluations() {
   const [revisions,setRevisions]=useState<CatalogRevision[]>([]);
@@ -73,13 +79,15 @@ export function AdminEvaluations() {
   }
   return <div className="admin-page ops-dashboard">
     <header className="ops-header"><div><h1>Prompts y evaluaciones</h1><p>Revisión activa · {active?.revision??'—'}</p></div></header>
+    <LangfuseEvaluationsPanel />
     {error&&<p className="alert error" role="alert">{error}</p>}
     <div className="ops-grid">
       <form className="ops-plot ops-prompt" onSubmit={save}>
         <h3>Editar plantilla</h3>
-        <label>Plantilla<select value={promptKey} onChange={event=>{const name=event.target.value;setPromptKey(name);setPrompt(active?.prompts[name]??'');}}>{Object.keys(active?.prompts??{public_answer:''}).map(name=><option key={name} value={name}>{name}</option>)}</select></label>
+        <label>Plantilla<select value={promptKey} onChange={event=>{const name=event.target.value;setPromptKey(name);setPrompt(active?.prompts[name]??'');}}>{Object.keys(active?.prompts??{public_answer:''}).map(name=><option key={name} value={name}>{promptLabels[name]??name}</option>)}</select></label>
+        {promptKey==='public_answer'&&<p>Se usa cuando OpenAI está habilitado y hay evidencia pública aprobada. El flujo de verificación y las preguntas guiadas de planes se controlan en el backend.</p>}
         <label htmlFor="public-prompt">Contenido efectivo de la plantilla</label>
-        <textarea id="public-prompt" disabled={loading} rows={7} maxLength={4096} value={prompt} onChange={event=>setPrompt(event.target.value)}/>
+        <textarea id="public-prompt" disabled={loading} rows={10} maxLength={4000} value={prompt} onChange={event=>setPrompt(event.target.value)}/>
         <Button type="submit" disabled={!prompt.trim()||busy||loading}>Guardar candidata</Button>
       </form>
       <section className="ops-plot">

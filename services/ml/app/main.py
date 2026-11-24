@@ -8,14 +8,15 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 from .advisory import intent_guidance, load_churn, load_e5
 from .churn import ChurnPrediction
 from .common import LABELS, canonical, digest, load_bundle, normalize
-from .e5 import E5Intent
+from .e5 import E5Intent, ENCODER_REVISION
+from .inference_trace import configure_tracking, record_inference
 
 Label = Literal["soporte_tecnico", "facturacion", "consulta_planes", "cancelacion", "portabilidad"]
 class Prediction(BaseModel):
@@ -89,6 +90,7 @@ async def lifespan(app):
             app.state.churn = load_churn(Path(churn_path))
         except LOAD_ERRORS as exc:
             logger.warning("Churn bundle unavailable: %s", exc)
+    configure_tracking()
     yield
 
 
@@ -100,6 +102,19 @@ def authorize(authorization: str | None = Header(default=None)):
     supplied = authorization or ""
     if not token or not hmac.compare_digest(supplied, "Bearer " + token):
         raise HTTPException(401, "invalid service credentials", headers={"WWW-Authenticate":"Bearer"})
+
+
+class KnowledgeEmbedding(BaseModel):
+    kind: Literal["query", "passage"]
+    texts: list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=9000)]] = Field(min_length=1, max_length=16)
+
+
+@app.post("/internal/v1/knowledge-embedding", dependencies=[Depends(authorize)])
+def knowledge_embedding(body: KnowledgeEmbedding):
+    if not isinstance(app.state.model, E5Intent):
+        raise HTTPException(503, "knowledge encoder unavailable")
+    vectors = app.state.model.encoder.encode(body.texts, body.kind)
+    return {"revision": ENCODER_REVISION, "vectors": vectors.tolist()}
 
 def response(row, manifest):
     return {
@@ -177,8 +192,12 @@ def predict(body: Prediction, traceparent: str | None = Header(default=None, max
             if existing:
                 return response(existing, app.state.manifest)
             db.execute("INSERT INTO predictions (id,turn_id,version,idem,payload_hash,channel,label,score,latency_ms,text_length,oov,traceparent) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",data)
-            return response(db.execute("SELECT * FROM predictions WHERE id=?",(data[0],)).fetchone(), app.state.manifest)
+            result = response(db.execute("SELECT * FROM predictions WHERE id=?",(data[0],)).fetchone(), app.state.manifest)
     except sqlite3.Error: raise HTTPException(503,"state unavailable")
+    record_inference("intent", app.state.manifest, data[7], {
+        "label": result["label"], "score": result["score"], "recommendation": result["recommendation"],
+    }, run_id=body.run_id)
+    return result
 
 @app.post("/internal/v1/predict-churn", response_model=ChurnPredictionResult, dependencies=[Depends(authorize)])
 def predict_churn(body: ChurnPrediction):
@@ -187,7 +206,9 @@ def predict_churn(body: ChurnPrediction):
     if body.fecha_corte > date.today():
         raise HTTPException(422, "snapshot date is in the future")
     model, manifest, _ = app.state.churn
+    start = time.perf_counter()
     score = float(model.predict_proba(body.as_frame())[0, 1])
+    latency_ms = (time.perf_counter() - start) * 1000
     thresholds = manifest["priority_thresholds"]
     if score >= thresholds["p80"]:
         priority, recommendation = "alta", "review_retention_followup"
@@ -195,6 +216,7 @@ def predict_churn(body: ChurnPrediction):
         priority, recommendation = "media", "check_unresolved_issues"
     else:
         priority, recommendation = "habitual", "standard_followup"
+    record_inference("churn", manifest, latency_ms, {"priority": priority, "recommendation": recommendation})
     return {
         "model_version": manifest["model_version"], "mode": "shadow", "horizon_days": 90,
         "fecha_corte": body.fecha_corte, "training_cohort": manifest["cohort_date"],

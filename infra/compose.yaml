@@ -45,6 +45,7 @@ x-app: &app
     INTEGRATION_MCP_SIGNING_KEY: ${INTEGRATION_MCP_SIGNING_KEY:?Set a private MCP signing key}
     KNOWLEDGE_MCP_URL: ${KNOWLEDGE_MCP_URL:-}
     KNOWLEDGE_SERVICE_TOKEN: ${KNOWLEDGE_SERVICE_TOKEN:-}
+    KNOWLEDGE_INDEX_REVISION: ${KNOWLEDGE_INDEX_REVISION:-legacy}
     OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
@@ -211,6 +212,9 @@ services:
       DEMO_MODE: ${DEMO_MODE:-true}
       DEMO_BUSINESS_DATE: ${DEMO_BUSINESS_DATE:-2026-11-18}
       PROMPT_EVAL_PROVIDERS: ${PROMPT_EVAL_PROVIDERS:-local}
+      KNOWLEDGE_INDEX_REVISION: ${KNOWLEDGE_INDEX_REVISION:-legacy}
+      ML_API_URL: ${ML_API_URL:-}
+      ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       JEV_MODEL: ${JEV_MODEL:-typesafe/jev-1.14}
@@ -228,6 +232,8 @@ services:
     command: [node, apps/backend/dist/knowledge-ingest.js, /publication/corpus.json, /publication/manifest.json]
     environment:
       DATABASE_URL: ${PLATFORM_DATABASE_URL}
+      ML_API_URL: ${ML_API_URL:-}
+      ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-}
     volumes:
       - ${KNOWLEDGE_PUBLICATION_DIR:-./private-publication}:/publication:ro
     depends_on:
@@ -239,6 +245,9 @@ services:
     environment:
       DATABASE_URL: ${PLATFORM_DATABASE_URL}
       KNOWLEDGE_SERVICE_TOKEN: ${KNOWLEDGE_SERVICE_TOKEN:-}
+      KNOWLEDGE_INDEX_REVISION: ${KNOWLEDGE_INDEX_REVISION:-legacy}
+      ML_API_URL: ${ML_API_URL:-}
+      ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-}
       HOST: 0.0.0.0
       MCP_PORT: '3030'
     depends_on:

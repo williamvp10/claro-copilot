@@ -25,7 +25,8 @@ test('una sola referencia alcanza para redactar, un fallo transitorio activa un 
   const output=await writer.write('plan fibra',evidence,'economico','Escribe en una oración.',x=>observations.push(x));
   assert.equal(output.citations[0].id,'catalog');
   assert.deepEqual(requests.map(x=>[x.model,x.reasoning.effort,x.store]),[['gpt-6-luna','none',false],['gpt-6.1-terra','low',false]]);
-  assert.equal(requests[0].instructions,'Escribe en una oración.');
+  assert.match(requests[0].instructions,/^Escribe en una oración\./);
+  assert.match(requests[0].instructions,/340 caracteres/);
   assert.doesNotMatch(requests[0].input,/Escribe en una oración/);
   assert.equal(await writer.write('plan fibra',evidence,'economico',''),null);
   assert.equal(requests.length,2);

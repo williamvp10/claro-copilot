@@ -1,15 +1,17 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pypdf==6.21.4"]
+# dependencies = ["pypdf==6.21.4", "reportlab==4.4.9"]
 # ///
 """Build the fictional Claro demo corpus from an explicitly reviewed file list."""
 from __future__ import annotations
 import argparse
+from io import BytesIO
 import json
 from hashlib import sha256
 import os
 import re
 import sys
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
@@ -49,6 +51,7 @@ SOURCES = (
     Source('01_documentos/correos/02_incidente_masivo_chapinero.eml','boletin-incidente','Incidente de fibra en Chapinero y compensación','boletin-2026-11-13','advisor','boletin','2026-11-13'),
     Source('01_documentos/correos/03_nuevo_refresco_senal_app.eml','boletin-refresco','Refrescar señal de TV desde Mi Claro','boletin-2026-11-03','advisor','boletin','2026-11-03'),
 )
+VIEWABLE = {'catalogo-v1', 'catalogo-v2', 'faq', 'deco', 'modem'}
 MAX_CHUNK = 1800
 WORD = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 
@@ -146,7 +149,63 @@ def chunks(blocks: list[tuple[str,str]]):
         yield section, '\n'.join(parts)
 
 
-def prepare(root: Path, initial: bool = False) -> list[dict[str,str]]:
+def describe_passage(source: Source, section: str, excerpt: str) -> dict:
+    text = ''.join(ch for ch in unicodedata.normalize('NFD', section + ' ' + excerpt)
+                   if not unicodedata.combining(ch)).lower()
+    tags = {source.kind, source.key.split('-v')[0]}
+    for tag, pattern in {
+        'hogar': r'\bhogar\b|fibra', 'movil': r'movil|pospago|prepago', 'fibra': r'fibra',
+        'fibra-500': r'fibra\s*500', 'fibra-300': r'fibra\s*300', 'fibra-900': r'fibra\s*900',
+        'portabilidad': r'portab', 'facturacion': r'factur|cobro', 'pago': r'\bpago|\bpse',
+        'retencion': r'retencion', 'elegibilidad': r'criterios de elegibilidad|mora mayor',
+        'ofertas': r'matriz de ofertas|alternativas de retencion', 'escalamiento': r'escalamiento|supervision',
+        'e-202': r'\be[ -]?202\b', 'tv': r'decodificador|\bmi tv\b', 'decobox-4k': r'decobox\s*4k',
+        'ztx-f680': r'ztx-?f680', 'modem': r'modem', 'wifi': r'wi[ -]?fi', 'los-roja': r'\blos\b.{0,20}\broj',
+        'velocidad': r'velocidad|\bmbps\b', 'promocion': r'promoci', 'reconexion': r'reconec',
+    }.items():
+        if re.search(pattern, text):
+            tags.add(tag)
+    if source.key == 'retencion' and 'elegibilidad' in tags:
+        tags.add('requisitos')
+    page = re.match(r'pág\. (\d+)', section)
+    context = f'{source.title}. Sección {section}. Temas: {", ".join(sorted(tags))}.'
+    return {'source': source.key, 'section': section, 'tags': sorted(tags), 'context': context,
+            **({'page': int(page.group(1))} if page else {})}
+
+
+def faq_pdf(raw: bytes) -> bytes:
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+    from xml.sax.saxutils import escape
+
+    buffer = BytesIO()
+    styles = getSampleStyleSheet()
+    content = []
+    for line in raw.decode('utf-8').splitlines():
+        line = line.strip()
+        if line:
+            heading = line.startswith('#')
+            content.extend([Paragraph(escape(line.lstrip('#').strip() if heading else line),
+                                      styles['Heading2' if heading else 'BodyText']), Spacer(1, 6)])
+    SimpleDocTemplate(buffer, title='Preguntas frecuentes de atención', invariant=1).build(content)
+    return buffer.getvalue()
+
+
+def stage_original(directory: Path, raw: bytes) -> str:
+    checksum = sha256(raw).hexdigest()
+    stored = directory / checksum
+    try:
+        fd = os.open(stored, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        if stored.is_symlink() or stored.read_bytes() != raw:
+            raise ValueError('Existing original has inconsistent content')
+    else:
+        with os.fdopen(fd, 'wb') as file:
+            file.write(raw)
+    return checksum
+
+
+def prepare(root: Path, initial: bool = False, contextual: bool = False) -> list[dict]:
     output = []
     v2_date = next(source.effective_from for source in SOURCES if source.key == 'catalogo-v2')
     for source in SOURCES:
@@ -181,6 +240,8 @@ def prepare(root: Path, initial: bool = False) -> list[dict[str,str]]:
                    'status':'ready', 'type':source.kind}
             if source.key == 'catalogo-v1' and not initial:
                 row['effective_to'] = v2_date
+            if contextual:
+                row['metadata'] = describe_passage(source, section, excerpt)
             output.append(row)
         if not count:
             raise ValueError(f'No text extracted: {source.path}')
@@ -194,8 +255,11 @@ def main() -> int:
     parser.add_argument('--manifest', type=Path, help='Write the publication manifest alongside the bundle')
     parser.add_argument('--originals-dir', type=Path, help='Stage only reviewed originals by SHA-256 in a private directory')
     parser.add_argument('--initial', action='store_true', help='Publish the first catalog snapshot for an isolated replay')
+    parser.add_argument('--contextual', action='store_true', help='Build the versioned contextual index and checked public source inventory')
     parser.add_argument('--approved-public', type=Path, help='Previously approved public passages, matched by identity and excerpt')
     args = parser.parse_args()
+    if args.contextual and not (args.manifest and args.originals_dir):
+        parser.error('A contextual publication requires its manifest and original files directory')
     root, target = args.input.resolve(strict=True), args.output.resolve()
     repo = Path(__file__).resolve().parents[3]
     if not root.is_dir() or target.is_relative_to(root) or target.is_relative_to(repo):
@@ -206,7 +270,7 @@ def main() -> int:
     originals = args.originals_dir.resolve() if args.originals_dir else None
     if originals and (not manifest_target or originals.is_relative_to(root) or originals.is_relative_to(repo)):
         parser.error('Originals need a manifest and a directory outside the source tree and repository')
-    records = prepare(root, args.initial)
+    records = prepare(root, args.initial, args.contextual)
     if args.approved_public:
         approved = json.loads(args.approved_public.read_text(encoding='utf-8'))
         fingerprints = {(row['id'], row['version'], row['excerpt']) for row in approved
@@ -231,19 +295,17 @@ def main() -> int:
                 'file_name': path.name, 'title': source.title, 'sha256': checksum, 'size_bytes': len(raw),
                 'version': source.version, 'scope': source.scope, 'type': source.kind,
                 'effective_from': source.effective_from, 'effective_to': passages[0].get('effective_to'),
-                'passages': [{'id': row['id'], 'excerpt_sha256': sha256(row['excerpt'].strip().encode('utf-8')).hexdigest()}
+                'passages': [{'id': row['id'], 'excerpt_sha256': sha256(row['excerpt'].strip().encode('utf-8')).hexdigest(),
+                              **({'metadata': row['metadata']} if args.contextual else {})}
                              for row in passages],
             }
             if originals:
-                stored = originals / checksum
-                try:
-                    fd = os.open(stored, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                except FileExistsError:
-                    if stored.is_symlink() or stored.read_bytes() != raw:
-                        raise ValueError(f'File already staged with inconsistent content: {path.name}')
-                else:
-                    with os.fdopen(fd, 'wb') as file:
-                        file.write(raw)
+                stage_original(originals, raw)
+                if args.contextual and source.key in VIEWABLE:
+                    files[source.key]['viewable'] = True
+                    if source.key == 'faq':
+                        pdf = faq_pdf(raw)
+                        files[source.key]['derivative_pdf'] = {'sha256': stage_original(originals, pdf), 'size_bytes': len(pdf)}
     # Exclusive creation prevents overwriting existing data or following an existing symlink.
     fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
@@ -260,6 +322,7 @@ def main() -> int:
                            'stage': 'initial' if args.initial else 'current',
                            'sources': {key: value['sha256'] for key,value in files.items()},
                            'files': files,
+                           **({'index_schema': 'contextual-v1'} if args.contextual else {}),
                            'count': len(records)}, file, ensure_ascii=False, indent=2)
                 file.write('\n')
         except BaseException:

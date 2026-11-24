@@ -67,5 +67,7 @@ test('lab and agent share validity and audience filters and fall back when gener
   await pipeline.answer(advisor,'economico','Responder con evidencia',all.candidates);
   assert.equal(seen.length,1);
   const empty=await createKnowledgePipeline({knowledge:{search:async()=>{throw new Error('Unavailable');}}}).retrieve(next,'economico',{});
-  assert.deepEqual(empty,{candidates:[],ranked:[],unavailable:true});
+  assert.deepEqual(empty.candidates,[]);
+  assert.equal(empty.unavailable,true);
+  assert.doesNotMatch(empty.search.query,/usuario@|ejemplo/);
 });

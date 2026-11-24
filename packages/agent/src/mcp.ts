@@ -1,8 +1,9 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { CatalogPlan, Citation, KnowledgeSearchFilters, KnowledgeTags } from '@claro/contracts';
 import type { KnowledgeAdapter, KnowledgeDocument } from './index.js';
 
-export type KnowledgeMcpOptions = {url:string; token?:string; trustedLocal?:boolean; timeoutMs?:number; fetch?:typeof globalThis.fetch};
+export type KnowledgeMcpOptions = {url:string; token?:string; trustedLocal?:boolean; timeoutMs?:number; fetch?:typeof globalThis.fetch; revision?:string};
 // Closed vocabulary prevents arbitrary names, addresses and account numbers being transmitted.
 const vocabulary = new Set((
   'internet fibra hogar plan planes triple play max movil moviles pospago precio cuanto cuanta incluye bono ' +
@@ -11,7 +12,7 @@ const vocabulary = new Set((
   'restablecer reinicio fabrica control parental antiguedad nuevo actuales cambiar cobertura velocidad promocion ' +
   'descuento factura pago soporte modem wifi decodificador television televisor tv senal error refrescar reiniciar ' +
   'pantalla canal canales azul negro rojo luz luces intermitente parpadea sin con no funciona repetidor ilimitado ' +
-  'datos minutos mensajes red portabilidad cancelar mora visita ticket'
+  'datos minutos mensajes red portabilidad cancelar cancelacion politica retencion elegibilidad requisitos mora visita ticket'
 ).split(' '));
 export function safeKnowledgeQuery(query:string):string {
  const normalized=query.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
@@ -37,6 +38,8 @@ function documents(value:unknown):KnowledgeDocument[] {
   if (x.channels !== undefined && (!Array.isArray(x.channels) || x.channels.some(a=>typeof a!=='string'))) throw new Error('Invalid knowledge channels');
   if (x.provider_approved !== undefined && x.provider_approved !== true) throw new Error('Invalid provider approval');
   if (x.url !== undefined && typeof x.url!=='string') throw new Error('Invalid knowledge URL');
+  if (x.metadata !== undefined) KnowledgeTags.parse(x.metadata);
+  if (x.source !== undefined) Citation.shape.source.parse(x.source);
   return x as unknown as KnowledgeDocument;
  });
 }
@@ -46,15 +49,29 @@ export function createKnowledgeMcpAdapter(options:KnowledgeMcpOptions):Knowledge
  if (!['http:','https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid knowledge MCP URL');
  if (options.token && url.protocol!=='https:' && !['localhost','127.0.0.1','[::1]','knowledge-mcp'].includes(url.hostname)) throw new Error('Bearer credentials require HTTPS or the private knowledge service');
  const internal = options.trustedLocal === true && url.origin === 'http://knowledge-mcp:3030' && url.pathname === '/mcp' && Boolean(options.token);
- return {async search(query,context) {
+ async function call(name:'search_knowledge'|'list_catalog_plans', args:Record<string,unknown>) {
   const timeout=options.timeoutMs ?? 3000;
   const transport=new StreamableHTTPClientTransport(url,{requestInit:{headers:options.token?{Authorization:`Bearer ${options.token}`}:{},signal:AbortSignal.timeout(timeout)},...(options.fetch?{fetch:options.fetch}:{})});
   const client=new Client({name:'claro-knowledge-reader',version:'1.0.0'});
   try {
    await client.connect(transport);
-   const result=await client.callTool({name:'search_knowledge',arguments:{query:internal ? query.slice(0,1024) : safeKnowledgeQuery(query),business_date:context.business_date,audience:context.audience,channel:context.channel}},undefined,{timeout});
-   if (result.isError) throw new Error('Knowledge search failed');
-   return documents(result.structuredContent);
+   const result=await client.callTool({name,arguments:{...args,...(options.revision && options.revision!=='legacy' ? {revision:options.revision} : {})}},undefined,{timeout});
+   if (result.isError) throw new Error('Knowledge tool failed');
+   return result.structuredContent;
   } finally { await client.close().catch(()=>undefined); }
- }};
+ }
+ return {
+  revision:options.revision,
+  async search(query,context) {
+   const filters=context.filters ? KnowledgeSearchFilters.parse(context.filters) : undefined;
+   return documents(await call('search_knowledge',{
+    query:internal ? query.slice(0,1024) : safeKnowledgeQuery(query),business_date:context.business_date,
+    audience:context.audience,channel:context.channel,...(filters && (filters.tags.length || filters.source) ? {filters} : {})
+   }));
+  },
+  async catalog(context) {
+   const result=await call('list_catalog_plans',{business_date:context.business_date,channel:context.channel});
+   return CatalogPlan.array().max(100).parse((result as {plans?:unknown}|undefined)?.plans);
+  }
+ };
 }

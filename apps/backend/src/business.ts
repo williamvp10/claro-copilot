@@ -54,7 +54,7 @@ export function businessPorts(db: DataSource): AgentPorts {
   return {
     readCaseForRun: (runId) => scoped(runId, false, async (_tx, row) => ({
       messages: row.snapshot.messages.filter(m => !m.verification_input).map(m => ({ ...m, text: clearPersonalData(m.text) })),
-      verified: row.snapshot.verified, pending: row.handoff_pending
+      verified: row.snapshot.verified, pending: row.handoff_pending, intake: row.snapshot.intake, conversation_memory: row.snapshot.conversation_memory
     })),
     async getAgentConfig(revision) {
       const [row] = await db.query('SELECT revision,prompts FROM prompt_revision WHERE revision=$1', [revision]);

@@ -1,12 +1,24 @@
 import type { Fact, Service } from '@claro/contracts';
+import { mobilePlanTopic, retentionPolicyQuery } from '@claro/agent';
 import type { z } from 'zod';
 import { simulators } from './simulator-client.js';
 
 export const accountVerificationPrompt = 'Para verificar tu cuenta, escribe tu correo o teléfono de prueba en el chat.';
 
-export type AccountInquiry = 'invoice' | 'balance' | 'plans' | 'tickets' | 'assistance';
+export function accountHandoffReason(text: string) {
+  const value = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (/\b(?:cancelar|cancelacion|dar de baja|retirar(?:me)?)\b/.test(value)) {
+    if (/\b(?:fallas?|intermitencia|se cae|no funciona|sin internet)\b/.test(value)) return 'El cliente solicita cancelar el servicio y reporta fallas.';
+    return 'El cliente solicita cancelar el servicio.';
+  }
+  return 'El cliente solicita ayuda con su cuenta.';
+}
+
+export type AccountInquiry = 'invoice' | 'balance' | 'plans' | 'tickets' | 'assistance' | 'identify';
+export type AccountRead = Exclude<AccountInquiry,'identify'|'assistance'>;
 
 export function accountInquiry(text: string): AccountInquiry | null {
+  if (retentionPolicyQuery(text) || mobilePlanTopic(text)==='change') return null;
   const value = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   if (/\b(mis tickets|mis casos|tickets abiertos|mis solicitudes)\b/.test(value)) return 'tickets';
   if (/\b(saldo|cuanto debo|cuanto adeudo|mi mora)\b/.test(value)) return 'balance';
@@ -17,8 +29,22 @@ export function accountInquiry(text: string): AccountInquiry | null {
 }
 
 export function requestedAdvisor(text: string) {
-  return /\b(?:hablar|comunicarme|atencion)\s+(?:con|de)\s+(?:un |una )?(?:asesor|asesora|humano|persona)\b|^\s*asesor[.!?]?\s*$/i
+  return /\b(?:hablar|comunicarme|comunicar|atencion)\s+(?:con|de)\s+(?:un |una )?(?:asesor|asesora|humano|persona)\b|\b(?:quiero|necesito|prefiero|pasame con|comunican?me con)\s+(?:un |una |el |la )?asesor(?:a)?\b|^\s*asesor(?:a)?[.!?]?\s*$/i
     .test(text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
+}
+
+export function isGreeting(text:string) {
+  const value=text.trim();
+  return /^(?:hola|buen(?:os|as)? (?:días|dias|tardes|noches)|saludos)[.!¡!,\s]*$/i.test(value) ||
+    /^(?:hola[.,]?\s+)?(?:soy|con|me llamo)\s+(?:\p{L}{2,}(?:\s+|[.!]?$)){1,4}$/iu.test(value) &&
+    !/\b(?:quiero|necesito|tengo|puedo|busco|asesor)\b/i.test(value);
+}
+
+export function isVerificationContact(text:string,aliases:string[]) {
+  if (!aliases.length) return false;
+  const value=text.trim();
+  return /^[+\d() .-]+$/.test(value) || /^[\w.+-]+@[\w.-]+\.[a-z]{2,}[.!]?$/i.test(value) ||
+    /\b(?:mi (?:correo|tel[eé]fono|contacto)|mi n[uú]mero de prueba) (?:de prueba )?(?:es|:)\s*/i.test(value);
 }
 
 
@@ -57,7 +83,7 @@ export async function billingFacts(ref: string) {
   ];
 }
 
-export async function accountReply(ref: string, inquiry: Exclude<AccountInquiry, 'assistance'>) {
+export async function accountReply(ref: string, inquiry: AccountRead) {
   if (inquiry === 'plans') {
     const plans = planFacts((await simulators.customer(ref)).servicios).map(plan => `${plan.label} (${plan.value} al mes)`);
     return plans.length ? `Tus planes activos son ${new Intl.ListFormat('es-CO').format(plans)}.` : 'Esta cuenta de prueba no tiene planes activos.';

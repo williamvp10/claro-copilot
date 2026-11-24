@@ -4,6 +4,8 @@
 
 ## Orquestación propuesta
 
+El siguiente corte amplía la decisión por propósito a solicitudes con varias necesidades y cambios de intención. La [especificación de comportamiento](comportamiento-del-agente.md) identifica las ramas y plantillas que cambian, el contexto permitido por proveedor, los límites del ciclo y las pruebas que debe pasar una candidata. El JSON enlazado arriba es el catálogo que carga el backend al arrancar.
+
 El **orquestador LangGraph.js** corre en el worker de atención. Carga turno, modo, rol, titularidad, revisión del caso y revisión de configuración. Aplica primero las reglas de derivación obligatoria. Usa señales tipadas de Jev para enrutar cuando ayudan y mantiene el clasificador clásico como observación en sombra. Ante ambigüedad solicita aclaración o deriva según política. Cada turno elige un subgrafo principal cuando requiere atención especializada. Una solicitud compuesta puede añadir una lectura de otro dominio dentro del mismo ámbito si el orquestador identifica la segunda intención y la acción es compatible. La clasificación puede proponer la ruta y las herramientas; los permisos y reglas comerciales los aplica NestJS.
 
 Los tres subagentes son **subgrafos con entradas y salidas tipadas** dentro del mismo worker. El orquestador les pasa un contexto por dominio y recibe hechos, evidencia, estado y propuesta tipada. Comparten un cliente MCP y un catálogo de herramientas administrados por el worker. Cada subgrafo recibe su lista permitida y un contexto acotado. Usar checkpoints por ejecución y revisión del caso. Cuando el cliente pide atención humana, el grafo preserva la ruta de derivación y el modo asistido mantiene toda sugerencia en privado. La espera de aprobación se conserva como estado durable de la plataforma. [Composición de subgrafos en LangGraph.js](https://docs.langchain.com/oss/javascript/langgraph/use-subgraphs)
@@ -42,11 +44,11 @@ El grafo registra el propósito tipado de cada lectura y aplica permisos por dom
 
 ## MCPs, herramientas y autorización
 
-| Servidor | Tools propuestas | Contraparte |
+| Servidor | Tools de lectura del demo | Contraparte |
 | --- | --- | --- |
 | **MCP Conocimiento** existente | `search_knowledge` / filtros de audiencia, producto, canal y vigencia, top-k acotado, citas y fechas. | Índice de PostgreSQL con pgvector. |
-| **MCP CRM** nuevo | `crm.get_customer_context`, `crm.list_services`, `crm.list_recent_tickets`, `crm.evaluate_retention`. | CRM · API mock, mediante los adaptadores HTTP actuales y extensiones de elegibilidad ya definidas. |
-| **MCP Facturación** nuevo | `billing.get_balance`, `billing.list_invoices`, `billing.get_invoice_detail` con identificador de factura validado. | Facturación · API mock. |
+| **MCP CRM** | `crm.get_customer_context`, `crm.list_services`, `crm.list_recent_tickets`, `crm.evaluate_retention`. | CRM · API mock, mediante los adaptadores HTTP y la evaluación de elegibilidad. |
+| **MCP Facturación** | `billing.get_balance`, `billing.list_invoices`, `billing.get_invoice_detail` con identificador de factura validado. | Facturación · API mock. |
 
 El JSON asigna una lista de tools a cada subagente y a cada paso de lectura. El cliente MCP es compartido y el permiso efectivo exige que la tool esté permitida para el subagente, el paso y el caso. En una consulta compuesta, el orquestador puede activar una lectura acotada de otro subgrafo aplicando su propia lista permitida.
 

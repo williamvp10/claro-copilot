@@ -1,3 +1,4 @@
+import { knowledgeCorpus } from './knowledge.js';
 import { createHash } from 'node:crypto';
 import type { DataSource, EntityManager } from 'typeorm';
 import { simulators } from './simulator-client.js';
@@ -19,7 +20,7 @@ export async function verifyPlatformReplay(db:DataSource,input:{candidate:string
   const [base]=await tx.query('SELECT * FROM prompt_revision WHERE revision=$1 AND activated',[record.base_revision]);
   const evidence=record.report?.evidence as Evidence | undefined;
   if (!base || !evidence || evidence.candidate_manifest_sha256!==manifestDigest(effectiveManifest(record)) || evidence.baseline_manifest_sha256!==manifestDigest(effectiveManifest(base)) || evidence.rubric!==effectiveManifest(base).check_semantic_criterion?.sha256 || !/^\d{4}-\d{2}-\d{2}$/.test(evidence.date ?? '')) throw new Error('manifest or rubric mismatch');
-  const docs=await tx.query('SELECT id,version,document FROM knowledge_document ORDER BY id,version');
+  const docs=await knowledgeCorpus(tx);
   if (evidence.corpus_sha256!==sha(JSON.stringify(docs))) throw new Error('corpus mismatch');
   if (![evidence.golden_sha256,evidence.scenarios_sha256,evidence.corpus_sha256].every(x=>/^[a-f0-9]{64}$/.test(x))) throw new Error('invalid evaluation evidence');
   const [row]=await tx.query('SELECT * FROM attention_case WHERE id=$1 FOR UPDATE',[input.caseId]);

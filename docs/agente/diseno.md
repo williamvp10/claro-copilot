@@ -1,5 +1,7 @@
 # SDD de agente, conocimiento y LLMOps
 
+El [spec del próximo corte](../evolucion-mvp/comportamiento-del-agente.md) define la decisión por objetivos, el contexto confiable del turno y las pruebas de generalización sobre los tres subgrafos del demo.
+
 [Propuesta de orquestador, subagentes, MCPs y prompts para el siguiente corte](../evolucion-mvp/agente-y-prompts.md) · [Catálogo JSON de arranque](../evolucion-mvp/prompts.claro-copiloto.json)
 
 **Responsabilidad.** Módulo TypeScript con LangGraph.js en el mismo proyecto NestJS que la plataforma. Un worker separado del proceso HTTP resuelve turnos con contexto, herramientas y evidencia. El agente recomienda y propone. La [plataforma](../plataforma/diseno.md) posee el cliente vinculado, el caso y los efectos de negocio. Las lecturas autorizadas de CRM y Facturación usan MCPs privados sobre las APIs mock. FastAPI aporta señales de ML en sombra.

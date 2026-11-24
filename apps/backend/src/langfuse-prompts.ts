@@ -8,7 +8,7 @@ export type LangfuseTextVersion = z.infer<typeof TextVersion>;
 
 type LangfuseOptions = { base: string; publicKey: string; secretKey: string; demo?: boolean; request?: typeof fetch };
 
-export function createLangfusePromptClient(options: LangfuseOptions) {
+export function createLangfuseConnection(options: LangfuseOptions) {
   const base = new URL(options.base);
   const local = base.protocol === 'http:' && (
     (base.hostname === 'langfuse-web' && base.port === '3000') ||
@@ -17,13 +17,18 @@ export function createLangfusePromptClient(options: LangfuseOptions) {
   if ((!local && base.protocol !== 'https:') || base.username || base.password || base.search || base.hash) {
     throw new Error('invalid_langfuse_url');
   }
-  const auth = 'Basic ' + Buffer.from(options.publicKey + ':' + options.secretKey).toString('base64');
+  const authorization = 'Basic ' + Buffer.from(options.publicKey + ':' + options.secretKey).toString('base64');
+  return { base, authorization };
+}
+
+export function createLangfusePromptClient(options: LangfuseOptions) {
+  const { base, authorization } = createLangfuseConnection(options);
   const request = options.request ?? fetch;
   const path = '/api/public/v2/prompts';
 
   async function load(url: URL, name: string, init: RequestInit = {}) {
     const response = await request(url, {
-      ...init, headers: { Authorization: auth, 'Content-Type': 'application/json' },
+      ...init, headers: { Authorization: authorization, 'Content-Type': 'application/json' },
       redirect: 'error', signal: AbortSignal.timeout(3500)
     });
     if (response.status === 404 && !init.method) return null;

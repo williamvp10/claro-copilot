@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "langfuse_version": "4.83.0",
+  "dataset": {
+    "name": "claro-llamadas-v1",
+    "description": "Rewritten test cases drawn from the 50 calls provided for the challenge",
+    "source": "llamadas-evals.v1.jsonl",
+    "items": 15
+  },
+  "connection": {
+    "provider": "Jev OpenRouter",
+    "adapter": "typesafe",
+    "baseURL": "https://openrouter.ai/api/v1",
+    "withDefaultModels": false,
+    "customModels": ["typesafe/jev-1.14"]
+  },
+  "evaluator": {
+    "name": "Jev · Llamadas v1",
+    "description": "Evaluates agent responses for the synthetic cases in claro-llamadas-v1 using two rubric criteria per case.",
+    "definition": {
+      "type": "DECISION_MODEL",
+      "modelConfig": { "provider": "Jev OpenRouter", "model": "typesafe/jev-1.14" },
+      "variableMapping": [
+        { "templateVariable": "input", "selectedColumnId": "input", "jsonSelector": null },
+        { "templateVariable": "output", "selectedColumnId": "output", "jsonSelector": null },
+        { "templateVariable": "rubric", "selectedColumnId": "metadata", "jsonSelector": null }
+      ],
+      "questions": [
+        {
+          "id": "required",
+          "type": "choice",
+          "scoreName": "jev_native_required",
+          "instructions": "Assess whether the agent responses in output cover the required points listed in rubric.jev_rubric.required. Check each point across the responses and use input to interpret the user's request. For multi-turn cases, consider the turns in order and check that each point is addressed in the relevant context.",
+          "options": [
+            { "value": "completo", "description": "The relevant turns cover all required points clearly and consistently." },
+            { "value": "parcial", "description": "The responses cover some required points, or leave at least one point implicit or ambiguous." },
+            { "value": "ausente", "description": "The responses omit all required points or contradict a material requirement." }
+          ]
+        },
+        {
+          "id": "forbidden",
+          "type": "choice",
+          "scoreName": "jev_native_forbidden",
+          "instructions": "Assess whether the agent makes any claim or promise listed in rubric.jev_rubric.forbidden. Examine the agent responses in output and the context in input. Account for negation and flag a violation if the agent makes a forbidden claim or promise in any turn.",
+          "options": [
+            { "value": "limpio", "description": "The agent makes no forbidden claims or promises." },
+            { "value": "dudoso", "description": "At least one statement is ambiguous and could be understood as a forbidden claim or promise." },
+            { "value": "infraccion", "description": "The agent makes at least one forbidden claim or promise." }
+          ]
+        }
+      ]
+    }
+  }
+}

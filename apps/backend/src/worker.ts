@@ -4,12 +4,12 @@ import { writeFile } from 'node:fs/promises';
 import { setTimeout as wait } from 'node:timers/promises';
 import { Logger, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { createAgent, createJevDecisionAdapter, createOpenAIPublicWriter, createOpenAIEvidenceSelector, type AgentObservation } from '@claro/agent';
-import { RunResult, type AgentTurn, type RunResume } from '@claro/contracts';
+import { createAgent, createJevDecisionAdapter, createOpenAIPublicWriter, createOpenAIEvidenceSelector, recordQuestion, type AgentObservation } from '@claro/agent';
+import { RunResult, type AgentTurn, type Citation, type RunResume } from '@claro/contracts';
 import { createClient } from 'redis';
 import type { DataSource } from 'typeorm';
 import { audit, createDatabase, enqueue, type CaseJob } from './database.js';
-import { addMessage, loadCase, saveCase, stillCurrent, latestAnalyzable } from './cases.js';
+import { addMessage, loadCase, saveCase, stillCurrent, latestAnalyzable, isLegacyKnowledgeWait } from './cases.js';
 import { businessPorts, runContext } from './business.js';
 import { integrationMcpPorts } from './integration-mcp-client.js';
 import { readRunPromptConfig } from './prompt-catalog.js';
@@ -73,6 +73,17 @@ async function claim(db: DataSource, ml: boolean): Promise<CaseJob | undefined> 
   return jobs?.[0];
 }
 
+function telegramCitationLines(citations:Citation[]) {
+  const sources=new Map(citations.map(cite=>[cite.source ? `${cite.source.publication}/${cite.source.key}` : cite.id,cite]));
+  return [...sources.values()].map(citation=>{
+    const title=citation.title.split(' · ')[0];
+    if (!citation.source || !process.env.BETTER_AUTH_URL?.startsWith('https://')) return `Fuente: ${title} · ${citation.version}`;
+    const url=new URL(`/fuentes/${citation.source.publication}/${citation.source.key}`,process.env.BETTER_AUTH_URL);
+    url.searchParams.set('pasaje',citation.id);
+    return `Ver fuente: ${title} · ${url.href}`;
+  });
+}
+
 async function project(turn: AgentTurn, result: RunResult) {
   await db.transaction(async (tx) => {
     const row = await loadCase(tx, turn.case_id, true);
@@ -91,14 +102,26 @@ async function project(turn: AgentTurn, result: RunResult) {
         row.account_inquiry ??= result.route === 'facturacion' ? 'invoice' : 'assistance';
       } else if (result.type === 'handoff') {
         row.handoff_pending = result.pending;
+        row.snapshot.handoff_reason = result.pending.slice(0,300);
         await audit(tx, row.id, 'handoff');
+      }
+      if (result.type==='answer' && result.conversation_memory) row.snapshot.conversation_memory=result.conversation_memory;
+      if (result.route!=='consulta_planes') delete row.snapshot.conversation_memory;
+      if (result.type==='answer' && result.catalog_answer && result.citations.length && isLegacyKnowledgeWait(row)) {
+        row.handoff_pending=null;
+        delete row.snapshot.handoff_reason;
+        await audit(tx,row.id,'case_autoservice_resumed',{run_id:turn.run_id,channel:turn.channel,reason:'catalogue_confirmed'});
       }
       const text = conversationalVerification ? accountVerificationPrompt : result.type === 'answer'
         ? row.snapshot.channel === 'telegram'
-          ? [result.answer, ...result.citations.map(cite => `Fuente: ${cite.title} · ${cite.version}${cite.url ? ` · ${cite.url}` : ''}`)].join('\n')
+          ? [result.answer, ...telegramCitationLines(result.citations)].join('\n\n')
           : result.answer
         : result.reason;
       const msg = addMessage(row, 'agente', text.slice(0, 4096), result.type === 'answer' ? result.citations : []);
+      if (result.type==='answer' && result.context_question && row.snapshot.intake) {
+        recordQuestion(row.snapshot.intake,result.context_question);
+        await audit(tx,row.id,'case_context_question',{run_id:turn.run_id,question_id:result.context_question.id,channel:turn.channel});
+      }
       if (row.snapshot.channel === 'telegram') {
         await enqueue(tx, `deliver:${msg.id}`, row.id, 'deliver', { text: msg.text, sender: 'agente', revision: turn.case_revision, turn_seq: turn.turn_seq });
       }
@@ -117,7 +140,8 @@ async function project(turn: AgentTurn, result: RunResult) {
       row.intent_hint = result.card.intent;
     }
     const unavailable = result.type === 'card' && result.card.facts.some(f => f.id.endsWith('-unavailable'));
-    const terminal = result.type === 'answer' && result.citations.length > 0 && turn.channel !== 'telegram' ? (result.route === 'consulta_planes' ? 'catalog_answer_published' : result.route === 'portabilidad' ? 'portability_guidance_published' : 'guidance_published') : result.type === 'card' && result.card.reason_codes.includes('retention_ineligible') && !unavailable ? 'ineligible_explained' : 'pending';
+    const clarification = result.type==='answer' && result.needs_clarification===true;
+    const terminal = result.type === 'answer' && !clarification && result.citations.length > 0 && turn.channel !== 'telegram' ? (result.route === 'consulta_planes' ? 'catalog_answer_published' : result.route === 'portabilidad' ? 'portability_guidance_published' : 'guidance_published') : result.type === 'card' && result.card.reason_codes.includes('retention_ineligible') && !unavailable ? 'ineligible_explained' : 'pending';
     await audit(tx, row.id, 'agent_task_outcome', {run_id:turn.run_id, category:result.route, channel:turn.channel, config_revision:turn.config_revision, outcome:terminal === 'pending' ? (result.type === 'handoff' ? 'expected_abstention' : 'pending') : 'qualified_success', terminal, source:result.type === 'answer' ? result.citations[0]?.id ?? '' : result.type === 'card' ? result.card.citations[0]?.id ?? '' : ''});
     const [queued] = await tx.query(`SELECT GREATEST(0, EXTRACT(EPOCH FROM (clock_timestamp()-created_at))*1000)::integer AS ms FROM outbox WHERE kind='run' AND payload->>'run_id'=$1 ORDER BY created_at LIMIT 1`,[turn.run_id]);
     if (turn.channel === 'web' && queued && Number.isFinite(Number(queued.ms))) {
@@ -125,7 +149,7 @@ async function project(turn: AgentTurn, result: RunResult) {
       await audit(tx,row.id,'conversation_publication',metadata);
       await audit(tx,row.id,'conversation_completed',metadata);
     }
-    await audit(tx, row.id, 'agent_completed', { run_id: turn.run_id, route: result.route });
+    await audit(tx, row.id, 'agent_completed', { run_id: turn.run_id, route: result.route, clarification });
     await saveCase(tx, row);
   });
 }
@@ -181,11 +205,11 @@ async function deliver(job: Extract<CaseJob, {kind: 'deliver'}>) {
           const metadata={run_id:run.id,channel:'telegram',ms:Number(run.ms)};
           await audit(tx,row.id,'conversation_publication',metadata);
           await audit(tx,row.id,'conversation_completed',metadata);
-          const [completion] = await tx.query(`SELECT metadata->>'route' AS route FROM attention_event WHERE case_id=$1 AND kind='agent_completed' AND metadata->>'run_id'=$2 ORDER BY id DESC LIMIT 1`,[row.id,run.id]);
+          const [completion] = await tx.query(`SELECT metadata->>'route' AS route,metadata->>'clarification' AS clarification FROM attention_event WHERE case_id=$1 AND kind='agent_completed' AND metadata->>'run_id'=$2 ORDER BY id DESC LIMIT 1`,[row.id,run.id]);
           const messageId=job.id.startsWith('deliver:') ? job.id.slice('deliver:'.length) : '';
           const message=row.snapshot.messages.find(item=>item.id===messageId);
           const route=completion?.route;
-          if (message?.citations?.length && route) {
+          if (message?.citations?.length && route && completion.clarification!=='true') {
             const terminal=route === 'consulta_planes' ? 'catalog_answer_published' : route === 'portabilidad' ? 'portability_guidance_published' : 'guidance_published';
             await audit(tx,row.id,'agent_task_outcome',{run_id:run.id,category:route,channel:'telegram',config_revision:run.turn.config_revision,outcome:'qualified_success',terminal,source:message.citations[0].id});
           }
@@ -200,6 +224,16 @@ async function deliver(job: Extract<CaseJob, {kind: 'deliver'}>) {
 async function handle(job: CaseJob) {
   switch (job.kind) {
     case 'run': {
+      if (job.payload.observed_context) {
+        const at=Date.now();
+        const metadata=job.payload.observed_context;
+        const config=await readRunPromptConfig(db,job.payload.config_revision);
+        if (await exportAgentSpan(job.payload,at,'context',metadata.decision,[{name:'context',started:at,ended:at,
+          metadata:{decision:metadata.decision,question_id:metadata.question_id ?? '',agent_id:'copiloto'}}],config.prompt_metadata)) {
+          await audit(db.manager,job.case_id,'langfuse_exported',{run_id:job.payload.run_id});
+        }
+        break;
+      }
       const { row } = await runContext(db.manager, job.payload.run_id, false);
       if (!stillCurrent(row, job.payload)) return audit(db.manager, job.case_id, 'agent_stale');
       const started = Date.now();

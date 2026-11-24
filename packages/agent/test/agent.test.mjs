@@ -14,11 +14,42 @@ function fixture({verified=true,messages=[],eligible=true}={}) {
   createProposal:async(_run,input)=>{calls.push(input);return {id:'p1',revision:1,title:'Oferta',detail:input.option_id,status:'pending_approval'}}
  }; return {ports,calls};
 }
+function expectAnOfferToEscalate(result) {
+ assert.equal(result.type,'answer');
+ assert.deepEqual(result.citations,[]);
+ assert.match(result.answer,/¿Quieres hablar con uno\?/);
+}
 test('unverified account never accesses account ports',async()=>{const f=fixture({verified:false}); const out=await createAgent(f.ports).run(turn({text:'mi factura'})); assert.equal(out.type,'card'); assert.deepEqual(f.calls,[]);});
-test('public plan answer has public citation; unavailable source abstains',async()=>{const f=fixture();const a=createAgent(f.ports);const out=await a.run(turn({audience:'cliente',attention_mode:'autoservicio',text:'¿Cuánto cuesta Fibra 500?'}));assert.equal(out.type,'answer');assert.ok(out.citations.length);assert.deepEqual(f.calls,[]);const b=createAgent(f.ports,{documents:[]});assert.equal((await b.run(turn({audience:'cliente',text:'precio Fibra 500'}))).type,'handoff');});
+test('public plan answer has public citation; unavailable source abstains',async()=>{const f=fixture();const a=createAgent(f.ports);const out=await a.run(turn({audience:'cliente',attention_mode:'autoservicio',text:'¿Cuánto cuesta Fibra 500?'}));assert.equal(out.type,'answer');assert.ok(out.citations.length);assert.deepEqual(f.calls,[]);const b=createAgent(f.ports,{documents:[]});expectAnOfferToEscalate(await b.run(turn({audience:'cliente',text:'precio Fibra 500'})));});
 test('retention proposes only explicit customer acceptance and correct option',async()=>{const f=fixture({messages:[msg('quiero cancelar','cliente',1),msg('Le ofrezco descuento o mejora a Fibra 500','asesor',2),msg('Acepto el descuento','cliente',3)]});const a=createAgent(f.ports);const out=await a.run(turn({turn_seq:3,text:'Acepto el descuento'}));assert.equal(out.type,'card');assert.equal(out.card.proposal.detail,'discount');assert.deepEqual(f.calls.at(-1),{option_id:'discount',citation_ids:['policy']});await a.run(turn({turn_seq:3,text:'Acepto el descuento'}));assert.equal(f.calls.filter(x=>typeof x==='object').length,1);const resumed=await a.resume({run_id:'run1',effect_id:'p1',status:'confirmed',effect_ref:'crm-1'});assert.match(resumed.card.summary,/crm-1/);});
 test('advisor statements and ineligible customers cannot create a proposal',async()=>{for(const scenario of [{actor:'asesor',eligible:true},{actor:'cliente',eligible:false}]){const f=fixture({eligible:scenario.eligible,messages:[msg('quiero cancelar','cliente',1)]});await createAgent(f.ports).run(turn({actor:scenario.actor,text:'Acepto el descuento'}));assert.equal(f.calls.filter(x=>typeof x==='object').length,0);}});
-test('filters knowledge by date and audience',async()=>{const f=fixture();const a=createAgent(f.ports,{documents:[{id:'private',title:'Fibra',excerpt:'Secreto Fibra 500',version:'1',scope:'advisor',effective_from:'2026-01-01'},{id:'future',title:'Fibra',excerpt:'Futuro Fibra 500',version:'2',scope:'public',effective_from:'2026-12-01'}]});assert.equal((await a.run(turn({audience:'cliente',text:'Fibra 500'}))).type,'handoff');});
+test('filters knowledge by date and audience',async()=>{const f=fixture();const a=createAgent(f.ports,{documents:[{id:'private',title:'Fibra',excerpt:'Secreto Fibra 500',version:'1',scope:'advisor',effective_from:'2026-01-01'},{id:'future',title:'Fibra',excerpt:'Futuro Fibra 500',version:'2',scope:'public',effective_from:'2026-12-01'}]});expectAnOfferToEscalate(await a.run(turn({audience:'cliente',text:'Fibra 500'})));});
+
+test('plans guidance uses the active catalogue and follows the prior question on web and Telegram', async () => {
+ const home={id:'catalogo-v2-003',title:'Catálogo · Internet Hogar',version:'CAT-2026 v2.0',scope:'public',type:'catalogo',
+  effective_from:'2026-12-01',excerpt:'Internet Hogar\nHogar Fibra 300 300 Mbps $84.900 Módem WiFi 6\nHogar Fibra 500 500 Mbps $109.900 Módem WiFi 6 + 1 repetidor WiFi'};
+ const mobile={...home,id:'catalogo-v2-004',title:'Catálogo · Telefonía móvil',excerpt:'Telefonía móvil pospago\nClaro Max 30 GB $49.900'};
+ for (const channel of ['web','telegram']) {
+  const messages=[];
+  const {ports,calls}=fixture({verified:false,messages});
+  const agent=createAgent(ports,{documents:[home,mobile]});
+  async function send(text) {
+   messages.push(msg(text,'cliente',messages.length+1));
+   const result=await agent.run(turn({run_id:`r${messages.length}`,turn_seq:messages.length,channel,
+     business_date:'2026-12-01',audience:'cliente',attention_mode:'autoservicio',text}));
+   assert.equal(result.type,'answer');
+   messages.push({...msg(result.answer+(channel==='telegram'?'\nFuente: Catálogo':''),'agente',messages.length+1),citations:result.citations});
+   return result;
+  }
+  assert.match((await send('¿Qué planes tienen?')).answer,/hogar.*móvil.*¿Cuál/);
+  assert.match((await send('Para mi casa')).answer,/qué tan grande/);
+  const recommended=await send('Mi casa es grande y somos 6 personas');
+  assert.match(recommended.answer,/Fibra 500.*109\.900.*repetidor/);
+  assert.doesNotMatch(recommended.answer,/84\.900|Claro Max/);
+  assert.deepEqual(recommended.citations.map(c=>c.id),[home.id]);
+  assert.deepEqual(calls,[]);
+ }
+});
 
 test('Jev receives only fixed categorical features and rejects uncertain decisions',async()=>{
  const {createJevDecisionAdapter}=await import('../dist/index.js');let body;
@@ -49,7 +80,7 @@ test('MCP read-only adapter sends a minimized query and accepts structured docum
  const adapter=createKnowledgeMcpAdapter({url:'http://localhost:3001/mcp',fetch:fake});const result=await adapter.search('María 3101234567 tiene error E-202 en televisor',{business_date:'2026-11-18',audience:'cliente',channel:'telegram'});
  assert.equal(result[0].id,'faq');const call=requests.find(r=>r?.method==='tools/call');assert.equal(call.params.name,'search_knowledge');assert.match(call.params.arguments.query,/E-202/);assert.doesNotMatch(JSON.stringify(call),/María|3101234567/);
 });
-test('knowledge adapter failures produce safe handoff',async()=>{const f=fixture();const a=createAgent(f.ports,{knowledge:{search:async()=>{throw Error('offline')}}});const result=await a.run(turn({audience:'cliente',text:'precio Fibra 500'}));assert.equal(result.type,'handoff');});
+test('knowledge adapter failures offer a handoff',async()=>{const f=fixture();const a=createAgent(f.ports,{knowledge:{search:async()=>{throw Error('offline')}}});const result=await a.run(turn({audience:'cliente',text:'precio Fibra 500'}));expectAnOfferToEscalate(result);});
 
 test('public generation receives only current sources approved for the provider', async () => {
   const { ports } = fixture({ verified:false });
@@ -84,7 +115,7 @@ test('an advisor can retrieve general policy without unlocking an account or pub
   assert.deepEqual(advisor.card.citations.map(item=>item.id),[document.id]);
   assert.deepEqual(f.calls,[]);
   const customer = await a.run(turn({run_id:'public',audience:'cliente',attention_mode:'autoservicio',text:question}));
-  assert.equal(customer.type,'handoff');
+  expectAnOfferToEscalate(customer);
   assert.deepEqual(f.calls,[]);
 });
 
@@ -232,7 +263,8 @@ test('WiFi change uses the three contiguous manual steps with their original cit
  const result=await agent.run(turn({audience:'cliente',attention_mode:'autoservicio',text:'¿Cómo cambio la contraseña de mi WiFi?'}));
  assert.equal(result.type,'answer');
  assert.deepEqual(result.citations.map(c=>c.id),['modem-009','modem-010','modem-011']);
- assert.equal(result.answer,result.citations.map(c=>c.excerpt).join('\n'));
+ assert.notEqual(result.answer,result.citations.map(c=>c.excerpt).join('\n'));
+ assert.match(result.answer,/mínimo 8 caracteres/);
  assert.match(result.answer,/192\.168\.1\.1/);assert.match(result.answer,/admin/);assert.match(result.answer,/WLAN/);
  assert.doesNotMatch(result.answer,/RESET|fábrica|restablecimiento/i);
  assert.deepEqual(f.calls,[]);

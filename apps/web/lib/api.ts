@@ -1,4 +1,5 @@
 import type { CaseEvent, CaseSnapshot, CaseSummary, Contact, Dashboard, DashboardFilters, EvalJob, EvalStatus, PromptRevision, Viewer, BillingView, CrmView, InvoiceDetail, ManualAction, IntegrationHealth, IntegrationOperation, KnowledgeInventory, KnowledgeLabQuery, KnowledgeLabResult, KnowledgePassage } from '@claro/contracts';
+import type { LangfuseEvaluations } from '@claro/contracts';
 
 const fixtures = process.env.NEXT_PUBLIC_FIXTURES === 'true';
 const now = () => new Date().toISOString();
@@ -51,6 +52,9 @@ export const api = {
  decision:(id:string,proposalId:string,revision:number,decision:'approved'|'rejected')=>fixtures?Promise.resolve(update(id,c=>{if(c.card?.proposal){c.card.proposal.status=decision==='approved'?'confirmed':'rejected';if(decision==='approved')c.card.proposal.effect_ref='CRM-OFERTA-1004';}})):post<CaseSnapshot>(`/api/v1/proposals/${encodeURIComponent(proposalId)}/decision`,{decision,revision,idempotency_key:key()}),
  draftEvent:(id:string,run_id:string,case_revision:number,kind:'used'|'edited'|'feedback_positive'|'feedback_negative')=>post(`/api/v1/cases/${encodeURIComponent(id)}/draft-events`,{run_id,case_revision,event_id:key(),kind}),
  dashboard:(filters: DashboardFilters)=>fixtures?Promise.resolve(copy(dashboard)):request<Dashboard>('/api/v1/admin/dashboard?'+new URLSearchParams(filters)),
+  langfuseEvaluations: (experiment?: string) => fixtures
+    ? Promise.resolve<LangfuseEvaluations>({ dataset_url: null, evaluator_url: null, runs: [], selected_id: null, cases: [] })
+    : request<LangfuseEvaluations>('/api/v1/admin/evaluations/langfuse' + (experiment ? '?' + new URLSearchParams({ experiment }) : '')),
  knowledgeInventory:()=>request<KnowledgeInventory>(`${knowledgePath}/publications`),
  knowledgePassages:(digest:string,source:string,signal?:AbortSignal)=>request<KnowledgePassage[]>(`${knowledgeSource(digest,source)}/passages`,{signal}),
  knowledgeQuery:(input:KnowledgeLabQuery)=>post<KnowledgeLabResult>(`${knowledgePath}/lab/query`,input),

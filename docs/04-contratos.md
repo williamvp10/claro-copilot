@@ -57,6 +57,8 @@ Un evento terminal puede incluir `status`, `route`, `reason_codes`, `answer`, `c
 
 **Contexto de entrega.** Plataforma fija `actor`, `turn_seq`, `case_revision`, `attention_mode` y `audience` a partir del caso autenticado. El texto del mensaje carece de autoridad sobre esos campos. En autoservicio la respuesta validada para `cliente` puede llegar al canal. En asistido, los runs de análisis de turnos de cliente y asesor usan `audience=asesor` y emiten `FichaAsesorActualizada` por SSE privado. Los mensajes que el asesor decide enviar al cliente siguen el puerto de mensajes de plataforma.
 
+**Chat web y traspaso.** `POST /api/v1/web-chat/session/new` abre una conversación separada con una cookie nueva bajo los mismos controles de origen y cuota que la apertura de sesión. La conversación anterior se conserva en la plataforma. El estado público usa `awaiting_advisor` y `attention_mode` para reflejar la espera y la asignación. En la cola, un asesor N1 puede ver `handoff_reason`. El historial, las lecturas de cuenta y las señales de ML se habilitan al asignar el caso al asesor correspondiente.
+
 | Evento | Datos y regla de consumo |
 | --- | --- |
 | `TurnoRecibido` | Caso, conversación, turno, autor, orden, texto y referencia del canal. Deduplicar la entrega del webhook o el reenvío desde la consola. Registrar las salidas del agente para el historial y excluirlas, junto con fichas y acuses de entrega, de los disparadores de análisis. |

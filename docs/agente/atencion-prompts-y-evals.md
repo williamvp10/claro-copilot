@@ -37,6 +37,16 @@ Los motivos se resumen a partir de las transcripciones. En cada caso se diferenc
 
 El resultado del índice sirve para construir escenarios. Un cierre cortés o «gracias» puede coexistir con un caso pendiente. Usar resultados separados como `resuelto_confirmado`, `pendiente`, `derivado` y `acción_confirmada`. La satisfacción viene de la encuesta. Las transcripciones informan sobre lenguaje y secuencias de atención. Para requisitos, derechos, precios y acciones, usar fuentes oficiales versionadas del caso y datos autorizados del CRM.
 
+### Memoria comercial y comparación de precios
+
+El caso guarda en PostgreSQL el servicio activo, el plan de referencia, la preferencia de precio y la comparación pendiente. LangGraph puede recuperar una referencia histórica de los seis mensajes recientes del bot y del cliente. La publicación del resultado y la actualización de memoria ocurren en la misma transacción del worker. Un turno vencido o un resultado repetido queda fuera de esa publicación. La sesión web retoma el mismo caso al recargar. **Nuevo chat** abre otro caso con su propio contexto.
+
+En la secuencia «¿Qué incluye Claro Max Ilimitado?» → «¿Tienen planes más económicos?» → «Dime tú», el agente conserva Ilimitado como referencia. Consulta las filas públicas del catálogo vigente mediante `list_catalog_plans` y calcula el ahorro en COP. La v1 ofrece Claro Max 25 GB por $49.900 al mes y la v2 ofrece Claro Max 30 GB por el mismo precio. Frente a Ilimitado son $50.000 menos al mes. La fuente va aparte del mensaje. Si el servicio aún no está definido, el agente da una opción mensual para hogar y otra para móvil y pregunta cuál interesa. En prepago compara el precio del paquete e indica su vigencia.
+
+Cuando el catálogo no confirma un precio, el agente lo explica y ofrece hablar con un asesor. Una conversación que quedó en espera por falta de evidencia puede volver a autoservicio cuando la comparación queda respaldada y todavía no tiene asesor. La observación de Langfuse `tool.list_catalog_plans` registra el origen de la referencia, la versión del catálogo y el motivo para responder, preguntar u ofrecer la derivación.
+
+La comparación de prompts incorpora siete regresiones de catálogo además de las 30 preguntas golden y los 19 escenarios complementarios. La prueba de plataforma ejecuta web y el webhook simulado de Telegram con un reinicio del worker entre turnos.
+
 ### Una conversación de punta a punta
 
 **Cliente en Telegram:** «En la TV sale E-202. No veo ningún canal».
@@ -88,6 +98,8 @@ Para trazabilidad guardar `route`, `reason_codes`, herramientas, latencia, refer
 La política de retención pide una visita en 24 horas si existen **≥3 tickets técnicos en 90 días**. Crear un ticket registra la solicitud. Para decir que la visita quedó agendada haría falta que el sistema devuelva confirmación de agenda. De forma análoga, `201` de oferta permite informar que fue registrada. Un timeout deja un estado pendiente de verificación. [Política de retención](../05-insumos.md#políticas-y-contratos) · [CRM OpenAPI](../05-insumos.md#políticas-y-contratos) · [Facturación OpenAPI](../05-insumos.md#políticas-y-contratos)
 
 ## Prompts iniciales versionables
+
+Para implementar el próximo corte, usar la [instrucción base candidata, la distribución sobre las doce plantillas reales y las pruebas GEN-01 a GEN-12](../evolucion-mvp/comportamiento-del-agente.md). Los borradores de esta sección documentan el diseño inicial. Los identificadores ejecutables figuran en el [catálogo del worker](../evolucion-mvp/prompts.claro-copiloto.json).
 
 Los siguientes bloques son borradores de instrucciones. Mantener el contexto de sesión y la evidencia en campos separados. Las reglas de identidad, escalamiento, escritura y fechas siguen en el backend. Definir `route` y `reason_codes` como enums del esquema de respuesta.
 
@@ -180,3 +192,17 @@ Devuelve las etiquetas con una referencia breve al pasaje de evidencia usado.
 ```
 
 **Definición del gate.** Ejecutar la suite con mocks por escenario y reloj de negocio fijo, capturar ruta, IDs de citas y herramientas, verificar efectos en el mock y usar Jev como primer juez de lo semántico. Enviar casos dudosos a revisión y mantener el gate de permisos y efectos en código. Los incumplimientos de permisos, escrituras y estado son fallos deterministas. Para la calidad del golden original, usar la meta del reto **≥80 %**, junto con groundedness **≥0,85** y Recall@k **≥0,90** donde aplican. Reportar por separado exactitud, satisfacción y éxito de tarea. Langfuse conserva las trazas y resultados, y CI decide la promoción. [Evals de Langfuse](https://langfuse.com/docs/evaluation/overview) · [Evaluador inicial Jev](jev-evals.md) · [README de ML y despliegue](../06-calidad-y-release.md)
+
+### Preguntas de contexto en web, Telegram y la consola
+
+El catálogo ejecutable vive en [context.ts](../../packages/agent/src/context.ts). Cada entrada indica ruta, dato, condición, cuándo omitir, decisión, procedencia y transcripciones. Los únicos patrones explícitos posteriores al motivo en las 50 transcripciones son medir por Wi-Fi o cable (cinco) y revisar el cable (dos). En los diez casos de cancelación el cliente declaró el motivo de entrada: seis por mudanza, tres por precio u otra oferta y uno por fallas recurrentes. El catálogo distingue esas observaciones de las preguntas propuestas.
+
+NestJS registra en `CaseSnapshot.intake` la intención activa, los datos declarados y las preguntas emitidas. La ficha conserva por separado las respuestas declaradas y los hechos verificados por las integraciones. En cancelación, las preguntas opcionales terminan al reunir el motivo y, si aplica, la frecuencia. También terminan si la persona prefiere omitirlas, insiste en continuar o solicita atención humana. El máximo es dos y las reglas de escalamiento prioritario tienen precedencia. Los flujos de identidad y los efectos siguen bajo control de NestJS.
+
+El asesor asignado puede añadir una pregunta sugerida al borrador. Los datos declarados se presentan en su ficha privada. Las etiquetas de búsqueda y la decisión de aclarar o derivar se correlacionan por `run_id` con la revisión del prompt y la del índice en Langfuse. En las trazas se guardan IDs de preguntas y decisiones, sin reproducir los turnos de las transcripciones.
+
+### Reproducción de TRX-0012
+
+Claro Copiloto se presenta al abrir la atención. La verificación opcional de demo acepta un alias como `11111` y un código de seis dígitos. Confirma la identidad en el mismo hilo. Las consultas generales de catálogo siguen disponibles durante el autoservicio.
+
+El recorrido pregunta qué incluye Claro Max Ilimitado, consulta si puede cambiarlo y después acepta con «Hágale». La ficha de catálogo aporta el precio y las condiciones del plan. La FAQ aporta el costo del cambio y el ciclo en que aplicaría. La solicitud final se deriva a un asesor para tramitarla. Las citas se adjuntan aparte y los canales de voz y chat aplican su propio límite de redacción.

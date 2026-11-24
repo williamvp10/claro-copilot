@@ -1,5 +1,7 @@
 # Demo deployment
 
+For the isolated Docker Desktop demo with both registered models, inference tracing, and the call-derived Langfuse experiment, follow the [local demo runbook](../docs/08-demo-local.md).
+
 This Compose definition is the deployment specification for the first Dokploy demo and also runs locally. It does not create a Dokploy instance, configure its proxy, provision TLS, or deploy automatically. Route the public HTTPS domain to `web:3000`. The browser reaches NestJS through Next.js. NestJS, Redis, PostgreSQL, CRM and billing stay on the private network. If Dokploy needs a host port, set `WEB_BIND` to the appropriate interface and restrict it with host firewall rules.
 
 ## Prepare and verify locally
@@ -147,3 +149,11 @@ Para las preguntas de cuenta, inicia el API con el ID golden como `LOCAL_PROMPT_
 node apps/backend/scripts/verify-golden-platform.mjs CANDIDATE GQ-25 CASE_ID RUN_ID GOLDEN.jsonl
 node apps/backend/scripts/verify-golden-platform.mjs CANDIDATE GQ-28 CASE_ID RUN_ID GOLDEN.jsonl PROPOSAL_ID
 ```
+
+### Contextual knowledge release
+
+Prepare a private publication outside the checkout with `prepare_corpus.py --contextual`, the reviewed inputs, a manifest, the originals directory and the existing `--approved-public` bundle. The builder records source, section, page and tags while preserving excerpt bytes. The manifest also records the generated FAQ PDF. Raw dialogue samples and account data stay outside the corpus.
+
+Start the private ML service with its pinned intent bundle before running `publish-knowledge` on pgvector. The job embeds passages via the authenticated internal E5 endpoint, then publishes all rows under the manifest SHA-256. Restart the API, worker, eval worker and optional Knowledge MCP with the same `KNOWLEDGE_INDEX_REVISION`. The default is `legacy`. Select the previous digest or `legacy` and the previous approved prompt to roll back. Mount the corresponding reviewed originals directory into the API using the knowledge originals Compose overlay. HTTPS `BETTER_AUTH_URL` supplies the origin for Telegram source links.
+
+Run the comparison command first with `KNOWLEDGE_EVAL_BASELINE=legacy` and the candidate index digest to compare retrieval under the same active prompt. Then run it with the index digest and without `KNOWLEDGE_EVAL_BASELINE` to compare prompts on that index. The index-only report never replaces the prompt gate. The usual live quality and critical-check gates apply before promoting the pair to Dokploy.

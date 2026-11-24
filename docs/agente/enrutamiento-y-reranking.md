@@ -1,8 +1,8 @@
 # Enrutamiento, clasificación y re-ranking del agente
 
-El MVP usa **OpenAI Responses API directa** para generar, **Jev 1.14 de TypeSafe por OpenRouter** para clasificar y **un cross-encoder local** para reordenar evidencia de conocimiento. LangGraph combina estas señales con los permisos, las reglas de negocio y el presupuesto del turno. La plataforma sigue siendo responsable de aprobar y ejecutar acciones. El clasificador clásico publicado en MLflow conserva su modo sombra para comparar desempeño con etiquetas humanas.
+LangGraph coordina la recuperación de evidencia, los permisos y las reglas de negocio. En modo vivo puede usar **OpenAI Responses API** para redactar y **Jev 1.14 de TypeSafe por OpenRouter** para clasificar. La plataforma aprueba y ejecuta acciones. El clasificador clásico publicado en MLflow aporta una señal para el asesor y permite comparar su desempeño con etiquetas humanas.
 
-El worker NestJS del agente tiene dos credenciales separadas de servidor. `OPENAI_API_KEY` corresponde al proyecto con créditos y se usa para generación y embeddings. `OPENROUTER_API_KEY` se usa exclusivamente en el adaptador de Jev y su consumo se factura en OpenRouter. Los modelos generativos, incluido el respaldo, usan la conexión directa con OpenAI. [SDD del agente](diseno.md) · [Contratos](../04-contratos.md) · [Jev en OpenRouter](https://openrouter.ai/docs/guides/community/jev)
+El worker NestJS usa `OPENAI_API_KEY` para la generación en vivo y `OPENROUTER_API_KEY` para el adaptador de Jev. [SDD del agente](diseno.md) · [Contratos](../04-contratos.md) · [Jev en OpenRouter](https://openrouter.ai/docs/guides/community/jev)
 
 ## Qué decide cada componente
 
@@ -91,7 +91,15 @@ El ejemplo asume **2.000 tokens de entrada y 250 de salida facturable**, sin sum
 - La repetición se limita a síntesis o lecturas idempotentes dentro del plazo del turno. Un efecto incierto permanece pendiente de reconciliación con el mismo identificador. Registrar todas las llamadas y el motivo de la selección, incluida una escalada por calidad, un respaldo o una degradación.
 - En staging, iniciar con techo de **USD 0,02 de generación por turno en vivo**, **dos intentos de síntesis** y, en rutas compuestas, hasta **tres subagentes de lectura** dentro del mismo presupuesto. Estimar el consumo antes de cada llamada con el tamaño real de la entrada y el máximo de salida; si se agota el plazo o presupuesto, responder con hechos comprobados y señalar lo pendiente. Validar contra el p95 y el costo de la suite; los valores no son una tarifa garantizada.
 
-## Recuperación y re-ranking
+## Recuperación de la demo
+
+PostgreSQL filtra los pasajes publicados por audiencia, vigencia y canal. La recuperación consulta hasta 36 coincidencias léxicas con búsqueda de texto completo en español. Cuando la extensión pgvector está disponible, incorpora hasta 16 coincidencias de un vector léxico local de 128 posiciones y fusiona los resultados con RRF. El agente reordena localmente los candidatos por coincidencias de título y contenido, alias, cobertura y diversidad. El laboratorio muestra los cinco primeros resultados y la revisión activa. El agente considera hasta tres pasajes para componer la respuesta.
+
+- En **Administración → Conocimiento RAG → Chat de prueba**, seleccionar **Asesor** y preguntar «Política de retención de clientes». Se restringe la búsqueda a `POL-RET-2026` y una consulta general prioriza los criterios de elegibilidad. El alcance Cliente conserva la política interna fuera de la recuperación.
+- Una consulta amplia de planes utiliza el catálogo vigente y pregunta si el cliente busca hogar o móvil. En la conversación de hogar puede pedir el tamaño de la vivienda y presentar una opción con el precio de la fuente. La conversación conserva el contexto en web y Telegram. Las consultas específicas conservan la redacción con OpenAI cuando está habilitada y la evidencia está aprobada.
+- En **Administración → Prompts y evaluaciones**, editar **Respuesta pública con OpenAI** (`public_answer`). El catálogo versionado contiene instrucciones de tono, síntesis y citas. Guardar crea una candidata que se evalúa contra la revisión activa. Las transiciones de OTP de demo y asignación se gestionan en la aplicación.
+
+## Evolución propuesta de recuperación y re-ranking
 
 1. **Indexar pasajes citables.** Separar por sección, conservar filas de tarifas, títulos y localizador. Adjuntar `source_id`, `document_version`, producto, visibilidad, estado y fechas efectivas. Usar `text-embedding-3-small` de OpenAI para documentos y consultas. Fijar dimensión y revisión por índice. El precio publicado es USD 0,02 por millón de tokens de entrada. [Modelo de embeddings](https://developers.openai.com/api/docs/models/text-embedding-3-small) · [Guía de embeddings](https://developers.openai.com/api/docs/guides/embeddings)
 2. **Filtrar antes de buscar.** Con los datos del caso, aplicar ámbito, fecha de negocio, estado y producto si está confirmado. Las respuestas automáticas al cliente en chat web o Telegram recuperan conocimiento público. Para la ficha interna de ese mismo hilo se aplica el ámbito vigente del asesor. Los hechos de CRM y facturación llegan como datos tipados desde herramientas autorizadas.

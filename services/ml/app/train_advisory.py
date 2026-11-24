@@ -181,6 +181,24 @@ def tracking_run(task: str, version: str):
         yield run
 
 
+def register_candidate(directory: Path, run, version: str, algorithm: str):
+    import mlflow
+    from mlflow.models import Model
+
+    name = "claro_intent_e5_svm" if algorithm == "e5_linear_svm" else "claro_churn_logistic"
+    logged = mlflow.initialize_logged_model(name=name, source_run_id=run.info.run_id, model_type=algorithm)
+    with tempfile.TemporaryDirectory() as temp:
+        artifacts = Path(temp)
+        shutil.copyfile(directory / "model.skops", artifacts / "model.skops")
+        mlmodel = Model(model_id=logged.model_id, run_id=run.info.run_id)
+        mlmodel.add_flavor("claro_skops", serialization_format="skops", data="model.skops")
+        mlmodel.save(str(artifacts / "MLmodel"))
+        mlflow.MlflowClient().log_model_artifacts(logged.model_id, temp)
+    mlflow.finalize_logged_model(logged.model_id, "READY")
+    registered = mlflow.register_model(f"models:/{logged.model_id}", name, tags={"bundle_version": version})
+    return {"model_id": logged.model_id, "registered_model": name, "registered_version": registered.version}
+
+
 def publish(root: Path, version: str, model, evaluation: dict, metadata: dict, assets: Path | None = None, run=None):
     destination = root / version
     if destination.exists():
@@ -199,7 +217,6 @@ def publish(root: Path, version: str, model, evaluation: dict, metadata: dict, a
         }
         if run is not None:
             manifest.update(run_id=run.info.run_id, experiment_id=run.info.experiment_id)
-        (staging / "manifest.json").write_bytes(canonical(manifest))
         if assets:
             folder = staging / "encoder"
             folder.mkdir()
@@ -229,6 +246,9 @@ def publish(root: Path, version: str, model, evaluation: dict, metadata: dict, a
             mlflow.log_metrics(evaluation["metrics"])
             mlflow.log_artifact(str(staging / "model.skops"), artifact_path="model")
             mlflow.log_artifact(str(staging / "evaluation.json"), artifact_path="evaluation")
+            manifest.update(register_candidate(staging, run, version, metadata["algorithm"]))
+        (staging / "manifest.json").write_bytes(canonical(manifest))
+        if run is not None:
             mlflow.log_artifact(str(staging / "manifest.json"), artifact_path="manifest")
         staging.rename(destination)
     return {"bundle": str(destination), **({"run_id": run.info.run_id, "experiment_id": run.info.experiment_id} if run is not None else {}), **evaluation}

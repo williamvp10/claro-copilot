@@ -9,7 +9,7 @@ import { Button } from './ui/button';
 const errorText=(error:unknown)=>error instanceof Error?error.message:'No se pudo completar la consulta.';
 const reasonCopy={no_evidence:'No encontré evidencia vigente suficiente para esta consulta.',
   retrieval_unavailable:'El servicio de recuperación no está disponible.',generation_disabled:'OpenAI no está habilitado para esta prueba.',
-  generation_fallback:'Se utilizó una respuesta extractiva con la evidencia disponible.'};
+  generation_fallback:'Se utilizó una respuesta local con la evidencia disponible.'};
 
 function Passages({items}:{items:Citation[]}) {
   return <ol className="knowledge-passages">{items.map(item=><li key={`${item.id}:${item.version}`}>
@@ -112,7 +112,10 @@ function KnowledgeSources({inventory}:{inventory:KnowledgeInventory}) {
       </div>
       {error?<p className="alert error" role="alert">{error}</p>:source.file_name&&(!passages?<p role="status">Consultando pasajes…</p>:<>
         <h3>Pasajes indexados</h3>
-        <Passages items={passages.flatMap(item=>item.citation?[item.citation]:[])}/>
+        {passages.map(item=>item.citation && <div key={item.id}>
+          {item.metadata&&<p>{item.metadata.section} · {item.metadata.tags.join(', ')}</p>}
+          <Passages items={[item.citation]}/>
+        </div>)}
         {passages.some(item=>!item.citation)&&<p>Algunos pasajes de esta publicación ya no coinciden con el índice actual.</p>}
       </>)}
     </section>}
@@ -149,10 +152,11 @@ function KnowledgeLab({inventory}:{inventory:KnowledgeInventory}) {
           <option value="web">Web</option><option value="telegram">Telegram</option></select></label>
         <label>Fecha de consulta<input type="date" required value={date} disabled={working} onChange={event=>setDate(event.target.value)}/></label>
         <label>Respuesta<select value={mode} disabled={working} onChange={event=>setMode(event.target.value as KnowledgeLabQuery['mode'])}>
-          <option value="extractive">Extractiva</option><option value="openai" disabled={!inventory.live_available||audience==='asesor'}>OpenAI</option>
+          <option value="extractive">Local</option><option value="openai" disabled={!inventory.live_available||audience==='asesor'}>OpenAI</option>
         </select></label>
       </div>
       {mode==='openai'&&<p>OpenAI procesa el tema saneado y los extractos públicos aprobados.</p>}
+      {audience==='cliente'&&<p>La audiencia Asesor permite probar fuentes internas, como la política de retención.</p>}
       <label>Pregunta<textarea value={question} onChange={event=>setQuestion(event.target.value)} required minLength={3} maxLength={1024}
         disabled={working} rows={2} placeholder="¿Cuánto cuesta Fibra 500?"/></label>
       <div><Button type="submit" disabled={working||!date||question.trim().length<3}>{working?'Consultando fuentes…':'Probar pregunta'}</Button></div>
@@ -161,11 +165,17 @@ function KnowledgeLab({inventory}:{inventory:KnowledgeInventory}) {
     <div className="knowledge-stack" aria-live="polite">
       {turns.map(({input,result})=><article key={result.run_id} className="ops-plot knowledge-stack">
         <header><h3>{input.question}</h3><p>{input.audience==='cliente'?'Cliente':'Asesor'} · {input.channel} · {input.business_date}</p></header>
-        <div className="knowledge-tags"><Badge variant="secondary">{result.mode==='openai'?'OpenAI':result.mode==='extractive'?'Extractiva':'Abstención'}</Badge>
+        <div className="knowledge-tags"><Badge variant="secondary">{result.mode==='openai'?'OpenAI':result.mode==='guided'?'Orientación con fuentes':result.mode==='extractive'?'Extractiva':'Abstención'}</Badge>
           <Badge variant="outline">{result.transport==='mcp'?'MCP Conocimiento':'PostgreSQL'}</Badge>
           <Badge variant="outline">{result.pgvector?'pgvector local habilitado':'Índice local textual'}</Badge></div>
         {result.answer&&<p className="knowledge-answer">{result.answer}</p>}
         {result.reason&&<p>{reasonCopy[result.reason]}</p>}
+        {result.search&&<details><summary>Búsqueda preparada</summary>
+          <p>{result.search.query}</p>
+          {result.search.source&&<p>Fuente objetivo {result.search.source}</p>}
+          {result.search.tags.length>0&&<p>Etiquetas {result.search.tags.join(', ')}</p>}
+          <p>{result.search.attempts} consultas · Índice <code>{result.search.revision}</code></p>
+        </details>}
         {result.citations.length>0&&<><h3>Fuentes de la respuesta</h3><Passages items={result.citations}/></>}
         {result.retrieved.length>0&&<details><summary>{result.retrieved.length} primeros pasajes recuperados</summary><Passages items={result.retrieved}/></details>}
         <p>Revisión {result.revision??'sin publicar'} · {result.latency_ms} ms total · {result.retrieval_ms} ms de recuperación · <code>{result.run_id}</code></p>

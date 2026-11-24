@@ -1,13 +1,14 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { asksToChangeMobilePlan, catalogComparison, contextIntent, evolveContext, mandatoryPolicyRoute, nextContextQuestion, recordQuestion } from '@claro/agent';
 import { ConflictException, ForbiddenException, ServiceUnavailableException, Inject, Injectable, NotFoundException, UnauthorizedException, HttpException, UnprocessableEntityException } from '@nestjs/common';
 import { type z } from 'zod';
 import {
-  AgentTurn, CaseSnapshot, WebChatSnapshot, type Actor, type Contact, type DecideProposal, type Intent,
+  AgentTurn, CaseSnapshot, WebChatSnapshot, demoWelcome, demoVerifyInvitation, type Actor, type Contact, type DecideProposal, type Intent,
   type CloseCase, type Message, type OpenCase, type Proposal, type SendMessage, type Viewer
 } from '@claro/contracts';
 import { DataSource, type EntityManager } from 'typeorm';
 import { audit, type CaseRow, type ContactRow, type DraftPublication, DATABASE, enqueue } from './database.js';
-import { accountInquiry, accountReply, accountVerificationPrompt, codeCandidates, contactCandidates, requestedAdvisor, type AccountInquiry } from './demo-accounts.js';
+import { accountHandoffReason, accountInquiry, accountReply, accountVerificationPrompt, codeCandidates, contactCandidates, isGreeting, isVerificationContact, requestedAdvisor, type AccountInquiry, type AccountRead } from './demo-accounts.js';
 import { privateSignals, queueChurn } from './ml-advisory.js';
 import { readRunPromptConfig } from './prompt-catalog.js';
 import { SimulatorFailure, simulators } from './simulator-client.js';
@@ -51,6 +52,25 @@ function operatorSnapshot(snapshot: CaseSnapshot): CaseSnapshot {
   if (!snapshot.card?.advisor_draft || draftIsCurrent(snapshot)) return snapshot;
   const {advisor_draft:_draft,advisor_draft_run_id:_run,...context} = snapshot.card;
   return {...snapshot,card:{...context,advisor_draft_status:'stale'}};
+}
+
+function handoffReason(row: CaseRow) {
+  if (row.snapshot.handoff_reason || !row.handoff_pending) return row.snapshot.handoff_reason;
+  const request=row.snapshot.messages.findLast(message=>message.actor==='cliente' && accountInquiry(message.text)==='assistance');
+  return request ? accountHandoffReason(request.text) : row.handoff_pending.slice(0,300);
+}
+
+function assistanceReason(row:CaseRow, text:string) {
+  const intake=row.snapshot.intake;
+  if (intake?.intent==='facturacion' && intake.facts.objetivo) return `Consulta de facturación. ${intake.facts.objetivo}.`;
+  if (intake?.intent!=='cancelacion') return accountHandoffReason(text);
+  const reason=intake.facts.motivo;
+  return reason ? `El cliente solicita cancelar el servicio. Motivo declarado: ${reason.toLowerCase()}.` : 'El cliente solicita cancelar el servicio.';
+}
+
+export function isLegacyKnowledgeWait(row: CaseRow) {
+  return row.snapshot.status==='open' && row.snapshot.attention_mode==='autoservicio' &&
+    !row.snapshot.owner_id && row.handoff_pending==='Consultar fuente autorizada';
 }
 
 export function stillCurrent(row: CaseRow, turn: AgentTurn) {
@@ -134,7 +154,8 @@ async function revisionForTurn(tx: EntityManager, row: CaseRow): Promise<{revisi
   return {revision:candidate.revision,scenario};
 }
 
-export async function queueRun(tx: EntityManager, row: CaseRow, message = latestAnalyzable(row.snapshot), shadow = false) {
+export async function queueRun(tx: EntityManager, row: CaseRow, message = latestAnalyzable(row.snapshot), shadow = false,
+  observedContext?:AgentTurn['observed_context']) {
   if (!message || message.actor === 'agente') return;
   const {revision,scenario} = await revisionForTurn(tx, row);
   const scope = row.snapshot.verified ? 'verified' : 'unverified';
@@ -143,10 +164,10 @@ export async function queueRun(tx: EntityManager, row: CaseRow, message = latest
     channel: row.snapshot.channel, actor: message.actor, turn_seq: message.turn_seq, case_revision: row.snapshot.revision,
     attention_mode: row.snapshot.attention_mode, audience: row.snapshot.attention_mode === 'asistido' ? 'asesor' : 'cliente',
     scope_ref: scope, config_revision: revision, business_date: process.env.DEMO_MODE === 'true' ? (process.env.DEMO_BUSINESS_DATE || '2026-11-18') : new Date().toISOString().slice(0, 10),
-    text: clearPersonalData(message.text)
+    text: clearPersonalData(message.text), observed_context:observedContext
   });
   await tx.query('INSERT INTO agent_run VALUES ($1,$2,$3)', [turn.run_id, row.id, turn]);
-  if (scenario) await audit(tx,row.id,'candidate_replay_queued',{
+  if (scenario && !observedContext) await audit(tx,row.id,'candidate_replay_queued',{
     run_id:turn.run_id,candidate_revision:revision,scenario_id:scenario,fixture:row.contact_ref,
     ...(scenario==='CC-E10' ? {transport:'whatsapp_fixture'} : {})
   });
@@ -154,6 +175,7 @@ export async function queueRun(tx: EntityManager, row: CaseRow, message = latest
   if (shadow && message.actor === 'cliente' && !message.verification_input && process.env.ML_API_URL) {
     await enqueue(tx, `ml:${message.id}`, row.id, 'ml', turn);
   }
+  return turn;
 }
 
 async function queueIntentOnly(tx:EntityManager,row:CaseRow,message:Message) {
@@ -177,7 +199,7 @@ export class Cases {
     const rows: CaseRow[] = await this.db.query(`SELECT * FROM attention_case WHERE snapshot->>'owner_id'=$1 OR
       ($2 AND snapshot->>'owner_id' IS NULL AND (handoff_pending IS NOT NULL OR snapshot->>'attention_mode'='asistido'))
       ORDER BY snapshot->>'updated_at' DESC LIMIT 100`, [viewer.id, canIntake]);
-    return rows.map(({ snapshot: { messages: _messages, card: _card, cursor: _cursor, ...summary } }) => summary);
+    return rows.map(({ snapshot: { messages: _messages, card: _card, intake: _intake, cursor: _cursor, ...summary } }) => summary);
   }
 
   async contacts(viewer: Viewer): Promise<Contact[]> {
@@ -188,10 +210,16 @@ export class Cases {
 
   async get(viewer: Viewer, id: string) {
     const row = await loadCase(this.db.manager, id);
+    const reason=handoffReason(row);
+    if (!row.snapshot.owner_id && row.handoff_pending && row.snapshot.status==='open' &&
+        (viewer.capabilities?.includes('n1') ?? viewer.role==='asesor')) {
+      // A queue preview exposes the reason. Account facts and conversation history require assignment.
+      const {tracking:_tracking,ml:_ml,intake:_intake,...snapshot}=row.snapshot;
+      return {...snapshot,handoff_reason:reason,messages:[],card:null,last_message:null};
+    }
     checkCase(viewer, row, true);
-    if (!row.snapshot.owner_id && !row.handoff_pending) throw new NotFoundException('Caso no disponible');
     const [ml, tracking] = await Promise.all([privateSignals(this.db,row),this.caseTracking(row)]);
-    return {...operatorSnapshot(row.snapshot),ml,tracking};
+    return {...operatorSnapshot(row.snapshot),handoff_reason:reason,ml,tracking};
   }
 
   private async caseTracking(row:CaseRow):Promise<NonNullable<CaseSnapshot['tracking']>> {
@@ -227,6 +255,7 @@ export class Cases {
         throw new ForbiddenException('Se requiere un asesor de primer nivel disponible');
       }
       if (!row.handoff_pending) throw new ConflictException('El caso todavía está en autoservicio');
+      row.snapshot.handoff_reason = handoffReason(row);
       row.snapshot.owner_id = viewer.id;
       row.snapshot.attention_mode = 'asistido';
       row.snapshot.revision += 1;
@@ -442,11 +471,11 @@ export class Cases {
     });
   }
 
-  async startWeb(token?: string) {
+  async startWeb(token?: string, fresh = false) {
     this.requireWebDemo();
     return this.db.transaction(async (tx) => {
       const session = await this.webSession(tx, token);
-      if (session) return { token: undefined, snapshot: this.publicWeb(await loadCase(tx, session.case_id)) };
+      if (session && !fresh) return { token: undefined, snapshot: this.publicWeb(await loadCase(tx, session.case_id)) };
       await this.consumeWebQuota(tx, 'start', 24);
       await tx.query('DELETE FROM web_chat_session WHERE expires_at <= now()');
       const issued = randomBytes(32).toString('base64url');
@@ -538,29 +567,92 @@ export class Cases {
 
   private async customerTurn(tx: EntityManager, row: CaseRow, text: string) {
     const demo = process.env.DEMO_MODE === 'true';
-    const requested = demo ? accountInquiry(text) : null;
-    const pending = demo ? this.pendingInquiry(row) : null;
-    const handoff = demo && requestedAdvisor(text);
+    let requested = demo ? accountInquiry(text) : null;
+    let pending = demo ? this.pendingInquiry(row) : null;
+    const lastMessage = row.snapshot.messages.at(-1);
+    const handoff = requestedAdvisor(text) || (
+      lastMessage?.actor === 'agente' && lastMessage.text.endsWith('¿Quieres hablar con uno?') && /^\s*(?:s[ií](?:,? por favor)?|por favor|de acuerdo|claro(?: que s[ií])?)[. !]*$/i.test(text)
+    );
     const verified = customerReference(row);
     const aliases = demo ? contactCandidates(text) : [];
     const codes = demo ? codeCandidates(text) : [];
+    const planChange=demo && asksToChangeMobilePlan(text,lastMessage);
+    if (planChange) {
+      requested='assistance';
+      row.snapshot.handoff_reason='El cliente solicita cambiar su plan móvil.';
+    }
+    if (pending==='identify' && !codes.length && !aliases.length && !isGreeting(text) && (requested || contextIntent(text))) {
+      pending=null;
+      row.account_inquiry=null;
+      this.clearChallenge(row);
+    }
+    if (demo && !verified && !pending && !requested && !handoff && row.snapshot.attention_mode==='autoservicio' &&
+        !contextIntent(text) && isVerificationContact(text,aliases)) requested='identify';
     const activeChallenge = row.account_challenge_id && Number(row.account_challenge_expires_at) > Date.now();
-    const verificationTurn = !verified && !!pending && !handoff && (!requested || !!activeChallenge);
+    const greeting=!requested && !pending && !contextIntent(text) && isGreeting(text);
+    const safeText=greeting ? 'Hola' : this.safeCustomerText(text,aliases,codes);
+    const priority=mandatoryPolicyRoute(safeText);
+    const previousIntake=row.snapshot.intake;
+    const collectingCancellation=demo && row.snapshot.attention_mode==='autoservicio' && !pending &&
+      (requested==='assistance' && contextIntent(text)==='cancelacion' ||
+        previousIntake?.intent==='cancelacion' && !!previousIntake.pending);
+    const verificationTurn = !verified && !handoff && !priority && (requested==='identify' || !!pending && (!requested || !!activeChallenge));
     const message = addMessage(row,'cliente',verificationTurn
       ? '[Dato de verificación oculto]'
-      : this.safeCustomerText(text,aliases,codes));
+      : safeText);
     if (verificationTurn) message.verification_input = true;
 
-    if (handoff && row.snapshot.attention_mode === 'autoservicio') {
-      row.snapshot.revision += 1;
-      row.handoff_pending = 'Atención humana';
-      row.account_inquiry = null;
-      this.clearChallenge(row);
-      await this.channelReply(tx,row,'Te comunicaré con un asesor en esta misma conversación.');
-      await audit(tx,row.id,'handoff_requested');
+    if (row.snapshot.attention_mode === 'autoservicio' && row.handoff_pending && !pending) {
+      const canResume = isLegacyKnowledgeWait(row) && (handoff || priority ||
+        !!catalogComparison(safeText,row.snapshot.messages,row.snapshot.conversation_memory,message.turn_seq));
+      if (!canResume) return;
+    }
+    if (greeting && row.snapshot.attention_mode==='autoservicio') {
+      await this.channelReply(tx,row,row.snapshot.channel==='web' || lastMessage
+        ? 'Hola, ¿en qué te puedo ayudar?'
+        : `${demoWelcome}${demo ? ` ${demoVerifyInvitation}` : ''} ¿En qué te puedo ayudar?`);
       return;
     }
-    if (verified && requested && requested !== 'assistance' && row.snapshot.attention_mode === 'autoservicio' && !row.handoff_pending) {
+    if (requested && requested!=='identify' && !verificationTurn) delete row.snapshot.conversation_memory;
+    if (!verificationTurn && !(collectingCancellation && previousIntake && aliases.length)) {
+      row.snapshot.intake=evolveContext(safeText,previousIntake);
+    }
+    if (!handoff && priority) {
+      row.account_inquiry=null;
+      this.clearChallenge(row);
+      await queueRun(tx,row,message,true);
+      return;
+    }
+    const intake=row.snapshot.intake;
+    if (demo && !pending && !handoff && row.snapshot.attention_mode==='autoservicio' && intake?.intent==='facturacion' && intake.facts.objetivo) {
+      if (nextContextQuestion(intake) && !aliases.length) {
+        await queueRun(tx,row,message,true);
+        return;
+      }
+      requested='assistance';
+    }
+    if (collectingCancellation && !handoff && intake?.intent==='cancelacion') {
+      const next=nextContextQuestion(intake);
+      if (next && !aliases.length && !(previousIntake?.pending && contextIntent(text)==='cancelacion' && !intake.facts.motivo)) {
+        recordQuestion(intake,next);
+        const run=await queueRun(tx,row,message,false,{decision:'ask',question_id:next.id});
+        await audit(tx,row.id,'case_context_question',{run_id:run?.run_id,question_id:next.id,channel:row.snapshot.channel});
+        await this.channelReply(tx,row,next.text);
+        return;
+      }
+      delete intake.pending;
+      requested='assistance';
+    }
+    if (row.snapshot.attention_mode === 'autoservicio' && (handoff || (verified && requested === 'assistance'))) {
+      await queueIntentOnly(tx,row,message);
+      await this.requestHumanAttention(tx,row,planChange ? 'El cliente solicita cambiar su plan móvil.' :
+        handoff && intake?.intent!=='cancelacion' ? 'El cliente pidió hablar con un asesor.' : assistanceReason(row,text),
+        planChange ? 'Te paso con un asesor para revisar y tramitar el cambio de plan.' :
+        handoff ? 'Dejé tu solicitud en espera de un asesor. Puedes seguir escribiendo en este chat.'
+          : 'Entiendo que quieres revisar tu solicitud con un asesor. Ya está en espera y podrás continuar en este mismo chat.');
+      return;
+    }
+    if (verified && requested && requested !== 'assistance' && requested !== 'identify' && row.snapshot.attention_mode === 'autoservicio' && !row.handoff_pending) {
       await queueIntentOnly(tx,row,message);
       await this.answerAccount(tx,row,verified,requested);
       return;
@@ -571,8 +663,9 @@ export class Cases {
       return;
     }
 
+    if (requested && !pending) await queueIntentOnly(tx,row,message);
     row.account_inquiry = requested ?? pending;
-    if (requested && requested !== 'assistance') row.intent_hint = requested === 'plans' ? 'consulta_planes' : requested === 'tickets' ? 'soporte_tecnico' : 'facturacion';
+    if (requested && requested !== 'assistance' && requested !== 'identify') row.intent_hint = requested === 'plans' ? 'consulta_planes' : requested === 'tickets' ? 'soporte_tecnico' : 'facturacion';
     const replaceContact = aliases.some(alias => alias.includes('@') || alias.length >= 10) ||
       (aliases.length > 0 && /\b(correo|tel[eé]fono|celular|contacto|mi n[uú]mero)\b/i.test(text) &&
         !/\b(c[oó]digo|otp)\b/i.test(text));
@@ -597,7 +690,7 @@ export class Cases {
       row.account_challenge_id = randomUUID();
       row.account_challenge_expires_at = new Date(Date.now()+5*60*1000);
       await audit(tx,row.id,'demo_challenge_started',{channel:row.snapshot.channel});
-      await this.channelReply(tx,row,'Simulé el envío de un código a tu contacto. En modo demo escribe cualquier número de seis dígitos, en este chat.');
+      await this.channelReply(tx,row,'Simulé el envío de un código. En modo demo, escribe cualquier número de seis dígitos.');
     } catch (error) {
       if (!(error instanceof SimulatorFailure)) throw error;
       await this.channelReply(tx,row,error.status === 404
@@ -635,16 +728,29 @@ export class Cases {
     await audit(tx,row.id,'holder_verified',{method:'demo_chat',channel:row.snapshot.channel});
     await queueChurn(tx,row);
     if (row.snapshot.attention_mode === 'asistido') {
-      await this.channelReply(tx,row,'Cuenta de prueba verificada. Tu asesor ya puede continuar con la consulta.');
+      await this.channelReply(tx,row,'Cuenta de prueba verificada.');
       await queueRun(tx,row,latestAnalyzable(row.snapshot),true);
     } else if (inquiry === 'assistance' || row.handoff_pending === 'Atención humana') {
-      row.handoff_pending = 'Atención humana';
-      await audit(tx,row.id,'handoff_requested');
-      await this.channelReply(tx,row,'Cuenta de prueba verificada. Un asesor continuará en esta misma conversación.');
+      const source=latestAnalyzable(row.snapshot)?.text ?? '';
+      await this.requestHumanAttention(tx,row,row.snapshot.handoff_reason ?? assistanceReason(row,source),
+        'Cuenta de prueba verificada. Tu solicitud quedó en espera de un asesor en este mismo chat.');
+    } else if (inquiry==='identify') {
+      await this.channelReply(tx,row,'Listo, verifiqué tu cuenta de prueba. ¿En qué te puedo ayudar?');
     } else {
       row.handoff_pending = null;
       await this.answerAccount(tx,row,ref,inquiry,'Cuenta de prueba verificada. ');
     }
+  }
+
+  private async requestHumanAttention(tx: EntityManager,row: CaseRow,reason: string,reply: string) {
+    row.snapshot.revision += 1;
+    row.snapshot.handoff_reason = reason;
+    row.handoff_pending = 'Atención humana';
+    row.account_inquiry = null;
+    this.clearChallenge(row);
+    await audit(tx,row.id,'handoff_requested',{channel:row.snapshot.channel});
+    await queueRun(tx,row,latestAnalyzable(row.snapshot),false,{decision:'handoff'});
+    await this.channelReply(tx,row,reply);
   }
 
   private async channelReply(tx: EntityManager,row: CaseRow,text: string) {
@@ -656,7 +762,7 @@ export class Cases {
     }
   }
 
-  private async answerAccount(tx: EntityManager,row: CaseRow,ref: string,inquiry: Exclude<AccountInquiry,'assistance'>,prefix = '') {
+  private async answerAccount(tx: EntityManager,row: CaseRow,ref: string,inquiry: AccountRead,prefix = '') {
     try {
       const reply = await accountReply(ref,inquiry);
       const [active] = await tx.query('SELECT revision FROM prompt_revision WHERE activated');
@@ -720,6 +826,8 @@ export class Cases {
 
   private async assessorMessage(tx: EntityManager, row: CaseRow, text: string, publication?:DraftPublication) {
     const m = addMessage(row, 'asesor', text);
+    const question=row.snapshot.card?.context_question;
+    if (question && row.snapshot.intake && text.includes(question.text)) recordQuestion(row.snapshot.intake,question);
     if (row.snapshot.channel === 'telegram') {
       await enqueue(tx, `deliver:${m.id}`, row.id, 'deliver', {
         text,sender:'asesor',revision:row.snapshot.revision,...(publication ? {draft_publication:publication} : {})

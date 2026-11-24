@@ -2,17 +2,46 @@ import { z } from 'zod';
 
 export const Id = z.string().trim().min(1).max(128);
 export const Text = z.string().trim().min(1).max(4096);
+export const demoWelcome = 'Hola, te damos la bienvenida a Claro. Soy Claro Copiloto.';
+export const demoVerifyInvitation = 'Si ya eres cliente, dime tu correo o teléfono de prueba para verificar tu cuenta.';
 export const Intent = z.enum(['soporte_tecnico', 'facturacion', 'consulta_planes', 'cancelacion', 'portabilidad']);
 export type Intent = z.infer<typeof Intent>;
 export const Role = z.enum(['asesor', 'admin']);
 export const Channel = z.enum(['telegram', 'web', 'whatsapp', 'voice']);
+export type Channel = z.infer<typeof Channel>;
 export const Actor = z.enum(['cliente', 'asesor', 'agente']);
 export const AttentionMode = z.enum(['autoservicio', 'asistido']);
 export const Audience = z.enum(['cliente', 'asesor']);
-export const Citation = z.object({ id: Id, title: z.string(), excerpt: z.string(), version: z.string(), url: z.string().optional() });
-export type Citation = z.infer<typeof Citation>;
 export const KnowledgeDigest = z.string().regex(/^[a-f0-9]{64}$/);
 export const KnowledgeSourceKey = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
+const KnowledgeTag = z.string().regex(/^[a-z0-9-]{1,64}$/);
+export const KnowledgeSearchFilters = z.object({tags:z.array(KnowledgeTag).max(8),source:KnowledgeSourceKey.optional()}).strict();
+export type KnowledgeSearchFilters = z.infer<typeof KnowledgeSearchFilters>;
+export const Citation = z.object({
+  id: Id, title: z.string(), excerpt: z.string(), version: z.string(), url: z.string().optional(),
+  source: z.object({publication:KnowledgeDigest,key:KnowledgeSourceKey,page:z.number().int().positive().optional()}).optional()
+});
+export type Citation = z.infer<typeof Citation>;
+export const CatalogSegment = z.enum(['hogar','movil_pospago','movil_prepago']);
+export type CatalogSegment = z.infer<typeof CatalogSegment>;
+const PackageValidity = z.enum(['24 horas','7 días','30 días']);
+export const CatalogPlan = z.object({
+  name: z.string().min(1).max(80), segment: CatalogSegment,
+  price: z.number().int().positive(), allowance: z.string().min(1).max(50),
+  validity: PackageValidity.optional(), citation: Citation
+});
+export type CatalogPlan = z.infer<typeof CatalogPlan>;
+export const ConversationMemory = z.object({
+  segment: CatalogSegment.optional(), anchor_plan: z.string().min(1).max(80).optional(),
+  preference: z.literal('lower_price').optional(), pending: z.literal('compare_prices').optional(), package_validity: PackageValidity.optional()
+});
+export type ConversationMemory = z.infer<typeof ConversationMemory>;
+export const KnowledgeTags = z.object({
+  source: KnowledgeSourceKey, section: z.string().min(1).max(250), page: z.number().int().positive().optional(),
+  tags: z.array(KnowledgeTag).max(24),
+  context: z.string().min(1).max(650)
+}).strict();
+export type KnowledgeTags = z.infer<typeof KnowledgeTags>;
 export const KnowledgeLabQuery = z.object({
   question: z.string().trim().min(3).max(1024),
   audience: Audience,
@@ -32,15 +61,25 @@ export type KnowledgePublication = {
 export type KnowledgeInventory = {
   publications:KnowledgePublication[]; business_date:string; live_available:boolean; indexed_count:number;
 };
-export type KnowledgePassage = { id:string; version:string; excerpt_sha256:string; citation:Citation|null };
+export type KnowledgePassage = { id:string; version:string; excerpt_sha256:string; citation:Citation|null; metadata?:KnowledgeTags };
 export type KnowledgeLabResult = {
-  run_id:string; revision:string|null; mode:'extractive'|'openai'|null;
+  run_id:string; revision:string|null; mode:'extractive'|'guided'|'openai'|null;
   reason:'no_evidence'|'retrieval_unavailable'|'generation_disabled'|'generation_fallback'|null;
   transport:'mcp'|'postgres'; pgvector:boolean; latency_ms:number; retrieval_ms:number;
   answer:string|null; retrieved:Citation[]; citations:Citation[];
+  search?: { query:string; tags:string[]; source?:string; attempts:number; revision:string; degraded?:boolean };
 };
 export const Fact = z.object({ id: Id, label: z.string(), value: z.string() });
 export type Fact = z.infer<typeof Fact>;
+export const ContextQuestion = z.object({
+  id: Id, text: Text, purpose: z.string().max(220)
+});
+export type ContextQuestion = z.infer<typeof ContextQuestion>;
+export const CaseIntake = z.object({
+  intent: Intent, facts: z.record(z.string().max(40), z.string().max(120)),
+  asked: z.array(Id).max(12), pending: Id.optional(), skip: z.boolean().optional()
+});
+export type CaseIntake = z.infer<typeof CaseIntake>;
 export const Message = z.object({
   id: Id, turn_seq: z.number().int().positive(), actor: Actor, text: Text,
   created_at: z.iso.datetime(), citations: z.array(Citation).optional(), verification_input: z.literal(true).optional()
@@ -56,7 +95,8 @@ export const AdvisorCard = z.object({
   intent: Intent.nullable(), summary: z.string(), facts: z.array(Fact), citations: z.array(Citation),
   pending: z.array(z.string()), next_action: z.string(), reason_codes: z.array(z.string()), suggested_escalation: z.object({destination:z.enum(['soporte_tecnico','supervision']),reason_code:z.string().min(3).max(120)}).optional(), advisor_draft: z.string().optional(), advisor_draft_run_id: z.string().optional(),
   advisor_draft_case_revision: z.number().int().positive().optional(), advisor_draft_turn_seq: z.number().int().positive().optional(),
-  advisor_draft_status: z.enum(['current','stale']).optional(), handoff_summary: z.string().optional(), proposal: Proposal.optional()
+  advisor_draft_status: z.enum(['current','stale']).optional(), handoff_summary: z.string().optional(), proposal: Proposal.optional(),
+  context_question: ContextQuestion.optional()
 });
 export type AdvisorCard = z.infer<typeof AdvisorCard>;
 export const CaseSummary = z.object({
@@ -94,6 +134,9 @@ export const CaseSnapshot = CaseSummary.extend({
     receipts:z.array(z.object({kind:z.string(),reference:Id}))
   }).optional(),
   ml: CaseMlSignals.optional(),
+  handoff_reason: z.string().max(300).optional(),
+  intake: CaseIntake.optional(),
+  conversation_memory: ConversationMemory.optional(),
   messages: z.array(Message), card: AdvisorCard.nullable(), cursor: z.number().int().nonnegative()
 });
 export type CaseSnapshot = z.infer<typeof CaseSnapshot>;
@@ -124,11 +167,13 @@ export const AgentTurn = z.object({
   run_id: Id, case_id: Id, conversation_id: Id, turn_id: Id, channel: Channel, actor: Actor.exclude(['agente']),
   turn_seq: z.number().int().positive(), case_revision: z.number().int().positive(),
   attention_mode: AttentionMode, audience: Audience, scope_ref: Id, config_revision: Id,
-  business_date: z.iso.date(), text: Text, traceparent: z.string().optional()
+  business_date: z.iso.date(), text: Text, traceparent: z.string().optional(),
+  observed_context: z.object({decision:z.enum(['ask','handoff']),question_id:Id.optional()}).optional()
 });
 export type AgentTurn = z.infer<typeof AgentTurn>;
 export const RunResult = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('answer'), answer: Text, citations: z.array(Citation), route: Id }),
+  z.object({ type: z.literal('answer'), answer: Text, citations: z.array(Citation), route: Id, needs_clarification: z.literal(true).optional(), context_question: ContextQuestion.optional(),
+    conversation_memory: ConversationMemory.optional(), catalog_answer: z.literal(true).optional() }),
   z.object({ type: z.literal('handoff'), reason: Text, pending: Text, route: Id, verification_required: z.literal(true).optional() }),
   z.object({ type: z.literal('card'), card: AdvisorCard, route: Id }),
   z.object({ type: z.literal('failed'), reason: Id, route: Id })
@@ -146,7 +191,7 @@ export type AgentConfig = {
 };
 export type Retention = { eligible: boolean; reason: string; facts: Fact[]; policy: Citation; options: { id: string; title: string; detail: string }[] };
 export interface AgentPorts {
-  readCaseForRun(runId: string): Promise<{ messages: Message[]; verified: boolean; pending: string | null }>;
+  readCaseForRun(runId: string): Promise<{ messages: Message[]; verified: boolean; pending: string | null; intake?: CaseIntake; conversation_memory?: ConversationMemory }>;
   getAgentConfig(revision: string): Promise<AgentConfig>;
   getCustomerContext(runId: string): Promise<Fact[]>;
   listServices?(runId: string): Promise<Fact[]>;
@@ -192,6 +237,22 @@ export type EvalJob = {
   completed_cases: number; total_cases: number; failure_code?: string | null
 };
 export type EvalStatus = { job: EvalJob | null; report: EvalComparison | null };
+
+export type JevCaseResult = {
+  id: string;
+  trace_url: string | null;
+  verdict: 'passed' | 'review' | 'failed' | 'pending';
+  required: string | null;
+  forbidden: string | null;
+};
+
+export type LangfuseEvaluations = {
+  dataset_url: string | null;
+  evaluator_url: string | null;
+  runs: { id: string; name: string; started_at: string; cases: number }[];
+  selected_id: string | null;
+  cases: JevCaseResult[];
+};
 export type Dashboard = {
   sample: 'synthetic' | 'pilot'; window_days: number;
   metrics: { id: string; label: string; value: number | null; unit: string; denominator?: number }[];

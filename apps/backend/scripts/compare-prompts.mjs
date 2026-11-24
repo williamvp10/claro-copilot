@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
-import { createAgent, createOpenAIPublicWriter, createJevDecisionAdapter, createJevSemanticEvaluator } from '@claro/agent';
+import { createAgent, createOpenAIPublicWriter, createJevDecisionAdapter, createJevSemanticEvaluator, evolveContext, recordQuestion } from '@claro/agent';
 import { createDatabase } from '../dist/database.js';
-import { databaseKnowledge } from '../dist/knowledge.js';
+import { activeKnowledgeRevision, databaseKnowledge, knowledgeCorpus } from '../dist/knowledge.js';
 import { exportAgentSpan } from '../dist/telemetry.js';
 import { effectiveManifest, manifestDigest, runPromptConfig } from '../dist/prompt-catalog.js';
+import { catalogueRegressions } from './catalogue-regressions.mjs';
 import { checkScenarioStep, classifyScenarioChecks, isExtractiveAnswer, normalizeEvidence } from './eval-local-checks.mjs';
 
 const [goldenPath, scenariosPath, candidateId, outputPath] = process.argv.slice(2);
@@ -37,20 +38,21 @@ const jobId = process.env.PROMPT_EVAL_JOB_ID;
 
 function fixture(revision, verified, channel, businessDate, knowledge, advisor = false) {
   const messages = [], calls = [], events = [];
-  let currentTurn;
+  let currentTurn, intake, conversation_memory;
   const read = name => async () => { calls.push(name); return []; };
   const agent = createAgent({
-    readCaseForRun:async()=>({verified,messages,pending:null}),
+    readCaseForRun:async()=>({verified,messages,pending:null,intake,conversation_memory}),
     getAgentConfig:async()=>revision,
     getCustomerContext:read('obtenerCliente'),listServices:read('listarServicios'),getBilling:read('obtenerSaldo'),listInvoices:read('listarFacturas'),getInvoiceDetail:read('obtenerFactura'),getTickets:read('listarTickets'),
     evaluateRetention:async()=>{calls.push('evaluateRetention');return ({eligible:false,reason:'Requiere replay de plataforma',facts:[],options:[],policy:fallbackPolicy});},
     createProposal:async()=>{ calls.push('proposal'); throw new Error('Requires platform-controlled approval'); }
-  }, {knowledge:{search:async (...args)=>{calls.push('search_public_kb');return knowledge.search(...args);}}, requireApprovedPrompts:live, ...(writer ? {writer} : {}), ...(decision && !verified && !advisor ? {decision} : {}), observe:(_, item)=>events.push(item)});
+  }, {knowledge:{revision:knowledge.revision,catalog:knowledge.catalog?.bind(knowledge),search:async (...args)=>{calls.push('search_public_kb');return knowledge.search(...args);}}, requireApprovedPrompts:live, ...(writer ? {writer} : {}), ...(decision && !verified && !advisor ? {decision} : {}), observe:(_, item)=>events.push(item)});
   const session = { calls, events, durationMs:undefined, async run(actor,text) {
     calls.length=0;
     events.length=0;
     const started = Date.now(), turn_id = randomUUID();
     messages.push({id:turn_id,turn_seq:messages.length+1,actor,text,created_at:new Date().toISOString()});
+    if (actor==='cliente') intake=evolveContext(text,intake);
     const mode = verified || advisor || actor === 'asesor' ? 'asistido' : 'autoservicio';
     currentTurn={
       run_id:randomUUID(),case_id:'edd',conversation_id:'edd',turn_id,channel,actor,turn_seq:messages.length,
@@ -58,6 +60,13 @@ function fixture(revision, verified, channel, businessDate, knowledge, advisor =
       config_revision:revision.revision,business_date:businessDate,text
     };
     const result=await agent.run(currentTurn);
+    if (mode==='autoservicio' && result.type==='answer') {
+      if (result.route!=='consulta_planes') conversation_memory=undefined;
+      else if (result.conversation_memory) conversation_memory=result.conversation_memory;
+      if (intake && result.context_question) recordQuestion(intake,result.context_question);
+      messages.push({id:randomUUID(),turn_seq:messages.length+1,actor:'agente',text:result.answer,
+        citations:result.citations,created_at:new Date().toISOString()});
+    }
     session.durationMs=Date.now()-started;
     if (live) await exportAgentSpan(currentTurn,started,result.route,result.type,events,revision.prompt_metadata);
     return result;
@@ -187,35 +196,43 @@ try {
     const candidateConfig = runPromptConfig(candidate);
     const referenceRubric = baseConfig.prompts.check_semantic_criterion;
     judge = jev && referenceRubric ? createJevSemanticEvaluator({ ...jev, semanticTemplate: referenceRubric }) : null;
-    const documents = await tx.query('SELECT id,version,document FROM knowledge_document ORDER BY id,version');
+    const documents = await knowledgeCorpus(tx);
     const judgeEvidence = new Set(documents.filter(({document}) =>
       document.scope==='public' && document.provider_approved===true).map(({id,version})=>JSON.stringify([id,version])));
     let pendingQuery = Promise.resolve();
-    const knowledge = databaseKnowledge({query: (...args) => {
+    const searchDb={query: (...args) => {
       const started = pendingQuery.then(() => tx.query(...args));
       pendingQuery = started.catch(() => undefined);
       return started;
-    }});
-    const [baseline,proposed] = await Promise.all([replay(baseConfig,knowledge,judgeEvidence),replay(candidateConfig,knowledge,judgeEvidence)]);
+    }};
+    const knowledge=databaseKnowledge(searchDb);
+    const indexComparison=process.env.KNOWLEDGE_EVAL_BASELINE==='legacy' && activeKnowledgeRevision()!=='legacy';
+    const [baseline,proposed] = await Promise.all([replay(baseConfig,indexComparison?databaseKnowledge(searchDb,'legacy'):knowledge,judgeEvidence),replay(indexComparison?baseConfig:candidateConfig,knowledge,judgeEvidence)]);
+    const regressions = (config,adapter) => catalogueRegressions((channel,day,source)=>
+      fixture(config,false,channel,day,source).run,adapter);
+    const [baselineRegressions,candidateRegressions]=await Promise.all([
+      regressions(baseConfig,indexComparison?databaseKnowledge(searchDb,'legacy'):knowledge),
+      regressions(indexComparison?baseConfig:candidateConfig,knowledge)
+    ]);
     const m = proposed.metrics;
-    const passed = Boolean(writer && judge) && m.remote_generation_cases>0 && m.accuracy>=0.8 && m.groundedness>=0.85 && m.recall_at_5>=0.9 && m.unresolved_critical===0 &&
+    const passed = !indexComparison && candidateRegressions.every(item=>item.passed) && Boolean(writer && judge) && m.remote_generation_cases>0 && m.accuracy>=0.8 && m.groundedness>=0.85 && m.recall_at_5>=0.9 && m.unresolved_critical===0 &&
       proposed.questions.every(x=>!x.usedPrivateRead && !x.forbiddenHit) &&
       proposed.conversations.every(x=>x.steps.every(step=>!step.usedPrivateRead && !step.forbiddenHit && step.score!=='failed'));
     const result = { gate:passed?'passed':'review_required', evidence:{
-      date, golden_sha256:golden.sha256, scenarios_sha256:scenarios.sha256, corpus_sha256:sha(JSON.stringify(documents)),
+      date, index_revision:activeKnowledgeRevision(), ...(indexComparison?{comparison:'legacy_vs_contextual'}:{}), golden_sha256:golden.sha256, scenarios_sha256:scenarios.sha256, corpus_sha256:sha(JSON.stringify(documents)),
       rubric:baseConfig.prompt_metadata.check_semantic_criterion?.sha256 ?? 'unavailable',
       baseline_manifest_sha256:manifestDigest(effectiveManifest(base)),
       candidate_manifest_sha256:manifestDigest(effectiveManifest(candidate)),
       provider_mode:writer&&judge?'live':'local',
       models: live ? { decisions:jev.model, generation:['gpt-6-luna','gpt-6.1-terra','gpt-6.2-sol'] } : null,
       golden_count:30, complementary_count:19, provider_approved_passages:judgeEvidence.size
-    }, baseline, proposed };
-    await tx.query(`INSERT INTO prompt_evaluation(candidate_revision,base_revision,report) VALUES ($1,$2,$3)
+    }, baseline, proposed, catalogue_regressions:{baseline:baselineRegressions,candidate:candidateRegressions} };
+    if (!indexComparison) await tx.query(`INSERT INTO prompt_evaluation(candidate_revision,base_revision,report) VALUES ($1,$2,$3)
       ON CONFLICT(candidate_revision) DO UPDATE SET report=EXCLUDED.report,completed_at=now()`,[candidate.revision,base.revision,result]);
     return result;
   });
   await writeFile(outputPath, JSON.stringify(report,null,2)+'\n', { mode:0o600, flag:'wx' });
-  console.log(JSON.stringify({ gate:report.gate, baseline:report.baseline.metrics, candidate:report.proposed.metrics }));
+  console.log(JSON.stringify({ gate:report.gate, baseline:report.baseline.metrics, candidate:report.proposed.metrics, catalogue:report.catalogue_regressions.candidate }));
 } finally {
   await db.destroy();
 }

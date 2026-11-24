@@ -33,12 +33,14 @@ class E5Encoder:
         )
         self.input_names = {item.name for item in self.session.get_inputs()}
 
-    def encode(self, texts: list[str]) -> np.ndarray:
+    def encode(self, texts: list[str], kind: str = "query") -> np.ndarray:
+        if kind not in ("query", "passage"):
+            raise ValueError("Unsupported embedding task")
         unique = list(dict.fromkeys(texts))
         vectors = {}
         for offset in range(0, len(unique), 16):
             batch = unique[offset:offset + 16]
-            tokens = self.tokenizer.encode_batch([f"query: {text}" for text in batch])
+            tokens = self.tokenizer.encode_batch([f"{kind}: {text}" for text in batch])
             inputs = {
                 "input_ids": np.array([item.ids for item in tokens], dtype=np.int64),
                 "attention_mask": np.array([item.attention_mask for item in tokens], dtype=np.int64),

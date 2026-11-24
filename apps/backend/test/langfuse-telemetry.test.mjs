@@ -8,8 +8,9 @@ test('Langfuse export links the version and omits case text', async t=>{
   process.env.LANGFUSE_PUBLIC_KEY='fixture';
   process.env.LANGFUSE_SECRET_KEY='fixture-secret';
   process.env.LANGFUSE_BASE_URL='http://langfuse-web:3000';
+  process.env.KNOWLEDGE_INDEX_REVISION='a'.repeat(64);
   t.after(()=>{
-    for (const key of ['LANGFUSE_PUBLIC_KEY','LANGFUSE_SECRET_KEY','LANGFUSE_BASE_URL']) {
+    for (const key of ['LANGFUSE_PUBLIC_KEY','LANGFUSE_SECRET_KEY','LANGFUSE_BASE_URL','KNOWLEDGE_INDEX_REVISION']) {
       if (original[key]===undefined) delete process.env[key];
       else process.env[key]=original[key];
     }
@@ -26,13 +27,24 @@ test('Langfuse export links the version and omits case text', async t=>{
   const ok=await exportAgentSpan(turn,now,'consulta_planes','answer',[{
     name:'generation.openai',started:now,ended:now+10,
     metadata:{prompt_ref:'public_answer',status:'accepted',model:'gpt-6-luna',step_id:'draft_public_reply'}
-  }],{public_answer:prompt});
+  },{name:'context',started:now,ended:now,metadata:{decision:'ask',question_id:'motivo'}},
+  {name:'tool.list_catalog_plans',started:now,ended:now,metadata:{
+    reference_resolution:'memory',catalog_version:'CAT-2026 v1.0',decision:'answer',reason:'lowest_applicable_price'
+  }}],{public_answer:prompt});
   assert.equal(ok,true);
   assert.match(requests[0].url,/\/api\/public\/otel\/v1\/traces$/);
   assert.equal(requests[0].redirect,'error');
-  const [root,generation]=requests[0].body.resourceSpans[0].scopeSpans[0].spans;
+  const [root,generation,context,catalogue]=requests[0].body.resourceSpans[0].scopeSpans[0].spans;
   assert.equal(root.traceId,traceIdentifier(turn.run_id));
   assert.equal(generation.parentSpanId,root.spanId);
+  assert.equal(context.parentSpanId,root.spanId);
+  assert.equal(catalogue.parentSpanId,root.spanId);
+  const catalogueAttributes=Object.fromEntries(catalogue.attributes.map(({key,value})=>[key,value.stringValue]));
+  assert.equal(catalogueAttributes['langfuse.observation.metadata.reference_resolution'],'memory');
+  assert.equal(catalogueAttributes['langfuse.observation.metadata.catalog_version'],'CAT-2026 v1.0');
+  assert.equal(catalogueAttributes['langfuse.observation.metadata.reason'],'lowest_applicable_price');
+  assert.match(root.attributes.find(item=>item.key==='claro.index_revision').value.stringValue,/^a{64}$/);
+  assert.equal(context.attributes.find(item=>item.key==='claro.question_id').value.stringValue,'motivo');
   const attributes=Object.fromEntries(generation.attributes.map(({key,value})=>[key,value]));
   assert.equal(attributes['langfuse.observation.prompt.name'].stringValue,prompt.name);
   assert.equal(attributes['langfuse.observation.prompt.version'].intValue,'9');

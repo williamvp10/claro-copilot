@@ -7,7 +7,8 @@
 .title { display: flex; align-items: center; gap: 13px; padding: 18px 24px; border-bottom: 1px solid var(--border); }
 .title h1 { font-size: 20px; letter-spacing: -.4px; }
 .title p { color: #5d626c; font-size: 13px; }
-.avatar { display: grid; place-items: center; width: 43px; height: 43px; border-radius: 50%; color: var(--primary); background: #fae8eb; }
+.newChat { margin-inline-start: auto; white-space: nowrap; }
+.avatar { display: grid; place-items: center; flex-shrink: 0; width: 43px; height: 43px; border-radius: 50%; color: var(--primary); background: #fae8eb; }
 .history { display: flex; flex-direction: column; overflow: auto; gap: 14px; padding: 24px; min-width: 0; scroll-behavior: smooth; }
 .welcome { margin: auto; width: min(100%, 435px); }
 .welcome h2 { font-size: clamp(24px, 4vw, 32px); letter-spacing: -.03em; margin-bottom: 6px; }
@@ -23,6 +24,8 @@
 .citation summary { cursor: pointer; }
 .citation svg { display: inline; margin-right: 4px; vertical-align: text-bottom; }
 .citation p { margin-top: 6px; color: #474b54; }
+.sourceLink { display: flex; align-items: baseline; gap: 6px; margin-top: 8px; color: #8e2439; font-size: 12px; text-decoration: underline; }
+.sourceLink svg { flex-shrink: 0; align-self: center; }
 .composer { border-top: 1px solid var(--border); padding: 12px 24px; }
 .composer form { display: flex; align-items: center; gap: 8px; }
 .composer input { flex: 1; min-width: 0; padding: 9px 12px; border: 1px solid #cfd1d6; border-radius: 8px; background: #fff; }

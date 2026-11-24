@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { ArrowUp, FileText, MessageCircle, UserRound } from 'lucide-react';
 import type { WebChatEvent, WebChatSnapshot } from '@claro/contracts';
+import { demoVerifyInvitation, demoWelcome } from '@claro/contracts';
 import { Button } from '../../components/ui/button';
 import styles from './chat.module.css';
 
 const route = '/api/v1/web-chat';
-const suggestions = ['¿Qué incluye el plan Fibra 500?', 'Mi decodificador muestra el error E-202', 'Quiero consultar mi factura'];
+const suggestions = ['¿Qué incluye Claro Max Ilimitado?', 'Mi decodificador muestra el error E-202', 'Quiero consultar mi factura'];
 
 async function load(path: string, body?: object): Promise<WebChatSnapshot> {
   const response = await fetch(route + path, {
@@ -30,17 +31,25 @@ export default function CustomerChat() {
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
   const [connecting, setConnecting] = useState(true);
+  const [startingNew, setStartingNew] = useState(false);
   const [delayedTurn, setDelayedTurn] = useState<string>();
   const end = useRef<HTMLDivElement>(null);
   const retry = useRef<{ text: string; key: string } | null>(null);
+  const connection = useRef<Promise<void> | null>(null);
   const apply = useCallback((incoming: WebChatSnapshot) =>
     setSnapshot(current => !current || incoming.conversation_id !== current.conversation_id || incoming.cursor >= current.cursor ? incoming : current), []);
-  const connect = useCallback(async () => {
+  const connect = useCallback(() => {
+    if (connection.current) return connection.current;
     setConnecting(true);
     setError('');
-    try { apply(await load('/session', {})); }
-    catch (failure) { setError((failure as Error).message); }
-    finally { setConnecting(false); }
+    const request = load('/session', {}).then(apply)
+      .catch((failure: Error) => setError(failure.message))
+      .finally(() => {
+        connection.current = null;
+        setConnecting(false);
+      });
+    connection.current = request;
+    return request;
   }, [apply]);
 
   useEffect(() => { void connect(); }, [connect]);
@@ -57,7 +66,7 @@ export default function CustomerChat() {
       syncing = true;
       try {
         const history = await load('/history');
-        if (active && history.conversation_id === id) apply(history);
+        if (active) apply(history);
       } catch { /* A subsequent refresh can recover a temporary transport failure. */ }
       finally { syncing = false; }
     }
@@ -87,9 +96,21 @@ export default function CustomerChat() {
     try {
       apply(await load('/messages', { text: content, idempotency_key: request.key }));
       retry.current = null;
-      setDraft('');
+      setDraft(current => current === content ? '' : current);
     } catch (failure) { setError((failure as Error).message); }
     finally { setSending(false); }
+  }
+
+  async function startNew() {
+    setStartingNew(true);
+    setError('');
+    try {
+      await load('/session/new', {});
+      window.location.reload();
+    } catch (failure) {
+      setError((failure as Error).message);
+      setStartingNew(false);
+    }
   }
 
   const messages = snapshot?.messages ?? [];
@@ -118,20 +139,26 @@ export default function CustomerChat() {
     <section className={styles.chat} aria-labelledby="customer-chat-title">
       <div className={styles.title}>
         <span className={styles.avatar}><MessageCircle size={22} /></span>
-        <div><h1 id="customer-chat-title">Chat de atención</h1><p>{closed ? 'Conversación cerrada' : assisted ? 'Atención con un asesor' : snapshot?.awaiting_advisor ? 'En espera de un asesor' : 'Asistente de Claro'}</p></div>
+        <div><h1 id="customer-chat-title">Chat de atención</h1><p role="status">{closed ? 'Conversación cerrada' : assisted ? 'Asesor asignado' : snapshot?.awaiting_advisor ? 'En espera de un asesor' : 'Asistente de Claro'}</p></div>
+        {messages.length>0&&<Button type="button" variant="outline" size="sm" className={styles.newChat}
+          disabled={sending||startingNew} onClick={()=>void startNew()}>{startingNew?'Abriendo…':'Nuevo chat'}</Button>}
       </div>
       <div className={styles.history} role="log" aria-label="Mensajes" aria-live="polite">
         {!messages.length && <div className={styles.welcome}>
-          <h2>Hola, ¿en qué puedo ayudarte?</h2>
-          <p>Consulta un plan, solicita soporte o habla con un asesor.</p>
+          <h2>{demoWelcome}</h2>
+          <p>{demoVerifyInvitation} Puedes usar <strong>11111</strong> o empezar con una consulta general.</p>
           <div className={styles.suggestions}>{suggestions.map(text => <button key={text} type="button" onClick={() => void send(text)} disabled={!snapshot || sending}>{text}</button>)}</div>
         </div>}
         {messages.map(message => <article key={message.id} className={message.actor === 'cliente' ? styles.customer : styles.agent}>
           <span className={styles.author}>{message.actor === 'cliente' ? 'Tú' : message.actor === 'asesor' ? 'Asesor Claro' : 'Claro Copiloto'}</span>
           <p>{message.text}</p>
-          {message.citations?.map(citation => <details key={citation.id} className={styles.citation}>
-            <summary><FileText size={14} />{citation.title} · {citation.version}</summary><p>{citation.excerpt}</p>
-          </details>)}
+          {message.citations?.map(citation => citation.source
+            ? <a key={citation.id} className={styles.sourceLink}
+                href={`/fuentes/${citation.source.publication}/${citation.source.key}?pasaje=${encodeURIComponent(citation.id)}`}
+                target="_blank" rel="noreferrer"><FileText size={14} aria-hidden="true" /> Ver fuente · {citation.title.split(' · ')[0]}</a>
+            : <details key={citation.id} className={styles.citation}>
+                <summary><FileText size={14} />{citation.title} · {citation.version}</summary><p>{citation.excerpt}</p>
+              </details>)}
         </article>)}
         {pending && (delayedTurn === pending.id
           ? <div className={styles.status}>La respuesta se está demorando. <button className={styles.textAction} type="button"
@@ -141,13 +168,15 @@ export default function CustomerChat() {
       </div>
       <div className={styles.composer}>
         {error && <div role="alert" className={styles.error}>{error} {!snapshot && <button type="button" onClick={() => void connect()}>Reintentar</button>}</div>}
-        {snapshot?.awaiting_advisor && <p className={styles.notice}><UserRound size={15} /> Un asesor continuará en este mismo chat.</p>}
+        {!closed && snapshot?.awaiting_advisor && <p className={styles.notice}><UserRound size={15} aria-hidden="true" /> Puedes seguir escribiendo mientras un asesor toma tu caso.</p>}
+        {!closed && assisted && !messages.some(message=>message.actor==='asesor') &&
+          <p className={styles.notice}><UserRound size={15} aria-hidden="true" /> Tu asesor recibió el historial. Su respuesta llegará aquí.</p>}
         <form onSubmit={submit}>
           <label className="sr-only" htmlFor="customer-message">Mensaje</label>
-          <input id="customer-message" maxLength={4096} value={draft} onChange={event => setDraft(event.target.value)} placeholder={connecting ? 'Conectando…' : closed ? 'Conversación cerrada' : verification?.stage === 'code_sent' ? 'Escribe tu código de prueba' : verification?.stage === 'required' ? 'Escribe tu correo o teléfono de prueba' : 'Escribe tu mensaje'} disabled={!snapshot || closed} />
-          <Button type="submit" aria-label="Enviar mensaje" disabled={!draft.trim() || !snapshot || closed || sending} size="icon"><ArrowUp size={19} /></Button>
+          <input id="customer-message" maxLength={4096} value={draft} onChange={event => setDraft(event.target.value)} placeholder={connecting ? 'Conectando…' : closed ? 'Conversación cerrada' : verification?.stage === 'code_sent' ? 'Escribe tu código de prueba' : verification?.stage === 'required' ? 'Escribe tu correo o teléfono de prueba' : 'Escribe tu mensaje'} disabled={!snapshot || closed || startingNew} />
+          <Button type="submit" aria-label="Enviar mensaje" disabled={!draft.trim() || !snapshot || closed || sending || startingNew} size="icon"><ArrowUp size={19} /></Button>
         </form>
-        {verification?.stage === 'required' && !closed && <p className={styles.synthetic}>Contactos de prueba disponibles 11111, 22222 y 33333.</p>}
+        {verification?.stage === 'required' && !closed && <p className={styles.synthetic}>Contactos de prueba 11111, 22222, 33333, 11002, 11003, 11005 y 11020.</p>}
         <p className={styles.synthetic}>Demo con datos sintéticos. Evita compartir datos personales.</p>
       </div>
     </section>

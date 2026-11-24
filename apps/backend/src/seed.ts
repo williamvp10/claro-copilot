@@ -58,7 +58,7 @@ try {
   const cutoff='2026-11-18';
   const customers=JSON.parse(await readFile(new URL('../../simulators/fixtures/crm.json',import.meta.url),'utf8')) as
     (Parameters<typeof demoChurnFeatures>[0] & {cliente_id:string})[];
-  for (const ref of ['C-1001','C-1004','C-1007']) {
+  for (const ref of ['C-1001','C-1002','C-1003','C-1004','C-1005','C-1007','C-1020']) {
     const customer=customers.find(row=>row.cliente_id===ref);
     if (!customer) throw new Error(`Falta la cuenta de demo ${ref}`);
     const features=demoChurnFeatures(customer,cutoff);
