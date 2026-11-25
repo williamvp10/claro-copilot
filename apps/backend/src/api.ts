@@ -1,3 +1,5 @@
+import { TelegramAdminController } from './telegram-admin.js';
+import { activeTelegramConnection, callTelegram, telegramBotId } from './telegram.js';
 import { AgentModelAdminController } from './agent-model-admin.js';
 import {
   BadRequestException, Body, Controller, ForbiddenException, Get, HttpException, Inject, Module, Param, Post, Query,
@@ -341,21 +343,19 @@ class PlatformController {
 
   @Post('webhooks/telegram')
   async webhook(@Req() req: Request, @Body() body: unknown) {
-    const configured = process.env.TELEGRAM_WEBHOOK_SECRET;
+    const connection = await activeTelegramConnection(this.db);
+    const configured = connection?.secret;
     if (!configured || !constantEqual(req.get('X-Telegram-Bot-Api-Secret-Token') ?? '', configured)) throw new UnauthorizedException();
     const { update_id, message, callback_query } = parse(Webhook, body);
     if (message?.chat.type === 'private' && message.text && !message.text.startsWith('/')) {
-      await this.cases.receiveTelegram({ update_id, chat_id: String(message.chat.id), text: message.text });
+      await this.cases.receiveTelegram({ update_id, chat_id: String(message.chat.id), text: message.text, bot_id:telegramBotId(connection?.token) });
     }
     const rating = /^csat:([a-f0-9-]{36}):([1-5])$/.exec(callback_query?.data ?? '');
     if (rating && callback_query?.message?.chat.type === 'private') {
       await this.cases.recordFeedback(rating[1], String(callback_query.message.chat.id), Number(rating[2]));
-      const token = process.env.TELEGRAM_BOT_TOKEN;
+      const token = connection?.token;
       if (token) {
-        await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({callback_query_id:callback_query.id}), signal:AbortSignal.timeout(750)
-        }).catch(() => undefined);
+        await callTelegram(token,'answerCallbackQuery',{callback_query_id:callback_query.id},750).catch(() => undefined);
       }
     }
     return { ok: true };
@@ -487,7 +487,7 @@ class PlatformController {
 export class ApiModule {
   static create(auth: Auth): DynamicModule {
     return {
-      module: ApiModule, controllers: [PlatformController, PlatformEvolutionController, HealthController, WebChatController, KnowledgeAdminController, KnowledgeSourceController, AgentModelAdminController, RetentionDiscountController],
+      module: ApiModule, controllers: [PlatformController, PlatformEvolutionController, HealthController, WebChatController, KnowledgeAdminController, KnowledgeSourceController, AgentModelAdminController, RetentionDiscountController, TelegramAdminController],
       providers: [Cases, IntegrationOperations, PromptReleases, { provide: AUTH, useValue: auth }, {
         provide: DATABASE,
         async useFactory() {

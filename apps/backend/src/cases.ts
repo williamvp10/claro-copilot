@@ -1,3 +1,4 @@
+import { activeTelegramConnection } from './telegram.js';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { acceptsAdvisorOffer, recordPublishedReply, requestedAdvisor, asksToChangeMobilePlan, catalogComparison, changesCancellationToPlan, claimedBillingAccount, commercialHandoff, contextIntent, evolveContext, interpretConversation, mandatoryPolicyRoute, nextContextQuestion, platformBillingContext, recordQuestion, renderCaseSummary, requestsInvoiceCancellation, traceConversation } from '@claro/agent';
 import { ConflictException, ForbiddenException, ServiceUnavailableException, Inject, Injectable, NotFoundException, UnauthorizedException, HttpException, UnprocessableEntityException } from '@nestjs/common';
@@ -192,11 +193,11 @@ const replayScenarios:Record<string,{fixture:string;channel:'telegram'|'whatsapp
   'GQ-25':{fixture:'C-1001',channel:'telegram'}, 'GQ-26':{fixture:'C-1004',channel:'telegram'},
   'GQ-27':{fixture:'C-1007',channel:'telegram'}, 'GQ-28':{fixture:'C-1013',channel:'telegram'}
 };
-function localPromptReplayAllowed() {
+async function localPromptReplayAllowed(db: DataSource | EntityManager) {
   const loopback = ['127.0.0.1','localhost','[::1]'];
   const authUrl = new URL(process.env.BETTER_AUTH_URL ?? 'http://127.0.0.1:0');
   return process.env.DEMO_MODE === 'true' && loopback.includes(authUrl.hostname)
-    && loopback.includes(process.env.HOST ?? '') && !process.env.TELEGRAM_BOT_TOKEN;
+    && loopback.includes(process.env.HOST ?? '') && !(await activeTelegramConnection(db))?.token;
 }
 async function revisionForTurn(tx: EntityManager, row: CaseRow): Promise<{revision:string;scenario?:string}> {
   const [{revision}] = await tx.query('SELECT revision FROM prompt_revision WHERE activated');
@@ -205,7 +206,7 @@ async function revisionForTurn(tx: EntityManager, row: CaseRow): Promise<{revisi
   const scenario=requested ?? (row.contact_ref==='C-1004'?'CC-E11':row.contact_ref==='C-1013'?'CC-E13':undefined);
   const mapping=scenario ? replayScenarios[scenario] : undefined;
   if (!replay || !scenario || !mapping || row.contact_ref!==mapping.fixture || row.snapshot.channel!==mapping.channel) return {revision};
-  if (!localPromptReplayAllowed()) {
+  if (!await localPromptReplayAllowed(tx)) {
     throw new Error('Local prompt replay requires a loopback demo API with Telegram delivery disabled');
   }
   const [candidate] = await tx.query(`SELECT revision FROM prompt_revision
@@ -582,8 +583,10 @@ export class Cases {
       ON CONFLICT(case_id) DO NOTHING`, [caseId,chatId,score]);
   }
 
-  async receiveTelegram(input: { update_id: number; chat_id: string; text: string }) {
-    return this.receive(input.chat_id, input.text, `telegram:${input.update_id}`, false);
+  async receiveTelegram(input: { update_id: number; chat_id: string; text: string; bot_id?: string }) {
+    const legacyKey = `telegram:${input.update_id}`;
+    const key = input.bot_id ? `telegram:${input.bot_id}:${input.update_id}` : legacyKey;
+    return this.receive(input.chat_id, input.text, key, false, 'telegram', input.bot_id ? legacyKey : undefined);
   }
 
   async receiveSynthetic(contactRef: string, text: string, key: string, channel?:'whatsapp') {
@@ -591,19 +594,23 @@ export class Cases {
     if (channel === 'whatsapp') {
       const scenario = process.env.LOCAL_PROMPT_REPLAY_SCENARIO;
       if (scenario !== 'CC-E10' || !process.env.LOCAL_PROMPT_REPLAY_REVISION || contactRef !== replayScenarios[scenario].fixture
-        || !localPromptReplayAllowed()) throw new NotFoundException();
+        || !await localPromptReplayAllowed(this.db)) throw new NotFoundException();
       return this.receive(contactRef, text, `synthetic:whatsapp:${contactRef}:${key}`, true, channel);
     }
     return this.receive(contactRef, text, `synthetic:${contactRef}:${key}`, true);
   }
 
-  private async receive(address: string, text: string, key: string, synthetic: boolean, channel:'telegram'|'whatsapp'='telegram') {
+  private async receive(address: string, text: string, key: string, synthetic: boolean, channel:'telegram'|'whatsapp'='telegram', legacyKey?: string) {
     return this.db.transaction(async (tx) => {
       const payload = { address, text };
-      if (await this.replay(tx, 'incoming', key, payload)) return;
       const [contact]: ContactRow[] = await tx.query(
         `SELECT * FROM telegram_contact WHERE ${synthetic ? 'ref' : 'chat_id'}=$1 AND enabled FOR UPDATE`, [address]);
       if (!contact) return;
+      if (await this.replay(tx, 'incoming', key, payload)) return;
+      if (legacyKey) {
+        const [prior] = await tx.query("SELECT fingerprint FROM idempotency WHERE scope='incoming' AND key=$1",[legacyKey]);
+        if (prior?.fingerprint === this.fingerprint(payload)) return;
+      }
       let row = await this.activeForContact(tx, contact.ref);
       if (row && row.snapshot.channel !== channel) throw new ConflictException('El contacto ya tiene un caso abierto en otro canal');
       if (!row && contact.fixture === 'C-1004') return;

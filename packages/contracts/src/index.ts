@@ -367,3 +367,27 @@ export type Viewer = {
 };
 
 export * from './integrations.js';
+
+export type TelegramAdminContact = {
+  ref: string;
+  display_name: string;
+  chat_id: string | null;
+  enabled: boolean;
+};
+
+export type TelegramAdminSettings = {
+  source: 'none' | 'admin' | 'environment';
+  token_configured: boolean;
+  credentials_unreadable: boolean;
+  username: string | null;
+  webhook_url: string | null;
+  registered: boolean;
+  contacts: TelegramAdminContact[];
+};
+
+export type TelegramConnectionCheck = {
+  username: string;
+  webhook: 'expected' | 'other' | 'none';
+  pending_updates: number;
+  last_error_at: string | null;
+};

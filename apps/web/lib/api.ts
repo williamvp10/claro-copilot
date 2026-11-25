@@ -1,3 +1,4 @@
+import type { TelegramAdminContact, TelegramAdminSettings, TelegramConnectionCheck } from '@claro/contracts';
 import type { AgentModelActivation, AgentModelCatalog, AgentModelExecutions, AgentModelPolicy, AgentModelRevision, AgentModelRevisions, ModelValidation } from '@claro/contracts';
 import type { CaseEvent, CaseSnapshot, CaseSummary, Contact, Dashboard, DashboardFilters, EvalJob, EvalStatus, PromptRevision, Viewer, BillingView, CrmView, InvoiceDetail, ManualAction, IntegrationHealth, IntegrationOperation, KnowledgeInventory, KnowledgeLabQuery, KnowledgeLabResult, KnowledgePassage, CaseDiscount, BillingDiscount, CloseCompletion, ClosureEvidenceSuggestion, FollowUpEntry } from '@claro/contracts';
 import type { LangfuseEvaluations } from '@claro/contracts';
@@ -21,6 +22,7 @@ export class ApiError extends Error {
 }
 async function request<T>(path:string, init?:RequestInit):Promise<T> { const response = await fetch(path,{...init,credentials:'same-origin',headers:{'Content-Type':'application/json',...init?.headers}}); if(!response.ok){let message = `No fue posible completar la solicitud (${response.status}).`; try {const data=await response.json(); if(typeof data.message==='string') message=data.message;}catch{} throw new ApiError(message,response.status);} return response.json() as Promise<T>; }
 const post = <T>(path:string, body:unknown={}) => request<T>(path,{method:'POST',body:JSON.stringify(body)});
+const telegramPath='/api/v1/admin/telegram';
 const knowledgePath='/api/v1/admin/knowledge';
 const knowledgeSource=(digest:string,source:string)=>`${knowledgePath}/publications/${encodeURIComponent(digest)}/sources/${encodeURIComponent(source)}`;
 const copy = <T,>(value:T):T => structuredClone(value);
@@ -57,6 +59,12 @@ export const integrations = {
  approve: (id: string, approved: boolean) => post<IntegrationOperation>(adminIntegration+'/approvals/'+encodeURIComponent(id),{approved})
 };
 export const api = {
+  telegramSettings:()=>request<TelegramAdminSettings>(telegramPath),
+  saveTelegramToken:(token:string)=>post<TelegramAdminSettings>(telegramPath+'/token',{token}),
+  checkTelegram:()=>post<TelegramConnectionCheck>(telegramPath+'/check'),
+  registerTelegramWebhook:()=>post<TelegramAdminSettings>(telegramPath+'/webhook'),
+  saveTelegramContact:(ref:string,input:Pick<TelegramAdminContact,'chat_id'|'enabled'>)=>
+    post<TelegramAdminSettings>(telegramPath+'/contacts/'+encodeURIComponent(ref),input),
  retention:(id:string)=>request<RetentionState>(casePath(id)+'/retention-discount'),
  updateRetention:(id:string,body:unknown)=>post<CaseDiscount>(casePath(id)+'/retention-discount',body),
  issueRetentionInvoice:(id:string,period:string)=>post<InvoiceDetail>(casePath(id)+'/retention-discount/issue',{period}),

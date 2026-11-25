@@ -1,3 +1,4 @@
+import { activeTelegramConnection, callTelegram, TelegramApiError } from './telegram.js';
 import 'reflect-metadata';
 import { synchronizeDiscount } from './retention-discount.js';
 import { randomUUID } from 'node:crypto';
@@ -224,27 +225,22 @@ async function deliver(job: Extract<CaseJob, {kind: 'deliver'}>) {
     }
     if (sender === 'sistema' && !job.payload.attention_notice && turn_seq !== undefined && row.snapshot.status !== 'open') return;
     const [contact] = await tx.query('SELECT chat_id FROM telegram_contact WHERE ref=$1 AND enabled', [row.contact_ref]);
-    const token = process.env.TELEGRAM_BOT_TOKEN;
+    const token = (await activeTelegramConnection(tx))?.token;
     if (!token || !contact?.chat_id) {
       await audit(tx, row.id, process.env.DEMO_MODE === 'true' ? 'telegram_simulated' : 'telegram_unavailable');
       return;
     }
     try {
-      const reply = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: contact.chat_id, text, ...(feedback_case_id ? {reply_markup:{inline_keyboard:[
-            [1,2,3,4,5].map(score => ({text:String(score),callback_data:`csat:${feedback_case_id}:${score}`}))
-          ]}} : {})
-        }), signal: AbortSignal.timeout(3500)
-      });
-      const payload = await reply.json() as { ok?: boolean };
-      const delivered=reply.ok && payload.ok === true;
-      await audit(tx, row.id, delivered ? 'telegram_delivered' : 'telegram_failed');
-      if (delivered && sender === 'asesor' && draft_publication) {
+      await callTelegram(token,'sendMessage',{
+        chat_id:contact.chat_id, text, ...(feedback_case_id ? {reply_markup:{inline_keyboard:[
+          [1,2,3,4,5].map(score => ({text:String(score),callback_data:`csat:${feedback_case_id}:${score}`}))
+        ]}} : {})
+      },3500);
+      await audit(tx,row.id,'telegram_delivered');
+      if (sender === 'asesor' && draft_publication) {
         await audit(tx,row.id,'agent_task_outcome',{...draft_publication,channel:'telegram',outcome:'qualified_success'});
       }
-      if (delivered && sender === 'agente') {
+      if (sender === 'agente') {
         const [run] = await tx.query(`SELECT r.id,r.turn, GREATEST(0,EXTRACT(EPOCH FROM (clock_timestamp()-o.created_at))*1000)::integer AS ms FROM agent_run r JOIN outbox o ON o.id=r.id AND o.kind='run' WHERE r.case_id=$1 AND (r.turn->>'case_revision')::integer=$2 AND (r.turn->>'turn_seq')::integer=$3 ORDER BY o.created_at DESC LIMIT 1`,[row.id,revision,turn_seq]);
         if (run && Number.isFinite(Number(run.ms))) {
           const metadata={run_id:run.id,channel:'telegram',ms:Number(run.ms)};
@@ -260,8 +256,8 @@ async function deliver(job: Extract<CaseJob, {kind: 'deliver'}>) {
           }
         }
       }
-    } catch {
-      await audit(tx, row.id, 'telegram_pending_verification');
+    } catch (error) {
+      await audit(tx,row.id,error instanceof TelegramApiError && error.providerRejected ? 'telegram_failed' : 'telegram_pending_verification');
     }
   });
 }

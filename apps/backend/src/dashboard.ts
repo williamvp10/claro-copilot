@@ -1,3 +1,4 @@
+import { activeTelegramConnection } from './telegram.js';
 import type { DataSource } from 'typeorm';
 import type { Dashboard, DashboardDay, DashboardFilters, EvalComparison, EvalMetrics } from '@claro/contracts';
 import { readModelMetrics, traceIdentifier } from './telemetry.js';
@@ -154,6 +155,7 @@ export async function readDashboard(db: DataSource, filters: DashboardFilters): 
   const mlGroups = ml?.groups.filter(g=>channel==='all' || g.channel===channel) ?? [];
   const churn = ml?.churn;
   const churnEvaluation = churn?.offline;
+  const telegram = await activeTelegramConnection(db);
   return {
     window_days:days,channel,timezone:TZ,sample:process.env.DEMO_MODE==='true'?'synthetic':'pilot',revision:active.revision,
     daily:row.daily as DashboardDay[], prediction_classes:row.prediction_classes, evaluation:evalComparison,
@@ -168,7 +170,7 @@ export async function readDashboard(db: DataSource, filters: DashboardFilters): 
     },
     providers:[
       {name:'Worker',status:count('agent_completed') ? 'Con ejecuciones' : 'Sin ejecuciones en la ventana'},
-      {name:'Telegram',status:process.env.TELEGRAM_BOT_TOKEN ? 'Bot configurado' : 'Webhook de prueba'},
+      {name:'Telegram',status:telegram?.token ? 'Bot configurado' : 'Webhook de prueba'},
       {name:'Langfuse',status:count('langfuse_exported') ? 'Con exportaciones' : process.env.LANGFUSE_PUBLIC_KEY ? 'Sin trazas en la ventana' : 'Sin configurar'},
       {name:'Intención en sombra',status:ml?.deployment ? `${ml.deployment.model_version} · ${[...new Set(mlGroups.map(g=>g.drift?.status ?? 'Sin referencia'))].join(', ') || 'Sin referencia'}` : 'Sin modelo observado'},
       {name:'Churn a 90 días',status:churn ? `${churn.model_version} · cohorte ${churn.training_cohort}` : 'Sin modelo observado'}

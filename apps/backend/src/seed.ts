@@ -68,7 +68,8 @@ try {
   ] as const;
   for (const [ref, chatId, name, owner] of scenarios) {
     await db.query(`INSERT INTO telegram_contact (ref,chat_id,display_name,direct_owner,fixture) VALUES ($1,$2,$3,$4,$1)
-      ON CONFLICT(ref) DO UPDATE SET chat_id=EXCLUDED.chat_id, direct_owner=EXCLUDED.direct_owner`, [ref, chatId?.trim() || null, name, owner]);
+      ON CONFLICT(ref) DO UPDATE SET chat_id=CASE WHEN telegram_contact.managed_by_admin THEN telegram_contact.chat_id
+        ELSE EXCLUDED.chat_id END, direct_owner=EXCLUDED.direct_owner`, [ref, chatId?.trim() || null, name, owner]);
   }
   const cutoff='2026-11-18';
   const customers=JSON.parse(await readFile(new URL('../../simulators/fixtures/crm.json',import.meta.url),'utf8')) as

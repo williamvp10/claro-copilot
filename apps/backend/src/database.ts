@@ -318,11 +318,28 @@ export class FollowUpAgenda1795260000028 implements MigrationInterface {
   }
 }
 
+export class TelegramAdministration1795260000031 implements MigrationInterface {
+  async up(db: QueryRunner) {
+    await db.query(`CREATE TABLE telegram_settings (
+      singleton boolean PRIMARY KEY CHECK (singleton),
+      credentials text NOT NULL,
+      bot_username text NOT NULL,
+      registered boolean NOT NULL DEFAULT false
+    );
+    ALTER TABLE telegram_contact ADD COLUMN managed_by_admin boolean NOT NULL DEFAULT false;`);
+  }
+
+  async down(db: QueryRunner) {
+    await db.query(`ALTER TABLE telegram_contact DROP COLUMN managed_by_admin;
+      DROP TABLE telegram_settings;`);
+  }
+}
+
 export function createDatabase() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is required');
   return new DataSource({
-    type: 'postgres', url, migrations: [InitialSchema1795260000000, Knowledge1795260000001, Feedback1795260000002, BoundBootstrapCatalog1795260000003, SupportPriority1795260000004, WebChat1795260000005, WebDemoAccount1795260000006, SimulatorIntegration1795260000007, ConversationalVerification1795260000008, ReleaseEvidence1795260000009, PlatformEvolution1795260000010, PromptManifest1795260000011, MlAdvisory1795260000012, PromptReplayEvidence1795260000013, PromptZeroEffectEvidence1795260000014, PromptGoldenEvidence1795260000015, MlAdvisoryTracking1795260000016, ContextualKnowledge1795260000017, OptionalChatIdentity1795260000018, PromptBillingOutageEvidence1795260000019, PromptHandoffContextEvidence1795260000020, PromptPendingProposalEvidence1795260000021, PromptAdjustmentReviewEvidence1795260000022, PromptPrivacyReplayEvidence1795260000023, PromptAuthenticatedHandoffEvidence1795260000024, WebChatVisitor1795260000025, AgentModelPolicy1795260000026, AssistedAttention1795260000027, FollowUpAgenda1795260000028, RetireLocalModel1795260000029, DeploymentObservations1795260000030],
+    type: 'postgres', url, migrations: [InitialSchema1795260000000, Knowledge1795260000001, Feedback1795260000002, BoundBootstrapCatalog1795260000003, SupportPriority1795260000004, WebChat1795260000005, WebDemoAccount1795260000006, SimulatorIntegration1795260000007, ConversationalVerification1795260000008, ReleaseEvidence1795260000009, PlatformEvolution1795260000010, PromptManifest1795260000011, MlAdvisory1795260000012, PromptReplayEvidence1795260000013, PromptZeroEffectEvidence1795260000014, PromptGoldenEvidence1795260000015, MlAdvisoryTracking1795260000016, ContextualKnowledge1795260000017, OptionalChatIdentity1795260000018, PromptBillingOutageEvidence1795260000019, PromptHandoffContextEvidence1795260000020, PromptPendingProposalEvidence1795260000021, PromptAdjustmentReviewEvidence1795260000022, PromptPrivacyReplayEvidence1795260000023, PromptAuthenticatedHandoffEvidence1795260000024, WebChatVisitor1795260000025, AgentModelPolicy1795260000026, AssistedAttention1795260000027, FollowUpAgenda1795260000028, RetireLocalModel1795260000029, DeploymentObservations1795260000030, TelegramAdministration1795260000031],
     migrationsTableName: 'claro_migrations', synchronize: false
   });
 }
