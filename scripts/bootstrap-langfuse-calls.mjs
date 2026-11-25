@@ -10,14 +10,15 @@ const { LANGFUSE_UI_URL, LANGFUSE_PROJECT_ID: projectId, LANGFUSE_PUBLIC_KEY: pu
   OPENROUTER_API_KEY: openRouterKey } = process.env;
 const args = process.argv.slice(2);
 const datasetOnly = args.includes('--dataset-only');
+const composeNetwork = args.includes('--compose-network');
 const namedManifest = args.includes('--manifest-evaluator');
 const catalogue = args.includes('--catalogue');
 const context = args.includes('--context');
 const assisted = args.includes('--assisted');
 const retention = args.includes('--retention');
 const suites = Number(catalogue)+Number(context)+Number(assisted)+Number(retention);
-if (args.length !== Number(datasetOnly)+Number(namedManifest)+suites || datasetOnly && namedManifest || suites>1) {
-  throw new Error('Uso: bootstrap-langfuse-calls.mjs [--catalogue | --context | --assisted | --retention] [--dataset-only | --manifest-evaluator]');
+if (args.length !== Number(datasetOnly)+Number(namedManifest)+Number(composeNetwork)+suites || datasetOnly && namedManifest || suites>1) {
+  throw new Error('Uso: bootstrap-langfuse-calls.mjs [--catalogue | --context | --assisted | --retention] [--dataset-only | --manifest-evaluator] [--compose-network]');
 }
 const dataset = retention ? {
   name:'claro-retencion-seguimiento-v1',description:'Oferta en voz del asesor, excepción, ciclo facturado y cierre contextual por web',
@@ -74,8 +75,14 @@ evaluatorId[6] = (evaluatorId[6] & 0x0f) | 0x50;
 evaluatorId[8] = (evaluatorId[8] & 0x3f) | 0x80;
 const destinationEvaluatorId = evaluatorId.toString('hex').replace(/^(........)(....)(....)(....)/, '$1-$2-$3-$4-');
 
+const transport = composeNetwork ? new URL('http://langfuse-web:3000') : base;
 function http(path, options = {}) {
-  return fetch(new URL(path, base), { ...options, redirect: 'manual', signal: AbortSignal.timeout(25000) });
+  const headers = new Headers(options.headers);
+  if (composeNetwork) {
+    headers.set('X-Forwarded-Host', base.host);
+    headers.set('X-Forwarded-Proto', base.protocol.slice(0, -1));
+  }
+  return fetch(new URL(path, transport), { ...options, headers, redirect: 'manual', signal: AbortSignal.timeout(25000) });
 }
 async function publicRequest(path, body, missing = false) {
   const write = body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) };
