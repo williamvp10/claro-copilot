@@ -1,19 +1,20 @@
 'use client';
 
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { ArrowDownRight, ArrowUpRight, Check, ChevronRight, CircleHelp, FileClock, Network, Pencil, Radio, RefreshCw, Router, SlidersHorizontal } from 'lucide-react';
 import {
-  AgentModelPolicy, initialAgentModelPolicy, ModelProfile, modelProfileRank,
+  AgentModelPolicy, initialAgentModelPolicy, ModelProfile, modelComponentByStep, modelProfileRank,
   type AgentModelCatalog, type AgentModelExecutions, type AgentModelRevision, type AgentModelRevisions,
   type ModelAssignment, type ModelStep
 } from '@claro/contracts';
 import { api } from '@/lib/api';
 import { Button } from './ui/button';
+import { compatibleAssignment, OptionalNumber, reasoningLabels, ResponseFields, toneLabels, verbosityLabels } from './agent-model-policy-fields';
 import styles from './admin-agent-models.module.css';
 
 const groups = [
   {name:'Orquestador', description:'Interpreta el contexto, delega y compone la respuesta.', icon:Network,
-    steps:['extract_turn','plan_objectives','select_evidence','write_public','write_advisor']},
+    steps:['write_public','write_advisor','extract_turn','plan_objectives','select_evidence']},
   {name:'Comercial y Portabilidad', description:'Sintetiza condiciones y evidencia de productos.', icon:Router, steps:['commercial_evidence']},
   {name:'Soporte Técnico', description:'Sintetiza procedimientos y evidencia de diagnóstico.', icon:Radio, steps:['support_evidence']},
   {name:'Facturación', description:'Sintetiza información autorizada de facturación.', icon:FileClock, steps:['billing_evidence']}
@@ -39,7 +40,9 @@ const statusLabel:Record<string,string>={
   credencial_ausente:'Falta la credencial del proveedor',modelo_no_aprobado:'Modelo fuera del catálogo',
   modelo_no_disponible:'Modelo sin disponibilidad confirmada',salida_estructurada_incompatible:'Salida estructurada incompatible',
   perfil_incompatible:'Modelo insuficiente para el perfil',presupuesto_insuficiente:'Presupuesto insuficiente',
-  proveedor_no_disponible:'Proveedor sin respuesta'
+  proveedor_no_disponible:'Proveedor sin respuesta',ajuste_exclusivo_de_respuesta:'El ajuste corresponde a una llamada de redacción',
+  ajuste_requiere_openai:'El ajuste requiere OpenAI directo',razonamiento_no_compatible:'El modelo requiere razonamiento',
+  temperatura_requiere_sin_razonamiento:'La temperatura requiere un modelo compatible sin razonamiento'
 };
 
 function RevisionStatus({item,active}:{item:AgentModelRevision;active:string}) {
@@ -65,8 +68,8 @@ function AssignmentFields({catalog,step,rule,onChange}:{catalog:AgentModelCatalo
   return <>
     <div className={styles.fields}>
       <label>Estrategia<select value={rule.mode} onChange={event=>{
-        if (event.target.value==='fixed' && rule.mode==='auto') onChange({mode:'fixed',model:rule.profiles.economico,fallback:rule.fallback});
-        if (event.target.value==='auto' && rule.mode==='fixed') onChange({...initialAgentModelPolicy.steps[step],fallback:rule.fallback});
+        if (event.target.value==='fixed' && rule.mode==='auto') onChange({mode:'fixed',model:rule.profiles.economico,fallback:rule.fallback,tuning:rule.tuning});
+        if (event.target.value==='auto' && rule.mode==='fixed') onChange({...initialAgentModelPolicy.steps[step],fallback:rule.fallback,tuning:rule.tuning});
       }}>
         <option value="auto">Automática por perfil y costo</option><option value="fixed">Modelo fijo</option>
       </select></label>
@@ -143,10 +146,11 @@ export function AdminAgentModels() {
   const [catalog,setCatalog]=useState<AgentModelCatalog>();
   const [history,setHistory]=useState<AgentModelRevisions>();
   const [tab,setTab]=useState<Tab>('policy');
-  const [step,setStep]=useState<ModelStep>('extract_turn');
+  const [step,setStep]=useState<ModelStep>('write_public');
   const [reviewId,setReviewId]=useState<string>();
   const [inspectId,setInspectId]=useState<string>();
   const [edit,setEdit]=useState<{base:string;policy:AgentModelPolicy}>();
+  const formRef=useRef<HTMLFormElement>(null);
   const [draftReason,setDraftReason]=useState('');
   const [reason,setReason]=useState('');
   const [evidence,setEvidence]=useState('');
@@ -159,6 +163,12 @@ export function AdminAgentModels() {
   const policy=edit?.policy ?? inspected?.policy;
   const rule=policy?.steps[step];
   const group=groupFor(step);
+  const component=modelComponentByStep[step];
+  const componentLimits=policy?.component_limits?.[component];
+  const editing=!!edit;
+  useEffect(()=>{
+    if (editing) formRef.current?.querySelector('select')?.focus();
+  },[editing]);
   const changed=!!edit && JSON.stringify(edit.policy)!==JSON.stringify(active?.policy);
   const parsed=edit ? AgentModelPolicy.safeParse(edit.policy) : undefined;
 
@@ -180,6 +190,16 @@ export function AdminAgentModels() {
 
   function updatePolicy(update:(policy:AgentModelPolicy)=>AgentModelPolicy) {
     setEdit(current=>current&&{...current,policy:update(current.policy)});
+  }
+
+  function updateLimit(key:'max_cost_usd'|'max_call_ms',value:number|undefined) {
+    updatePolicy(current=>{
+      const limits={...current.component_limits};
+      const next={...limits[component],[key]:value};
+      if (next.max_cost_usd===undefined && next.max_call_ms===undefined) delete limits[component];
+      else limits[component]=next;
+      return {...current,component_limits:Object.keys(limits).length?limits:undefined};
+    });
   }
 
   function selectTab(next:Tab) {
@@ -216,6 +236,14 @@ export function AdminAgentModels() {
     (reviewed.was_active || reviewed.base_revision===history?.active);
   const modelLabel=(id:string)=>catalog?.models.find(model=>model.id===id)?.label ?? id;
 
+  function assignedNames(itemSteps:readonly ModelStep[]) {
+    if (!policy) return [];
+    return [...new Set(itemSteps.flatMap(itemStep=>{
+      const assignment=policy.steps[itemStep];
+      return assignment.mode==='fixed' ? [assignment.model] : Object.values(assignment.profiles);
+    }))].map(modelLabel);
+  }
+
   return <div className={`admin-page ${styles.page}`}>
     <header className={styles.header}>
       <div><h1>Modelos del agente</h1><p>Consulta y configura qué LLM usa cada agente y sus llamadas.</p></div>
@@ -231,44 +259,69 @@ export function AdminAgentModels() {
     {tab==='executions'?<ExecutionView/>:!active||!catalog||!policy||!rule||!inspected||!reviewed?
       !error&&<p role="status" className={styles.empty}>Cargando configuración de modelos…</p>:
       tab==='policy'?<>
-        <section className={styles.split} aria-label="Configuración por componente">
-          <div className={styles.componentList} aria-label="Agentes disponibles">
-            <h2>Agentes</h2>
+        <section className={styles.policy} aria-labelledby="model-components-title">
+          <div className={styles.sectionHead}>
+            <div><h2 id="model-components-title">Componentes de la política</h2>
+              <p>{groups.length} componentes · 1 orquestador y {groups.length-1} subagentes</p></div>
+            {edit&&<span className={styles.warning}>Edición sin publicar</span>}
+          </div>
+          <div className={styles.overview}>
             {groups.map(item=>{
               const Icon=item.icon;
               const steps:readonly ModelStep[]=item.steps;
-              const first=policy.steps[item.steps[0]];
-              const mixed=steps.some(itemStep=>JSON.stringify(policy.steps[itemStep])!==JSON.stringify(first));
-              return <button type="button" aria-pressed={item.name===group.name} disabled={!!busy} key={item.name} onClick={()=>setStep(item.steps[0])}>
-                <Icon size={18} aria-hidden="true"/><span><strong>{item.name}</strong>
-                  <small>{mixed?`${steps.length} llamadas con reglas distintas`:first.mode==='fixed'?modelLabel(first.model):'Automático · 3 perfiles'}</small>
-                </span><ChevronRight size={16} aria-hidden="true"/>
+              const rules=steps.map(itemStep=>policy.steps[itemStep]);
+              const mode=rules.every(assignment=>assignment.mode==='fixed')?'Modelo fijo':
+                rules.every(assignment=>assignment.mode==='auto')?'Por perfil':'Estrategias mixtas';
+              return <button type="button" aria-pressed={item.name===group.name} disabled={!!busy}
+                key={item.name} onClick={()=>setStep(item.steps[0])}>
+                <span className={styles.overviewTop}><Icon size={18} aria-hidden="true"/>
+                  <small>{steps.length>1?'Agente · Orquestación':'Subagente'}</small><ChevronRight size={16} aria-hidden="true"/></span>
+                <strong>{item.name}</strong>
+                <span className={styles.overviewModels}>{assignedNames(steps).join(' · ')}</span>
+                <small>{mode}{steps.length>1?` · ${steps.length} llamadas`:''}</small>
               </button>;
             })}
           </div>
-          <div className={styles.editor}>
+          <div className={`${styles.surface} ${styles.editor}`}>
             <div className={styles.sectionHead}>
               <div><h2>{group.name}</h2><p>{group.description}</p></div>
               {!edit&&(inspected.revision===active.revision?
-                <Button type="button" onClick={()=>{setError('');setNotice('');setEdit({base:active.revision,policy:structuredClone(active.policy)});}}><Pencil/>Editar modelos</Button>
+                <Button type="button" onClick={()=>{setError('');setNotice('');setEdit({base:active.revision,policy:structuredClone(active.policy)});}}><Pencil/>Editar configuración</Button>
                 :<Button type="button" variant="outline" onClick={()=>setInspectId(undefined)}>Volver a la activa</Button>)}
             </div>
             {inspected.revision!==active.revision&&!edit&&<p className={styles.notice}>Consultando revisión <code>{shortId(inspected.revision)}</code></p>}
             {group.steps.length>1&&<label className={styles.filter}>Llamada<select value={step} disabled={!!busy} onChange={event=>setStep(event.target.value as ModelStep)}>
               {group.steps.map(item=><option key={item} value={item}>{stepLabels[item]}</option>)}
             </select></label>}
-            {edit?<form onSubmit={save} className={styles.form}>
+            {edit?<form ref={formRef} onSubmit={save} className={styles.form}>
               <fieldset className={styles.formFields} disabled={!!busy}>
-                <AssignmentFields catalog={catalog} step={step} rule={rule} onChange={next=>updatePolicy(current=>({...current,steps:{...current.steps,[step]:next}}))}/>
+                <AssignmentFields catalog={catalog} step={step} rule={rule} onChange={next=>updatePolicy(current=>({
+                  ...current,steps:{...current.steps,[step]:compatibleAssignment(next,step,catalog)}
+                }))}/>
                 {group.steps.length>1&&<Button type="button" variant="outline" className={styles.replicate}
-                  onClick={()=>updatePolicy(current=>({...current,steps:{...current.steps,...Object.fromEntries(group.steps.map(key=>[key,rule]))}}))}>
-                  <ArrowDownRight/>Aplicar a las {group.steps.length} llamadas del orquestador
+                  onClick={()=>updatePolicy(current=>({...current,steps:{...current.steps,...Object.fromEntries(group.steps.map(key=>[
+                    key,compatibleAssignment({...rule,tuning:current.steps[key].tuning},key,catalog)
+                  ]))}}))}>
+                  <ArrowDownRight/>Aplicar modelos a las {group.steps.length} llamadas
                 </Button>}
-                <details className={styles.disclosure}><summary>Límites de la política</summary>
+                <fieldset className={styles.formSection}>
+                  <legend>Límites de {group.name}</legend>
+                  <p>El componente comparte este tope entre sus llamadas del turno y respeta el tope general de {dollars.format(policy.max_cost_usd)}. Deja vacío un campo para heredar el valor de la política.</p>
+                  <div className={styles.fields}>
+                    <OptionalNumber label="Tope del componente por turno en USD" min={0.0001} max={1} precision="0.0001"
+                      value={componentLimits?.max_cost_usd} placeholder={String(policy.max_cost_usd)} onChange={value=>updateLimit('max_cost_usd',value)}/>
+                    <OptionalNumber label="Tiempo del componente por llamada en ms" min={350} max={10000}
+                      value={componentLimits?.max_call_ms} placeholder={String(policy.max_call_ms)} onChange={value=>updateLimit('max_call_ms',value)}/>
+                  </div>
+                </fieldset>
+                <ResponseFields catalog={catalog} step={step} rule={rule} onChange={next=>updatePolicy(current=>({
+                  ...current,steps:{...current.steps,[step]:compatibleAssignment(next,step,catalog)}
+                }))}/>
+                <details className={styles.disclosure}><summary>Límites compartidos de la política</summary>
                   <div className={styles.fields}>
                     <label>Presupuesto por turno en USD<input type="number" step="0.0001" min="0.0001" max="1" value={Number.isNaN(policy.max_cost_usd)?'':policy.max_cost_usd}
                       onChange={event=>{const value=event.target.valueAsNumber;updatePolicy(current=>({...current,max_cost_usd:value}));}} required/></label>
-                    <label>Tiempo por llamada en ms<input type="number" min="350" max="10000" value={Number.isNaN(policy.max_call_ms)?'':policy.max_call_ms}
+                    <label>Tiempo predeterminado por llamada en ms<input type="number" min="350" max="10000" value={Number.isNaN(policy.max_call_ms)?'':policy.max_call_ms}
                       onChange={event=>{const value=event.target.valueAsNumber;updatePolicy(current=>({...current,max_call_ms:value}));}} required/></label>
                   </div>
                 </details>
@@ -287,20 +340,35 @@ export function AdminAgentModels() {
                 <div><dt>Respaldo</dt><dd>{rule.fallback?modelLabel(rule.fallback):'Sin respaldo'}</dd></div>
                 {rule.mode==='auto'&&rule.alternatives.length>0&&<div><dt>Alternativas</dt><dd>{rule.alternatives.map(modelLabel).join(', ')}</dd></div>}
               </dl>
-              <p className={styles.limits}>{dollars.format(policy.max_cost_usd)} por turno <span aria-hidden="true">·</span> {policy.max_call_ms.toLocaleString('es-CO')} ms por llamada</p>
+              <dl className={styles.readSettings}>
+                <div><dt>Tope del componente</dt><dd>{dollars.format(componentLimits?.max_cost_usd ?? policy.max_cost_usd)} por turno
+                  {componentLimits?.max_cost_usd===undefined?' · Heredado':''}</dd></div>
+                <div><dt>Tiempo por llamada</dt><dd>{(componentLimits?.max_call_ms ?? policy.max_call_ms).toLocaleString('es-CO')} ms
+                  {componentLimits?.max_call_ms===undefined?' · Heredado':''}</dd></div>
+                {rule.tuning?.tone&&<div><dt>Tono</dt><dd>{toneLabels[rule.tuning.tone]}</dd></div>}
+                {rule.tuning?.verbosity&&<div><dt>Extensión</dt><dd>{verbosityLabels[rule.tuning.verbosity]}</dd></div>}
+                {rule.tuning?.reasoning&&<div><dt>Razonamiento</dt><dd>{reasoningLabels[rule.tuning.reasoning]}</dd></div>}
+                {rule.tuning?.temperature!==undefined&&<div><dt>Temperatura</dt><dd>{rule.tuning.temperature.toLocaleString('es-CO')}</dd></div>}
+                {rule.tuning?.max_output_tokens!==undefined&&<div><dt>Tokens de salida</dt><dd>{rule.tuning.max_output_tokens.toLocaleString('es-CO')}</dd></div>}
+              </dl>
             </>}
           </div>
         </section>
         <details className={`${styles.surface} ${styles.disclosure}`}><summary>Catálogo y tarifas</summary>
           <p>OpenAI directo {catalog.providers.openai?'configurado':'sin credencial'} <span aria-hidden="true">·</span> OpenRouter {catalog.providers.openrouter?'configurado':'sin credencial'}</p>
-          <ul className={styles.catalog}>
-            {catalog.models.map(model=><li key={model.id}>
-              <div><strong>{model.label}</strong><small className={styles.modelId}>{model.id}</small></div>
-              <div>{providers[model.provider]}<small>{profiles[model.profile]}</small></div>
-              <div>{dollars.format(model.input_usd_per_million)} / {dollars.format(model.output_usd_per_million)}<small>Entrada / salida por millón de tokens</small></div>
-              <small>{model.structured_outputs===false?'Salida incompatible':model.available?'Disponible para validar':'Disponibilidad por confirmar'}</small>
-            </li>)}
-          </ul>
+          <div className={styles.catalogFrame} role="region" tabIndex={0} aria-label="Catálogo de modelos con desplazamiento">
+            <table className={styles.catalogTable}>
+              <thead><tr><th scope="col">Modelo</th><th scope="col">API</th><th scope="col">Perfil</th>
+                <th scope="col">USD por millón de tokens</th><th scope="col">Disponibilidad</th></tr></thead>
+              <tbody>{catalog.models.map(model=><tr key={model.id}>
+                <th scope="row">{model.label}<small className={styles.modelId}>{model.id}</small></th>
+                <td>{model.provider==='openai'?'OpenAI':'OpenRouter'}</td>
+                <td>{profiles[model.profile]}</td>
+                <td>{dollars.format(model.input_usd_per_million)} / {dollars.format(model.output_usd_per_million)}<small>Entrada / salida</small></td>
+                <td>{model.structured_outputs===false?'Salida incompatible':model.available?'Disponible para validar':'Por confirmar'}</td>
+              </tr>)}</tbody>
+            </table>
+          </div>
         </details>
       </>:<section className={styles.split} aria-label="Revisiones de modelos">
         <div className={styles.componentList}>

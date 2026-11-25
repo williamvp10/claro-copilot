@@ -119,3 +119,51 @@ test('verified assisted billing and catalogue share a reading round',async()=>{
   assert.deepEqual(rounds.map(item=>item.metadata.round),[1,1]);
   assert.ok(observed.some(item=>item.name==='orchestrator.delegate' && item.metadata.max_parallel===2));
 });
+
+test('a response uses the approved OpenAI tuning and preserves the structured format',async()=>{
+  const policy=structuredClone(initialAgentModelPolicy);
+  policy.steps.write_public={mode:'fixed',model:'gpt-6.1-terra',tuning:{
+    tone:'formal',reasoning:'none',temperature:0.45,verbosity:'low',max_output_tokens:320
+  }};
+  const {models,calls,observations}=setup(policy);
+  assert.deepEqual(await models.call(request),output);
+  const {body}=calls[0];
+  assert.equal(body.reasoning.effort,'none');
+  assert.equal(body.text.verbosity,'low');
+  assert.equal(body.text.format.strict,true);
+  assert.equal(body.temperature,0.45);
+  assert.equal(body.max_output_tokens,320);
+  assert.match(body.instructions,/profesional y formal/);
+  assert.equal(observations[0].metadata.response_tone,'formal');
+  assert.equal(observations[0].metadata.temperature,0.45);
+});
+
+test('an incompatible combination makes no call and OpenRouter receives the portable options',async()=>{
+  const policy=structuredClone(initialAgentModelPolicy);
+  policy.steps.write_public={mode:'fixed',model:'gpt-6.2-sol',tuning:{temperature:0.5}};
+  const blocked=setup(policy);
+  assert.equal(await blocked.models.call(request),null);
+  assert.equal(blocked.calls.length,0);
+  policy.steps.write_public={mode:'fixed',model:'mistralai/mistral-small-3.2-24b-instruct',
+    tuning:{tone:'directo',max_output_tokens:384}};
+  const routed=setup(policy);
+  assert.deepEqual(await routed.models.call(request),output);
+  assert.equal(routed.calls[0].body.max_tokens,384);
+  assert.match(routed.calls[0].body.messages[0].content,/tono directo/);
+  assert.equal(routed.calls[0].body.temperature,undefined);
+});
+
+test('a component shares its limits across calls in addition to the global turn budget',async()=>{
+  const policy=structuredClone(initialAgentModelPolicy);
+  policy.component_limits={orquestador:{max_cost_usd:0.0004,max_call_ms:750}};
+  const {models,calls,observations}=setup(policy);
+  const results=await Promise.all([
+    models.call(request),models.call({...request,step:'write_advisor'}),
+    models.call({...request,step:'support_evidence'})
+  ]);
+  assert.deepEqual(results.filter(Boolean),[output,output]);
+  assert.equal(calls.length,2);
+  const assistant=observations.filter(item=>item.metadata.agent_id==='copiloto');
+  assert.equal(assistant.find(item=>item.metadata.status==='budget_exhausted').metadata.component_turn_cost_limit_usd,0.0004);
+  assert.equal(assistant.find(item=>item.metadata.status==='accepted').metadata.component_call_timeout_ms,750);
+});

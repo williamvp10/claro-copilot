@@ -10,6 +10,29 @@ export type ModelStep = z.infer<typeof ModelStep>;
 export const ModelProvider = z.enum(['openai', 'openrouter']);
 export type ModelProvider = z.infer<typeof ModelProvider>;
 
+export const ModelComponent = z.enum(['orquestador','comercial','soporte','facturacion']);
+export type ModelComponent = z.infer<typeof ModelComponent>;
+export const modelComponentByStep:Record<ModelStep,ModelComponent> = {
+  extract_turn:'orquestador',plan_objectives:'orquestador',select_evidence:'orquestador',
+  write_public:'orquestador',write_advisor:'orquestador',commercial_evidence:'comercial',
+  support_evidence:'soporte',billing_evidence:'facturacion'
+};
+export const ModelReasoning = z.enum(['none','low','medium','high','xhigh','max']);
+export const ModelVerbosity = z.enum(['low','medium','high']);
+export const ModelTone = z.enum(['cercano','formal','directo']);
+export const ModelTuning = z.object({
+  reasoning:ModelReasoning.optional(),
+  verbosity:ModelVerbosity.optional(),
+  temperature:z.number().min(0).max(2).optional(),
+  tone:ModelTone.optional(),
+  max_output_tokens:z.number().int().min(128).max(2048).optional()
+}).strict();
+export type ModelTuning = z.infer<typeof ModelTuning>;
+export function writesModelResponse(step:ModelStep) {
+  return step==='write_public' || step==='write_advisor' || step==='commercial_evidence' ||
+    step==='support_evidence' || step==='billing_evidence';
+}
+
 export type ModelOption = {
   id: string;
   provider: ModelProvider;
@@ -18,12 +41,13 @@ export type ModelOption = {
   profile: ModelProfile;
   input_usd_per_million: number;
   output_usd_per_million: number;
-  reasoning?: 'none' | 'low';
+  reasoning?: z.infer<typeof ModelReasoning>;
+  supports_no_reasoning?: true;
 };
 
 export const agentModelCatalog: readonly ModelOption[] = [
-  {id:'gpt-6-luna',provider:'openai',family:'OpenAI',label:'Luna',profile:'economico',input_usd_per_million:0.10,output_usd_per_million:0.50,reasoning:'none'},
-  {id:'gpt-6.1-terra',provider:'openai',family:'OpenAI',label:'Terra',profile:'intermedio',input_usd_per_million:1,output_usd_per_million:5,reasoning:'low'},
+  {id:'gpt-6-luna',provider:'openai',family:'OpenAI',label:'Luna',profile:'economico',input_usd_per_million:0.10,output_usd_per_million:0.50,reasoning:'none',supports_no_reasoning:true},
+  {id:'gpt-6.1-terra',provider:'openai',family:'OpenAI',label:'Terra',profile:'intermedio',input_usd_per_million:1,output_usd_per_million:5,reasoning:'low',supports_no_reasoning:true},
   {id:'gpt-6.2-sol',provider:'openai',family:'OpenAI',label:'Sol',profile:'complejo',input_usd_per_million:2,output_usd_per_million:10,reasoning:'low'},
   {id:'gpt-6.2-astra',provider:'openai',family:'OpenAI',label:'Astra',profile:'complejo',input_usd_per_million:8,output_usd_per_million:40,reasoning:'low'},
   {id:'anthropic/claude-sonnet-4.6',provider:'openrouter',family:'Anthropic',label:'Claude Sonnet 4.6',profile:'complejo',input_usd_per_million:3,output_usd_per_million:15},
@@ -41,14 +65,17 @@ export const modelStepLabels: Record<ModelStep, string> = {
 const ModelId = z.string().min(1).max(128);
 const ProfileModels = z.record(ModelProfile,ModelId);
 export const ModelAssignment = z.discriminatedUnion('mode', [
-  z.object({mode:z.literal('fixed'),model:ModelId,fallback:ModelId.optional()}).strict(),
-  z.object({mode:z.literal('auto'),profiles:ProfileModels,alternatives:z.array(ModelId).max(8),fallback:ModelId.optional()}).strict()
+  z.object({mode:z.literal('fixed'),model:ModelId,fallback:ModelId.optional(),tuning:ModelTuning.optional()}).strict(),
+  z.object({mode:z.literal('auto'),profiles:ProfileModels,alternatives:z.array(ModelId).max(8),fallback:ModelId.optional(),tuning:ModelTuning.optional()}).strict()
 ]);
 export type ModelAssignment = z.infer<typeof ModelAssignment>;
+const Cost = z.number().min(0.0001).max(1);
+const Timeout = z.number().int().min(350).max(10000);
 export const AgentModelPolicy = z.object({
   steps:z.record(ModelStep,ModelAssignment),
-  max_cost_usd:z.number().min(0.0001).max(1),
-  max_call_ms:z.number().int().min(350).max(10000)
+  max_cost_usd:Cost,
+  max_call_ms:Timeout,
+  component_limits:z.partialRecord(ModelComponent,z.object({max_cost_usd:Cost.optional(),max_call_ms:Timeout.optional()}).strict()).optional()
 }).strict();
 export type AgentModelPolicy = z.infer<typeof AgentModelPolicy>;
 export const initialAgentModelPolicy = AgentModelPolicy.parse({
@@ -62,6 +89,18 @@ export const modelProfileRank: Record<ModelProfile, number> = {economico:0,inter
 export function assignedModelIds(rule:ModelAssignment) {
   const primary = rule.mode==='fixed' ? [rule.model] : [...Object.values(rule.profiles),...rule.alternatives];
   return [...new Set(rule.fallback ? [...primary,rule.fallback] : primary)];
+}
+
+export function modelTuningIssue(step:ModelStep,tuning:ModelTuning|undefined,model:ModelOption):string|undefined {
+  if (!tuning) return;
+  if (!writesModelResponse(step) && (tuning.tone || tuning.verbosity || tuning.temperature!==undefined || tuning.max_output_tokens!==undefined)) {
+    return 'ajuste_exclusivo_de_respuesta';
+  }
+  if (model.provider!=='openai' && (tuning.reasoning || tuning.verbosity || tuning.temperature!==undefined)) return 'ajuste_requiere_openai';
+  if (tuning.reasoning==='none' && !model.supports_no_reasoning) return 'razonamiento_no_compatible';
+  if (tuning.temperature!==undefined && (!model.supports_no_reasoning || (tuning.reasoning ?? model.reasoning)!=='none')) {
+    return 'temperatura_requiere_sin_razonamiento';
+  }
 }
 
 export type ModelValidation = { digest:string; checked_at:string; issues:{step:ModelStep;model:string;reason:string}[] };

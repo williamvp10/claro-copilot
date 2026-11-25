@@ -1,8 +1,8 @@
 import { BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, Inject, NotFoundException, Param, Post, Req } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { objectSchema, requestModel, type ModelCredentials } from '@claro/agent';
-import { AgentModelPolicy, ModelProvider as ProviderSchema, ModelStep, agentModelCatalog, assignedModelIds, modelProfileRank,
-  type AgentModelCatalog, type AgentModelExecutions, type AgentModelRevision, type ModelOption, type ModelProvider, type ModelValidation } from '@claro/contracts';
+import { AgentModelPolicy, ModelProvider as ProviderSchema, ModelStep, agentModelCatalog, assignedModelIds, modelComponentByStep, modelProfileRank, modelTuningIssue,
+  type AgentModelCatalog, type AgentModelExecutions, type AgentModelRevision, type ModelOption, type ModelProvider, type ModelTuning, type ModelValidation } from '@claro/contracts';
 import type { Request } from 'express';
 import type { DataSource } from 'typeorm';
 import { z } from 'zod';
@@ -52,10 +52,10 @@ async function capabilities(keys:ModelCredentials) {
   return {openai,openrouter};
 }
 
-async function probe(model:ModelOption,key:string) {
+async function probe(model:ModelOption,key:string,tuning?:ModelTuning) {
   try {
     const reply=await requestModel(model,key,'Devuelve exactamente el valor de entrada en el campo resultado.',
-      '{"resultado":"claro-validacion"}',objectSchema({resultado:{type:'string'}}),400,6500);
+      '{"resultado":"claro-validacion"}',objectSchema({resultado:{type:'string'}}),tuning?.max_output_tokens ?? 400,6500,fetch,tuning);
     return (reply.value as {resultado?:unknown}|null)?.resultado==='claro-validacion' ? '' : 'salida_estructurada_incompatible';
   } catch (error) {
     return error instanceof Error && /^http_\d+$/.test(error.message) ? error.message : 'proveedor_no_disponible';
@@ -160,30 +160,38 @@ export class AgentModelAdminController {
     const {policy,digest}=await this.revision(id);
     const keys=modelCredentials(), listed=await capabilities(keys);
     const options=new Map(agentModelCatalog.map(model=>[model.id,model]));
-    const used=[...new Set(ModelStep.options.flatMap(step=>assignedModelIds(policy.steps[step])))];
-    const checks=new Map<string,string>();
-    const check=async (modelId:string) => {
-      const model=options.get(modelId);
-      if (!model) return 'modelo_no_aprobado';
-      const key=keys[model.provider];
-      if (!key) return 'credencial_ausente';
-      if (!listed[model.provider].has(model.id)) return 'modelo_no_disponible';
-      if (listed[model.provider].get(model.id)===false) return 'salida_estructurada_incompatible';
-      return probe(model,key);
-    };
-    for(let index=0;index<used.length;index+=2) {
-      await Promise.all(used.slice(index,index+2).map(async model=>checks.set(model,await check(model))));
-    }
-    const issues=ModelStep.options.flatMap(step=>{
+    const assignments=ModelStep.options.flatMap(step=>{
       const rule=policy.steps[step];
-      return assignedModelIds(rule).flatMap(model=>{
+      const tuning=rule.tuning;
+      const componentLimit=policy.component_limits?.[modelComponentByStep[step]]?.max_cost_usd;
+      return assignedModelIds(rule).map(model=>{
         const option=options.get(model);
-        const tooLow=option && rule.mode==='auto' && Object.entries(rule.profiles).some(([profile,id])=>
+        const probeKey=JSON.stringify([model,tuning?.reasoning,tuning?.verbosity,tuning?.temperature,tuning?.max_output_tokens]);
+        if (!option) return {step,model,probeKey,tuning,reason:'modelo_no_aprobado'};
+        const tooLow=rule.mode==='auto' && Object.entries(rule.profiles).some(([profile,id])=>
           id===model && modelProfileRank[option.profile]<modelProfileRank[profile as keyof typeof modelProfileRank]);
-        const baseCost=option ? (256*option.input_usd_per_million+480*option.output_usd_per_million)/1e6 : 0;
-        const reason=checks.get(model) || (tooLow?'perfil_incompatible':baseCost>policy.max_cost_usd?'presupuesto_insuficiente':'');
-        return reason ? [{step,model,reason}] : [];
+        const baseCost=(256*option.input_usd_per_million+(tuning?.max_output_tokens ?? 480)*option.output_usd_per_million)/1e6;
+        const reason=modelTuningIssue(step,tuning,option) ||
+          (tooLow?'perfil_incompatible':baseCost>Math.min(policy.max_cost_usd,componentLimit ?? Infinity)?'presupuesto_insuficiente':'');
+        return {step,model,probeKey,tuning,reason};
       });
+    });
+    const checks=new Map<string,string>();
+    const pending=[...new Map(assignments.filter(item=>!item.reason).map(item=>[item.probeKey,item])).values()];
+    const check=async ({model,tuning}:typeof pending[number]) => {
+      const option=options.get(model)!;
+      const key=keys[option.provider];
+      if (!key) return 'credencial_ausente';
+      if (!listed[option.provider].has(model)) return 'modelo_no_disponible';
+      if (listed[option.provider].get(model)===false) return 'salida_estructurada_incompatible';
+      return probe(option,key,tuning);
+    };
+    for(let index=0;index<pending.length;index+=2) {
+      await Promise.all(pending.slice(index,index+2).map(async item=>checks.set(item.probeKey,await check(item))));
+    }
+    const issues=assignments.flatMap(({step,model,reason,probeKey})=>{
+      const failure=reason || checks.get(probeKey);
+      return failure ? [{step,model,reason:failure}] : [];
     });
     const validation={digest,checked_at:new Date().toISOString(),issues};
     await this.db.query(`INSERT INTO agent_model_config_validation(revision,report) VALUES($1,$2)
