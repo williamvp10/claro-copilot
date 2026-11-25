@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowUp, ArrowUpRight, CheckCircle2, FileText, LoaderCircle, MessageCircle } from 'lucide-react';
 import type { WebChatEvent, WebChatSnapshot } from '@claro/contracts';
 import { demoVerifyInvitation, demoWelcome, escalationDestinations } from '@claro/contracts';
+import { MessageText } from '@/components/message-text';
+import { publicCitationHref } from '@/lib/citations';
 import { Button } from '../../components/ui/button';
 import styles from './chat.module.css';
 
@@ -162,19 +164,21 @@ export default function CustomerChat() {
           <div><strong>{message.attention_notice==='escalated' ? 'Caso escalado' : message.attention_notice==='closed' ? 'Caso cerrado' : 'En atención'}</strong><p>{message.text}</p></div>
         </article> : <article key={message.id} className={message.actor === 'cliente' ? styles.customer : styles.agent}>
           <span className={styles.author}>{message.actor === 'cliente' ? 'Tú' : message.actor === 'asesor' ? 'Asesor Claro' : 'Claro Copiloto'}</span>
-          <p>{message.text}</p>
+          <p><MessageText text={message.text}/></p>
           {message.citations?.filter((citation,index,all) => {
             const source = citation.source;
             return !source || !/^catalogo-v\d+$/.test(source.key) || all.findIndex(item =>
               item.source?.publication === source.publication && item.source.key === source.key) === index;
-          }).map(citation => citation.source
-            ? <a key={citation.id} className={styles.sourceLink}
-                href={`/fuentes/${citation.source.publication}/${citation.source.key}?pasaje=${encodeURIComponent(citation.id)}`}
-                target="_blank" rel="noreferrer"><FileText size={14} aria-hidden="true" /> {/^catalogo-v\d+$/.test(citation.source.key)
+          }).map(citation => {
+            const href=publicCitationHref(citation);
+            return href
+              ? <a key={citation.id} className={styles.sourceLink} href={href}
+                  target="_blank" rel="noreferrer"><FileText size={14} aria-hidden="true" /> {/^catalogo-v\d+$/.test(citation.source?.key ?? '')
                   ? `Ver o descargar catálogo · ${citation.version}` : `Ver fuente · ${citation.title.split(' · ')[0]}`}</a>
-            : <details key={citation.id} className={styles.citation}>
-                <summary><FileText size={14} />{citation.title} · {citation.version}</summary><p>{citation.excerpt}</p>
-              </details>)}
+              : <details key={citation.id} className={styles.citation}>
+                  <summary><FileText size={14} />{citation.title} · {citation.version}</summary><p>{citation.excerpt}</p>
+                </details>;
+          })}
         </article>)}
         {pending && (delayedTurn === pending.id
           ? <div className={styles.status}>La respuesta se está demorando. <button className={styles.textAction} type="button"

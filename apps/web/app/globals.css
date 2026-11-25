@@ -83,7 +83,30 @@
   .ops-kpis{grid-template-columns:repeat(2,minmax(0,1fr));padding:4px}
   .ops-kpis>div{padding:10px}.ops-plot td,.ops-plot th{padding:7px 4px}
 }
-.app-shell{height:100dvh}
+.app-shell {
+  /* Keep absolutely positioned accessibility text inside the console. */
+  position: relative;
+  height: 100dvh;
+  min-height: 0;
+  overflow: clip;
+}
+
+.sidebar, .composer {
+  overflow-y: auto;
+}
+
+.sidebar .brand {
+  flex-shrink: 0;
+}
+
+.thread {
+  min-height: 5rem;
+}
+
+.sidebar, .case-list, .thread, .composer, .insight-scroll {
+  overscroll-behavior-y: contain;
+}
+
 .main-area,.workspace,.conversation,.conversation-title,.case-copy{min-width:0}
 @media(min-width:1201px){.inbox-panel{width:clamp(320px,21vw,470px)}.insight-panel{width:clamp(300px,22vw,500px)}}
 @media(max-width:1000px){.sidebar .sidebar-bottom{display:flex;flex-direction:column}.sidebar-bottom .online,.sidebar-bottom .profile>div{display:none}.sidebar-bottom .profile{justify-content:center}}
@@ -165,6 +188,10 @@
 .assisted-summary .assisted-intent { text-transform:capitalize; }
 .assisted-facts div { display:flex; gap:8px; flex-wrap:wrap; padding:4px 0; }
 .assisted-facts dd { font-weight:650; }
+.assisted-draft-links { display:flex; align-items:center; gap:8px; min-height:44px; font-size:12px; }
+.assisted-draft-links input { accent-color:var(--primary); }
+.message-text { white-space:pre-wrap; overflow-wrap:anywhere; }
+.message-text a { text-decoration:underline; text-underline-offset:2px; }
 .assisted-draft-actions { display:flex; flex-wrap:wrap; gap:6px; justify-content:space-between; }
 .assisted-draft-actions button { min-height:44px; }
 .assisted-registration { font-size:13px; color:#41424b; }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { ArrowUpRight, Clock3, Sparkles } from 'lucide-react';
 import type { CaseInbox, CaseSnapshot } from '@claro/contracts';
 import { api } from '@/lib/api';
+import { advisorCitationHref, publicCitationHref } from '@/lib/citations';
 import { Button } from './ui/button';
 import styles from './assisted-workspace.module.css';
 
@@ -73,9 +74,14 @@ export function AdvisorSuggestion({card,children}:{card:CaseSnapshot['card'];chi
   return <section className={styles.suggestion} key={card.advisor_draft_run_id} aria-label="Respuesta sugerida por IA">
     <details open><summary><Sparkles size={17} aria-hidden="true"/> Respuesta sugerida por IA</summary>
       <p>{card.advisor_draft}</p>
-      {card.citations.length>0&&<ul>{card.citations.map(source=><li key={source.id}>
-        {source.url ? <a href={source.url} target="_blank" rel="noreferrer">{source.title} · {source.version}</a> : `${source.title} · ${source.version}`}
-      </li>)}</ul>}
+      {card.citations.length>0&&<ul>{card.citations.map(source=>{
+        const href = advisorCitationHref(source);
+        const label = `${source.title} · ${source.version}`;
+        return <li key={source.id}>
+          {href ? <a href={href} target="_blank" rel="noreferrer">{label}</a> : label}
+          {!publicCitationHref(source)&&<small> · Sin enlace público</small>}
+        </li>;
+      })}</ul>}
     </details>
     {children}
   </section>;

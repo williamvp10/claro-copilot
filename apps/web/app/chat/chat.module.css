@@ -30,6 +30,7 @@
 .customer, .agent { padding: 10px 12px; border-radius: 12px; max-width: min(90%, 560px); white-space: pre-wrap; overflow-wrap: anywhere; }
 .customer { align-self: flex-end; background: #f9e8eb; }
 .agent { align-self: flex-start; background: #f3f4f5; }
+.customer > p a, .agent > p a { color: #8e2439; text-decoration: underline; text-underline-offset: 2px; }
 .author { display: block; margin-bottom: 4px; font-weight: 700; font-size: 12px; color: #575960; }
 .citation { margin-top: 8px; color: #8e2439; font-size: 12px; }
 .citation summary { cursor: pointer; }
