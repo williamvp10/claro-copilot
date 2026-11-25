@@ -77,6 +77,19 @@ function AssignmentFields({catalog,step,rule,onChange}:{catalog:AgentModelCatalo
         <option value="">Sin respaldo</option><ModelOptionList catalog={catalog}/>
       </select></label>
     </div>
+    <details className={`${styles.disclosure} ${styles.strategyHelp}`}>
+      <summary>Cómo se elige el modelo</summary>
+      <p>En modo automático, se elige el modelo elegible de menor costo estimado para el perfil de cada llamada.</p>
+      <dl>
+        <dt>Económico</dt>
+        <dd>Se usa para extraer el contexto y es el perfil inicial en autoservicio.</dd>
+        <dt>Intermedio</dt>
+        <dd>Es el perfil inicial cuando el copiloto asiste a un asesor en un caso con titularidad verificada.</dd>
+        <dt>Complejo</dt>
+        <dd>Se aplica cuando el orquestador planifica más de un objetivo en el turno, como revisar una factura y comparar planes.</dd>
+      </dl>
+      <p>Con <strong>Modelo fijo</strong>, esta llamada usa el modelo principal que configures para todos los perfiles. Si el principal falla o queda indisponible, puede usarse el respaldo configurado.</p>
+    </details>
     {rule.mode==='fixed' ?
       <div className={styles.fields}><label>Modelo principal<select value={rule.model} onChange={event=>onChange({...rule,model:event.target.value})}>
         <ModelOptionList catalog={catalog}/>

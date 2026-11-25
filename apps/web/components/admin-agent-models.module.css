@@ -78,6 +78,10 @@
 .disclosure summary { font-weight: 650; font-size: 14px; cursor: pointer; width: fit-content; padding-block: 5px; }
 .disclosure[open] summary { margin-block-end: 10px; }
 .disclosure>p { color: var(--quiet); font-size: 13px; }
+.strategyHelp { max-width: 68ch; }
+.strategyHelp dl { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 6px 12px; margin: 10px 0; font-size: 13px; }
+.strategyHelp dt { font-weight: 650; }
+.strategyHelp dd { margin: 0; color: var(--quiet); }
 .page>.disclosure { margin-block-start: 16px; padding-block: 12px; }
 .notice, .error, .empty { margin: 0 0 12px; padding: 11px 14px; border-radius: 7px; background: var(--background); font-size: 14px; }
 .error { background: var(--soft-red); color: var(--primary); display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
