@@ -7,7 +7,7 @@ domain=${2:?Set the public hostname}
 publication=${3:?Set the published corpus SHA-256}
 proxy=${4:-host}
 capacity=${5:-full}
-[[ "$root" =~ ^/[a-zA-Z0-9_/-]+$ && "$domain" =~ ^[a-zA-Z0-9.-]+$ ]]
+[[ "$root" =~ ^/[a-zA-Z0-9_./-]+$ && "$domain" =~ ^[a-zA-Z0-9.-]+$ ]]
 [[ "$publication" =~ ^[a-f0-9]{64}$ && "$proxy" =~ ^(host|traefik)$ && "$capacity" =~ ^(full|shared-demo)$ ]]
 [[ ! -e "$root/runtime.env" ]] || { echo 'runtime.env already exists'; exit 1; }
 install -d -m 700 "$root" "$root/releases" "$root/inputs"
@@ -91,7 +91,7 @@ LANGFUSE_REDIS_MEMORY=384m
 LANGFUSE_REDIS_MAXMEMORY=128mb
 LANGFUSE_STORAGE_CPUS=0.5
 LANGFUSE_STORAGE_MEMORY=384m
-LM_STUDIO_CPUS=2
+LM_STUDIO_CPUS=4
 LM_STUDIO_MEMORY=4g
 LM_STUDIO_CONTEXT=4096
 CLARO_POSTGRES_MEMORY=512m

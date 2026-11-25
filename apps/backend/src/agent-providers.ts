@@ -28,9 +28,10 @@ export function agentProviders(env = process.env) {
 }
 
 export async function probeModel(model:ModelOption,key:string,tuning?:ModelTuning) {
+  const timeoutMs = model.provider==='lmstudio' ? 30_000 : 6500;
   try {
     const reply=await requestModel(model,key,'Devuelve exactamente el valor de entrada en el campo resultado.',
-      '{"resultado":"claro-validacion"}',objectSchema({resultado:{type:'string'}}),tuning?.max_output_tokens ?? 400,model.provider==='lmstudio' ? 10000 : 6500,fetch,tuning);
+      '{"resultado":"claro-validacion"}',objectSchema({resultado:{type:'string'}}),tuning?.max_output_tokens ?? 400,timeoutMs,fetch,tuning);
     return (reply.value as {resultado?:unknown}|null)?.resultado==='claro-validacion' ? '' : 'salida_estructurada_incompatible';
   } catch (error) {
     return error instanceof Error && /^http_\d+$/.test(error.message) ? error.message : 'proveedor_no_disponible';
