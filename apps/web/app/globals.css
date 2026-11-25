@@ -189,7 +189,7 @@
 .retention-actions blockquote { flex-basis:100%; margin:0; padding-inline-start:10px; border-inline-start:2px solid var(--border); }
 .retention-options { padding:0; list-style:none; }
 .retention-options li { display:grid; gap:3px; padding-inline-start:10px; border-inline-start:2px solid #a5b4fc; }
-.assisted-escalation-button,.integration-panel .button,.retention-controls .button,.follow-up-page .button,.follow-up-card .button { min-height:44px; }
+.assisted-escalation-button,.integration-panel button[data-slot=button],.retention-controls .button,.follow-up-page .button,.follow-up-card .button { min-height:44px; }
 .integration-panel button[data-variant=outline] { border-color:var(--border); color:var(--foreground); background:var(--background); }
 .integration-panel button[data-variant=outline]:hover { background:#f2f3f4; }
 .follow-up-card { display:grid; gap:8px; padding:12px; margin-block-start:10px; border:1px solid var(--border); border-radius:8px; background:var(--background); }

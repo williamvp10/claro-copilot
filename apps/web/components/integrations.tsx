@@ -187,8 +187,8 @@ function BillingPanel({read, readInvoice, revision = 0, prepare, directory = fal
         onClick={()=>setSelection({value:selected===invoice.factura_id?null:invoice.factura_id,recent:recentInvoice})}>
         Ver factura {invoice.factura_id}
       </Button>
+      {selected===invoice.factura_id&&<InvoicePanel refId={invoice.factura_id} readInvoice={readInvoice} revision={revision} prepare={prepare}/>}
     </li>)}</ul> : <p>Sin facturas para esta cuenta.</p>}
-    {selected && <InvoicePanel key={selected} refId={selected} readInvoice={readInvoice} revision={revision} prepare={prepare}/>}
   </>;
 }
 
