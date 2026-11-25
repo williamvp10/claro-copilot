@@ -1,6 +1,6 @@
 # Claro Copiloto en Dokploy
 
-Usa el proveedor GitHub de Dokploy con `main`, el tipo **Docker Compose** y el archivo [compose.dokploy.yaml](../../compose.dokploy.yaml). Este punto de entrada reúne Next.js, NestJS, los mocks de CRM y facturación, PostgreSQL con pgvector, Redis, FastAPI, MLflow, LM Studio, Prometheus y Langfuse. Solo Traefik publica el frontend. El LLM, las interfaces de operación y las bases comparten la red de Compose.
+Usa el proveedor GitHub de Dokploy con `main`, el tipo **Docker Compose** y el archivo [compose.dokploy.yaml](../../compose.dokploy.yaml). Este punto de entrada reúne Next.js, NestJS, los mocks de CRM y facturación, PostgreSQL con pgvector, Redis, FastAPI, MLflow, LM Studio, Prometheus y Langfuse. Traefik publica el frontend y los accesos HTTPS protegidos de Langfuse y MLflow. El LLM, las bases de datos y las API internas usan la red de Compose.
 
 ## Recursos compartidos
 
@@ -16,3 +16,11 @@ El perfil completo de Compose deja 8 GiB a ClickHouse y 4 GiB a cada proceso web
 4. Comprueba el chat en `/chat`, el login de operador, las versiones de intención y churn, el caso sintético C-1001 y las trazas de Langfuse. Confirma el trigger **On Push** del proveedor GitHub para `main`. [Despliegue automático de Dokploy](https://docs.dokploy.com/docs/core/auto-deploy)
 
 Respalda los volúmenes de aplicación, Langfuse y MLflow antes de cambios de esquema o de versión. Guarda las credenciales y los respaldos fuera de la VPS.
+
+## Promoción de develop a la VPS
+
+Los cambios se prueban en `develop` y se integran en `main` conservando la configuración de la VPS. El push a `main` activa el despliegue existente de Dokploy. Antes del push, ejecuta `pnpm build`, `pnpm typecheck`, `pnpm test` y la validación de Compose de CI. Confirma un respaldo recuperable cuando la revisión cambie el esquema.
+
+Después del despliegue, comprueba que las tareas de migración, usuarios, publicación documental y bootstrap de prompts finalizaron. Verifica en HTTPS el acceso de Asesor, Administración, Soporte N2 y Supervisión. Administración gestiona los modelos, los prompts y las funciones administrativas del demo. La cuenta anterior de Superadministración queda retirada al ejecutar el seed.
+
+Prueba un chat sintético con una cita, un traspaso y un cierre asistido. Comprueba en Langfuse la sesión de ese chat, la entrada y salida publicables, y la revisión de los prompts o del modelo cuando intervengan. Verifica los experimentos de intención y de riesgo de baja en MLflow. Registra el commit desplegado y los resultados fuera de las credenciales del entorno.

@@ -1,13 +1,14 @@
 'use client';
 
-import { ChevronDown, ChevronRight, ContactRound, History, Layers, ReceiptText, Search, Smartphone, Tag, Ticket, Wifi, X } from 'lucide-react';
+import { ArrowUpRight, Sparkles, ChevronDown, ChevronRight, ContactRound, History, Layers, ReceiptText, Search, Smartphone, Tag, Ticket, Wifi, X } from 'lucide-react';
 import { Tabs } from 'radix-ui';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { DirectoryBillingPanel } from './integrations';
+import { followUpNames, PriorityBadge } from './follow-ups';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
 import { key } from '@/lib/api';
-import type { CaseMlSignals, CaseSnapshot, CrmView, Intent } from '@claro/contracts';
+import { escalationDestinations, type CaseMlSignals, type CaseSnapshot, type CrmView, type Intent, type EscalationDestination } from '@claro/contracts';
 import styles from './customer-directory.module.css';
 
 const endpoint='/api/v1';
@@ -18,20 +19,149 @@ async function request<T>(path:string, init?:RequestInit):Promise<T>{
 }
 const post=<T,>(path:string,body:unknown)=>request<T>(path,{method:'POST',body:JSON.stringify(body)});
 const errorText=(e:unknown)=>e instanceof Error?e.message:'No fue posible completar la solicitud.';
-const destinations:Record<string,string>={soporte_tecnico:'Soporte técnico',facturacion:'Facturación',comercial_portabilidad:'Comercial y portabilidad',supervision:'Supervisión'};
-type Escalation={id:string;case_id:string;destination:string;reason_code:string;status:string;requested_by:string;created_at:string;owner_id:string|null;case_revision?:number};
-export function EscalationRequest({caseId,revision,suggestion,onDone}:{caseId:string;revision:number;suggestion?:{destination:'soporte_tecnico'|'supervision';reason_code:string};onDone:()=>void}){
- const [open,setOpen]=useState(false),[destination,setDestination]=useState('soporte_tecnico'),[reason,setReason]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);
- const [submission,setSubmission]=useState('');
- async function submit(e:React.FormEvent){e.preventDefault();setBusy(true);setError('');const id=submission||key();setSubmission(id);try{await post(`/cases/${encodeURIComponent(caseId)}/escalations`,{destination,reason_code:reason.trim(),case_revision:revision,idempotency_key:id});setOpen(false);setReason('');setSubmission('');onDone();}catch(e){setError(errorText(e));}finally{setBusy(false)}}
- return <div className="escalation-request">{suggestion&&!open&&<p className="summary">Copiloto sugiere derivar a {destinations[suggestion.destination]} · {suggestion.reason_code.replaceAll('_',' ')}. Revisa la solicitud antes de confirmarla.</p>}{!open?<Button size="sm" variant="outline" onClick={()=>{setDestination(suggestion?.destination??'soporte_tecnico');setReason(suggestion?.reason_code??'');setSubmission('');setOpen(true)}}>{suggestion?'Revisar escalamiento sugerido':'Solicitar escalamiento'}</Button>:<form onSubmit={submit} className="evo-form"><h3>Solicitar escalamiento</h3><p>El caso permanece contigo hasta que otro operador lo tome.</p><label>Destino<select value={destination} onChange={e=>{setDestination(e.target.value);setSubmission('')}}>{Object.entries(destinations).map(([id,label])=><option key={id} value={id}>{label}</option>)}</select></label><label>Motivo<textarea required minLength={3} maxLength={120} value={reason} onChange={e=>{setReason(e.target.value);setSubmission('')}} rows={2}/></label>{error&&<p className="alert error" role="alert">{error}</p>}<div className="ops-actions"><Button disabled={busy||!reason.trim()}>{busy?'Enviando…':'Confirmar solicitud'}</Button><Button type="button" variant="outline" onClick={()=>setOpen(false)}>Cancelar</Button></div></form>}</div>;
+const destinations:Record<string,string>=escalationDestinations;
+type Escalation={id:string;case_id:string;destination:EscalationDestination;reason_code:string;status:string;
+  requested_by:string;created_at:string;owner_id:string|null;case_revision:number;can_claim:boolean};
+type EscalationTracking=NonNullable<CaseSnapshot['tracking']>['escalation'];
+
+export function EscalationRequest({caseId,revision,turnId,active,suggestion,onDone}:{
+  caseId:string;revision:number;turnId?:string;active?:EscalationTracking;
+  suggestion?:{destination:EscalationDestination;reason_code:string};onDone:()=>Promise<CaseSnapshot>
+}) {
+  const path=`/cases/${encodeURIComponent(caseId)}/escalations`;
+  const [open,setOpen]=useState(false);
+  const [destination,setDestination]=useState<EscalationDestination|''>('');
+  const [reason,setReason]=useState('');
+  const [preview,setPreview]=useState('');
+  const [previewSource,setPreviewSource]=useState<'ia'|'historial'>();
+  const [generating,setGenerating]=useState(false);
+  const [generationNotice,setGenerationNotice]=useState('');
+  const [attempt,setAttempt]=useState(0);
+  const [error,setError]=useState('');
+  const [busy,setBusy]=useState(false);
+  const [receipt,setReceipt]=useState<{id:string;destination:EscalationDestination;status:string}>();
+  const submission=useRef<{fingerprint:string;key:string}|undefined>(undefined);
+  const waiting=active?.status==='en_cola' ? active : receipt?.status==='en_cola' && active?.id!==receipt.id ? receipt : null;
+  const forwarding=active?.status==='tomado';
+
+  useEffect(()=>{
+    if (!open || !destination) return;
+    const controller=new AbortController();
+    setGenerating(true);setPreview('');setPreviewSource(undefined);setGenerationNotice('');
+    request<{suggestion:{text:string}|null;source?:'ia'|'historial'}>(path+'/suggestion',{
+      method:'POST',body:JSON.stringify({destination,case_revision:revision}),signal:controller.signal
+    }).then(({suggestion:generated,source})=>{
+      if (controller.signal.aborted) return;
+      if (generated) {setPreview(generated.text);setPreviewSource(source);}
+      else setGenerationNotice('Puedes escribir el motivo o volver a pedir una sugerencia.');
+    }).catch(failure=>{if(!controller.signal.aborted)setGenerationNotice(errorText(failure));})
+      .finally(()=>{if(!controller.signal.aborted)setGenerating(false);});
+    return ()=>controller.abort();
+  },[open,destination,revision,turnId,attempt,path]);
+
+  async function submit(e:React.FormEvent) {
+    e.preventDefault();
+    if (!destination || busy) return;
+    setBusy(true);setError('');
+    const body={destination,reason_text:reason.trim(),case_revision:revision,
+      ...(destination===suggestion?.destination ? {reason_code:suggestion.reason_code} : {})};
+    const fingerprint=JSON.stringify(body);
+    if (submission.current?.fingerprint!==fingerprint) submission.current={fingerprint,key:key()};
+    try {
+      const confirmed=await post<NonNullable<typeof receipt>>(path,{...body,idempotency_key:submission.current.key});
+      setReceipt(confirmed);setOpen(false);setReason('');
+      await onDone().catch(()=>undefined);
+    } catch (failure) {
+      const current=await onDone().catch(()=>undefined);
+      if (current?.tracking?.escalation?.status==='en_cola') {setOpen(false);setReason('');}
+      else setError(errorText(failure));
+    } finally {setBusy(false);}
+  }
+
+  if (waiting) return <p className="assisted-escalation-status" role="status"><ArrowUpRight size={16} aria-hidden="true"/>
+    <span><strong>Caso escalado</strong><small>En espera de {destinations[waiting.destination]}</small></span>
+  </p>;
+  return <div className="assisted-escalation">
+    {!open ? <>
+      {forwarding&&<p className="assisted-escalation-status" data-stage="taken"><ArrowUpRight size={16} aria-hidden="true"/> Nivel 2 · En atención</p>}
+      <Button className="button outline assisted-escalation-button" variant="outline" onClick={()=>{
+        setDestination(forwarding ? 'supervision' : suggestion?.destination ?? '');
+        setOpen(true);setError('');
+      }}><ArrowUpRight size={16} aria-hidden="true"/>{forwarding?'Derivar a Supervisión':'Solicitar escalamiento'}</Button>
+    </> : <form onSubmit={submit} className="evo-form">
+      <h3>Solicitar escalamiento</h3>
+      <p>El cliente podrá seguir escribiendo mientras el equipo lo toma.</p>
+      <label>Destino<select value={destination} required onChange={event=>setDestination(event.target.value as EscalationDestination)}>
+        <option value="">Elige el equipo</option>
+        {Object.entries(destinations).filter(([value])=>!forwarding||value==='supervision').map(([value,label])=>
+          <option key={value} value={value}>{label}</option>)}
+      </select></label>
+      {destination&&<div className="assisted-reason-preview">
+        <strong>{previewSource==='historial' ? 'Motivo sugerido desde el historial' : <><Sparkles size={15} aria-hidden="true"/> Motivo sugerido por IA</>}</strong>
+        {generating ? <p role="status">Preparando una sugerencia…</p> : <>
+          {preview ? <><p>{preview}</p><Button type="button" variant="outline" onClick={()=>setReason(preview)}>Usar motivo</Button></>
+            : generationNotice&&<p role="status">{generationNotice}</p>}
+          <Button type="button" variant="ghost" onClick={()=>setAttempt(value=>value+1)}>Sugerir de nuevo</Button>
+        </>}
+      </div>}
+      <label>Motivo para el equipo receptor<textarea required minLength={3} maxLength={500} value={reason}
+        onChange={event=>setReason(event.target.value)} rows={3}/></label>
+      {error&&<p className="alert error" role="alert">{error}</p>}
+      <div className="ops-actions"><Button disabled={busy||!destination||reason.trim().length<3}>{busy?'Enviando solicitud…':'Confirmar solicitud'}</Button>
+        <Button type="button" variant="outline" disabled={busy} onClick={()=>setOpen(false)}>Cancelar</Button></div>
+    </form>}
+  </div>;
 }
-export function EscalationQueue({openCase,viewerId,canManage=false,capabilities=[],specialties=[]}:{openCase:(id:string)=>void;viewerId:string;canManage?:boolean;capabilities?:string[];specialties?:string[]}){
- const [items,setItems]=useState<Escalation[]>(),[error,setError]=useState(''),[busy,setBusy]=useState('');
- const load=useCallback(()=>request<Escalation[]>('/escalations').then(setItems).catch(e=>setError(errorText(e))),[]);
- useEffect(()=>{void load();const stream=new EventSource('/api/v1/escalations/events');stream.addEventListener('escalations.updated',event=>{try{setItems(JSON.parse((event as MessageEvent).data))}catch{}});return()=>stream.close()},[load]);
- async function transition(row:Escalation,action:'claim'|'cancel'|'resolve') {setBusy(row.id);setError('');try{await post(`/escalations/${encodeURIComponent(row.id)}/${action}`,{case_revision:row.case_revision});await load();if(action==='claim')openCase(row.case_id)}catch(e){setError(errorText(e))}finally{setBusy('')}}
- return <div className="admin-page evo-page"><header className="ops-header"><div><span className="eyebrow">CONTINUIDAD DE ATENCIÓN</span><h1>Cola de escalamientos</h1><p>Solicitudes y traspasos disponibles para tu equipo.</p></div><Button variant="outline" onClick={()=>void load()}>Actualizar</Button></header>{error&&<p className="alert error" role="alert">{error}</p>}{!items&&!error?<p role="status">Cargando cola…</p>:items?.length?<div className="evo-list">{items.map(row=><article className="ops-plot" key={row.id}><div className="evo-row"><div><span className="eyebrow">{destinations[row.destination]??row.destination}</span><h3>{row.case_id}</h3><p>{row.reason_code} · {new Date(row.created_at).toLocaleString('es-CO',{timeZone:'America/Bogota'})}</p></div><span className="badge amber">{row.status.replaceAll('_',' ')}</span></div><div className="ops-actions">{['solicitado','en_cola'].includes(row.status)&&(row.destination==='supervision'?capabilities.includes('supervisor'):capabilities.includes('n2')&&specialties.includes(row.destination))&&<Button disabled={!!busy} onClick={()=>void transition(row,'claim')}>Tomar caso</Button>}{row.status==='en_cola'&&(row.requested_by===viewerId||canManage)&&<Button variant="outline" disabled={!!busy} onClick={()=>void transition(row,'cancel')}>Cancelar solicitud</Button>}{canManage&&['en_cola','tomado'].includes(row.status)&&<Reassign row={row} done={()=>void load()}/>} {row.status==='tomado'&&row.owner_id===viewerId&&<><Button variant="outline" onClick={()=>openCase(row.case_id)}>Abrir caso</Button><Button disabled={!!busy} onClick={()=>void transition(row,'resolve')}>Marcar resuelto</Button></>}</div></article>)}</div>:<div className="ops-empty">No hay escalamientos en esta cola.</div>}</div>;
+
+export function EscalationQueue({openCase,viewerId,canManage=false}:{openCase:(id:string)=>void;viewerId:string;canManage?:boolean}) {
+  const [items,setItems]=useState<Escalation[]>();
+  const [error,setError]=useState('');
+  const [busy,setBusy]=useState('');
+  const load=useCallback(async()=>{
+    try {setItems(await request<Escalation[]>('/escalations'));setError('');}
+    catch (failure) {setError(errorText(failure));}
+  },[]);
+  useEffect(()=>{
+    void load();
+    const stream=new EventSource('/api/v1/escalations/events');
+    stream.addEventListener('escalations.updated',event=>{
+      try {setItems(JSON.parse((event as MessageEvent).data));setError('');} catch {void load();}
+    });
+    stream.onerror=()=>void load();
+    return ()=>stream.close();
+  },[load]);
+  async function transition(row:Escalation,action:'claim'|'cancel'|'resolve') {
+    setBusy(row.id);setError('');
+    try {
+      await post(`/escalations/${encodeURIComponent(row.id)}/${action}`,{case_revision:row.case_revision});
+      await load();
+      if(action==='claim') openCase(row.case_id);
+    } catch (failure) {await load();setError(errorText(failure));}
+    finally {setBusy('');}
+  }
+  return <div className="admin-page evo-page">
+    <header className="ops-header"><div><h1>Escalamientos</h1><p>Casos en espera de nivel 2, del más antiguo al más nuevo.</p></div>
+      <Button variant="outline" onClick={()=>void load()}>Actualizar</Button></header>
+    {error&&<p className="alert error" role="alert">{error}</p>}
+    {!items&&!error ? <p role="status">Cargando cola…</p> : items?.length ?
+      <div className="evo-list">{items.map(row=><article className="ops-plot" key={row.id}>
+        <div className="evo-row"><div><h3>{destinations[row.destination]}</h3>
+          <p>{row.case_id.slice(0,8)} · {new Date(row.created_at).toLocaleString('es-CO',{timeZone:'America/Bogota'})}</p></div>
+          <span className={`badge ${row.status==='en_cola'?'amber':row.status==='tomado'?'green':'neutral'}`}>
+            {row.status==='en_cola' ? 'En espera' : row.status==='tomado' ? row.owner_id===viewerId ? 'Tomado por mí' : 'En seguimiento'
+              : row.status.replaceAll('_',' ')}</span></div>
+        <div className="ops-actions">
+          {row.can_claim&&<Button disabled={!!busy} onClick={()=>void transition(row,'claim')}>{busy===row.id?'Tomando…':'Tomar caso'}</Button>}
+          {row.status==='en_cola'&&(row.requested_by===viewerId||canManage)&&<Button variant="outline" disabled={!!busy}
+            onClick={()=>void transition(row,'cancel')}>Cancelar solicitud</Button>}
+          {canManage&&['en_cola','tomado'].includes(row.status)&&<Reassign row={row} done={()=>void load()}/>}
+          {row.status==='tomado'&&row.owner_id===viewerId&&<>
+            <Button variant="outline" onClick={()=>openCase(row.case_id)}>Abrir caso</Button>
+            <Button disabled={!!busy} onClick={()=>void transition(row,'resolve')}>Marcar resuelto</Button>
+          </>}
+        </div>
+      </article>)}</div> : <div className="ops-empty">No hay escalamientos en esta cola.</div>}
+  </div>;
 }
 function Reassign({row,done}:{row:Escalation;done:()=>void}){const [open,setOpen]=useState(false),[operator,setOperator]=useState(''),[reason,setReason]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);async function submit(e:React.FormEvent){e.preventDefault();setBusy(true);try{await post(`/escalations/${encodeURIComponent(row.id)}/reassign`,{case_revision:row.case_revision,operator_id:operator,reason});setOpen(false);done()}catch(e){setError(errorText(e))}finally{setBusy(false)}}return open?<form className="evo-form" onSubmit={submit}><label>Identificador del operador<input required value={operator} onChange={e=>setOperator(e.target.value)}/></label><label>Motivo<input required minLength={3} value={reason} onChange={e=>setReason(e.target.value)}/></label>{error&&<p className="alert error" role="alert">{error}</p>}<div className="ops-actions"><Button disabled={busy}>Confirmar reasignación</Button><Button type="button" variant="outline" onClick={()=>setOpen(false)}>Cancelar</Button></div></form>:<Button variant="outline" onClick={()=>setOpen(true)}>Reasignar</Button>}
 type CustomerCase = { id: string; status: string; updated_at: string; ticket_refs: string[] };
@@ -378,10 +508,122 @@ export function CustomerDirectory({
   </div>;
 }
 
-function CustomerForm({customer,close,done}:{customer?:Customer;close:()=>void;done:()=>void}){
- const [id,setId]=useState(customer?.cliente_id ?? ''),[name,setName]=useState(customer?.nombre??''),[type,setType]=useState('CC'),[document,setDocument]=useState(''),[phone,setPhone]=useState(''),[email,setEmail]=useState(''),[state,setState]=useState<string>(customer?.estado??'activo'),[reason,setReason]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false),[receipt,setReceipt]=useState(''),[submission]=useState(()=>key());
- async function submit(e:React.FormEvent){e.preventDefault();if(!window.confirm('¿Confirmas esta operación sobre el cliente?'))return;setBusy(true);try{const body=customer?{revision:customer.revision,motivo:reason,idempotency_key:submission,nombre:name,...(phone?{celular:phone}:{}),...(email?{email}:{}),estado:state}:{cliente_id:id,nombre:name,tipo_documento:type,numero_documento:document,celular:phone,email,motivo:reason,idempotency_key:submission};const result=await request<{cliente_id:string;revision:number}>(customer?`/admin/customers/${encodeURIComponent(id)}`:'/admin/customers',{method:customer?'PATCH':'POST',body:JSON.stringify(body)});setReceipt(`${result.cliente_id} · revisión ${result.revision}`)}catch(e){setError(errorText(e))}finally{setBusy(false)}}
- return <Dialog open onOpenChange={open=>{if(!open)close()}}><DialogContent className="ops-plot evo-modal" aria-describedby={undefined}><DialogTitle className="sr-only">{customer?'Gestionar cliente':'Nuevo cliente'}</DialogTitle>{receipt?<><h2>Operación registrada</h2><p>Recibo: {receipt}</p><Button onClick={done}>Cerrar</Button></>:<form className="evo-form" onSubmit={submit}><h2>{customer?'Gestionar cliente':'Nuevo cliente'}</h2>{error&&<p className="alert error" role="alert">{error}</p>}<label>Identificador<input value={id} onChange={e=>setId(e.target.value)} disabled={!!customer} required/></label><label>Nombre<input value={name} onChange={e=>setName(e.target.value)} required/></label>{!customer&&<><label>Tipo de documento<select value={type} onChange={e=>setType(e.target.value)}>{['CC','CE','NIT','PAS'].map(x=><option key={x}>{x}</option>)}</select></label><label>Número de documento<input value={document} onChange={e=>setDocument(e.target.value)} required/></label></>}<label>Celular sintético<input value={phone} onChange={e=>setPhone(e.target.value)} required={!customer}/></label><label>Correo sintético<input type="email" value={email} onChange={e=>setEmail(e.target.value)} required={!customer}/></label>{customer&&<label>Estado<select value={state} onChange={e=>setState(e.target.value)}>{['activo','suspendido','retirado'].map(x=><option key={x}>{x}</option>)}</select></label>}<label>Motivo<textarea required value={reason} onChange={e=>setReason(e.target.value)}/></label><div className="ops-actions"><Button disabled={busy}>Confirmar y registrar</Button><Button type="button" variant="outline" onClick={close}>Cancelar</Button></div></form>}</DialogContent></Dialog>;
+type Identity = {tipo_documento:string;numero_documento:string};
+type NewCustomer = Identity & {cliente_id:string;nombre:string;celular:string;email:string;motivo:string;idempotency_key:string};
+
+export function CaseCustomerRegistration({snapshot,updated}:{snapshot:CaseSnapshot;updated:()=>Promise<unknown>}) {
+  const path=`/cases/${encodeURIComponent(snapshot.id)}/customer-registration`;
+  const [identity,setIdentity]=useState<Identity>({tipo_documento:'CC',numero_documento:''});
+  const [lookup,setLookup]=useState<'existing'|'missing'>();
+  const [adding,setAdding]=useState(false);
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState('');
+  const [confirmed,setConfirmed]=useState<CaseSnapshot['customer_registration']>();
+  const linkKey=useRef(key());
+  const registration=snapshot.customer_registration ?? confirmed;
+  if (registration) return <div className="assisted-registration">
+    <h3>Cliente vinculado</h3><p>Recibo CRM · {registration.customer_ref} · revisión {registration.revision}</p>
+    <strong>Titularidad pendiente</strong><p>El cliente puede verificar su cuenta desde el mismo chat.</p>
+  </div>;
+
+  async function check() {
+    setBusy(true);setError('');setLookup(undefined);
+    try {
+      const result=await post<{status:'existing'|'missing'}>(path,{...identity,action:'lookup',case_revision:snapshot.revision});
+      setLookup(result.status);
+    } catch (failure) {setError(errorText(failure));}
+    finally {setBusy(false);}
+  }
+  async function link() {
+    setBusy(true);setError('');
+    try {
+      const result=await post<{registration:NonNullable<CaseSnapshot['customer_registration']>}>(path,
+        {...identity,action:'link',case_revision:snapshot.revision,idempotency_key:linkKey.current});
+      setConfirmed(result.registration);
+      void updated().catch(()=>undefined);
+    } catch (failure) {setError(errorText(failure));}
+    finally {setBusy(false);}
+  }
+  return <section className="assisted-registration" aria-label="Vincular cliente al caso">
+    <h3>Cliente sin vincular</h3><p>Busca por documento en el CRM de prueba.</p>
+    <form className="evo-form" onSubmit={event=>{event.preventDefault();void check();}}>
+      <label>Tipo de documento<select value={identity.tipo_documento} disabled={busy} onChange={event=>{
+        setIdentity({...identity,tipo_documento:event.target.value});setLookup(undefined);linkKey.current=key();
+      }}>{['CC','CE','NIT','PAS'].map(type=><option key={type}>{type}</option>)}</select></label>
+      <label>Número de documento<input required maxLength={64} disabled={busy} value={identity.numero_documento} onChange={event=>{
+        setIdentity({...identity,numero_documento:event.target.value});setLookup(undefined);linkKey.current=key();
+      }}/></label>
+      <Button variant="outline" disabled={busy}>{busy?'Consultando…':'Buscar cliente'}</Button>
+    </form>
+    {error&&<p className="alert error" role="alert">{error}</p>}
+    {lookup==='existing'&&<><p role="status">CRM encontró un registro.</p>
+      <Button disabled={busy} onClick={()=>void link()}>Vincular cliente</Button></>}
+    {lookup==='missing'&&<><p role="status">CRM confirmó que no existe un registro para ese documento.</p>
+      <Button onClick={()=>setAdding(true)}>Crear cliente</Button></>}
+    {adding&&<CustomerForm identity={identity} close={()=>setAdding(false)} done={()=>{setAdding(false);void updated().catch(()=>undefined);}}
+      register={async input=>{
+        const result=await post<{registration:NonNullable<CaseSnapshot['customer_registration']>}>(path,
+          {...input,action:'create',case_revision:snapshot.revision});
+        return {cliente_id:result.registration.customer_ref,revision:result.registration.revision};
+      }}/>}
+  </section>;
+}
+
+function CustomerForm({customer,identity,register,close,done}:{customer?:Customer;identity?:Identity;
+  register?:(input:NewCustomer)=>Promise<{cliente_id:string;revision:number}>;close:()=>void;done:()=>void}) {
+  const [id,setId]=useState(customer?.cliente_id ?? '');
+  const [name,setName]=useState(customer?.nombre??'');
+  const [type,setType]=useState(identity?.tipo_documento ?? 'CC');
+  const [document,setDocument]=useState(identity?.numero_documento ?? '');
+  const [phone,setPhone]=useState('');
+  const [email,setEmail]=useState('');
+  const [state,setState]=useState<string>(customer?.estado??'activo');
+  const [reason,setReason]=useState('');
+  const [error,setError]=useState('');
+  const [busy,setBusy]=useState(false);
+  const [receipt,setReceipt]=useState('');
+  const submission=useRef<{fingerprint:string;key:string}|undefined>(undefined);
+  const title=customer?'Gestionar cliente':register?'Crear cliente':'Nuevo cliente';
+  async function submit(event:React.FormEvent) {
+    event.preventDefault();
+    if (!register && !window.confirm('¿Confirmas esta operación sobre el cliente?')) return;
+    setBusy(true);setError('');
+    const creation={cliente_id:id,nombre:name,tipo_documento:type,numero_documento:document,celular:phone,email,motivo:reason};
+    const body=customer ? {revision:customer.revision,motivo:reason,nombre:name,...(phone?{celular:phone}:{}),
+      ...(email?{email}:{}),estado:state} : creation;
+    const fingerprint=JSON.stringify(body);
+    if (submission.current?.fingerprint!==fingerprint) submission.current={fingerprint,key:key()};
+    try {
+      const idempotency_key=submission.current.key;
+      const result=register ? await register({...creation,idempotency_key}) :
+        await request<{cliente_id:string;revision:number}>(customer?`/admin/customers/${encodeURIComponent(id)}`:'/admin/customers',
+          {method:customer?'PATCH':'POST',body:JSON.stringify({...body,idempotency_key})});
+      setReceipt(`${result.cliente_id} · revisión ${result.revision}`);
+    } catch (failure) {setError(errorText(failure));}
+    finally {setBusy(false);}
+  }
+  return <Dialog open onOpenChange={open=>{if(!open&&!busy)(receipt?done:close)()}}>
+    <DialogContent className="ops-plot evo-modal" aria-describedby={undefined}>
+      <DialogTitle>{receipt?'Cliente registrado':title}</DialogTitle>
+      {receipt ? <><p role="status">Recibo CRM · {receipt}</p><Button onClick={done}>Cerrar</Button></>
+        : <form className="evo-form" onSubmit={submit}>
+          {error&&<p className="alert error" role="alert">{error}</p>}
+          <label>Identificador<input value={id} onChange={event=>setId(event.target.value)} disabled={!!customer}
+            placeholder="C-0000" pattern="C-[0-9]{4}" required/></label>
+          <label>Nombre<input value={name} onChange={event=>setName(event.target.value)} maxLength={100} required/></label>
+          {!customer&&<><label>Tipo de documento<select value={type} disabled={!!identity} onChange={event=>setType(event.target.value)}>
+            {['CC','CE','NIT','PAS'].map(value=><option key={value}>{value}</option>)}</select></label>
+            <label>Número de documento<input value={document} readOnly={!!identity} maxLength={64} onChange={event=>setDocument(event.target.value)} required/></label></>}
+          <label>Celular sintético<input value={phone} onChange={event=>setPhone(event.target.value)} required={!customer}/></label>
+          <label>Correo sintético<input type="email" value={email} onChange={event=>setEmail(event.target.value)} required={!customer}/></label>
+          {customer&&<label>Estado<select value={state} onChange={event=>setState(event.target.value)}>
+            {['activo','suspendido','retirado'].map(value=><option key={value}>{value}</option>)}</select></label>}
+          <label>Motivo<textarea required minLength={3} maxLength={120} value={reason} onChange={event=>setReason(event.target.value)}/></label>
+          <div className="ops-actions"><Button disabled={busy}>{busy?'Registrando…':'Confirmar y registrar'}</Button>
+            <Button type="button" variant="outline" onClick={close} disabled={busy}>Cancelar</Button></div>
+        </form>}
+    </DialogContent>
+  </Dialog>;
 }
 
 type Metric={id:string;label:string;value:number|null;unit:string;sample:number|null;denominator:number|null;target:string|null;observed_at:string|null;source:string;status:'measured'|'no_sample'|'pending_instrumentation'|'target_only'|'unavailable';series?:{date:string;value:number;sample?:number}[];evidence?:{label:string;url:string}};
@@ -412,13 +654,13 @@ function MetricSeries({metric}:{metric:Metric}){const points=metric.series??[];c
 type Operator={id:string;name:string;email:string;capabilities:string[];specialties:string[];enabled:boolean;available:boolean};
 const capabilityOptions=['n1','n2','supervisor','admin','superadmin'];
 const specialtyOptions=['soporte_tecnico','facturacion','comercial_portabilidad'];
-export function Operators(){
+export function Operators({demo=false}:{demo?:boolean}){
  const [audit,setAudit]=useState<Array<{id:string;case_id:string|null;kind:string;created_at:string;metadata:Record<string,unknown>}>>(),[auditError,setAuditError]=useState('');
  const [rows,setRows]=useState<Operator[]>(),[edit,setEdit]=useState<Operator|null>(null),[creating,setCreating]=useState(false),[password,setPassword]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  const load=useCallback(()=>request<Operator[]>('/admin/operators').then(setRows).catch(e=>setError(errorText(e))),[]);useEffect(()=>{void load()},[load]);
  async function save(e:React.FormEvent){e.preventDefault();if(!edit)return;setBusy(true);setError('');try{const {id,name,email,capabilities,specialties,enabled,available}=edit;const body=creating?{name,email,password,capabilities,specialties,enabled,available}:{capabilities,specialties,enabled,available};await request(creating?'/admin/operators':`/admin/operators/${encodeURIComponent(id)}`,{method:creating?'POST':'PATCH',body:JSON.stringify(body)});setEdit(null);setCreating(false);setPassword('');await load()}catch(e){setError(errorText(e))}finally{setBusy(false)}}
  function toggle(field:'capabilities'|'specialties',value:string){setEdit(current=>current?{...current,[field]:current[field].includes(value)?current[field].filter(x=>x!==value):[...current[field],value]}:current)}
- return <div className="admin-page evo-page"><header className="ops-header"><div><span className="eyebrow">SUPERADMINISTRACIÓN</span><h1>Operadores</h1><p>Capacidades, especialidades y disponibilidad del equipo.</p></div><Button onClick={()=>{setCreating(true);setEdit({id:'',name:'',email:'',capabilities:['n1'],specialties:[],enabled:true,available:true})}}>Nuevo operador</Button></header>{error&&<p className="alert error" role="alert">{error}</p>}<div className="evo-split"><section className="ops-plot">{!rows&&!error?<p role="status">Cargando operadores…</p>:rows?.length?rows.map(row=><div className="revision" key={row.id}><div><strong>{row.name}</strong><span>{row.email} · {row.capabilities.join(', ')}</span><span className="badge">{row.enabled?(row.available?'Disponible':'No disponible'):'Deshabilitado'}</span></div><Button variant="outline" onClick={()=>{setCreating(false);setEdit(row)}}>Gestionar</Button></div>):<p>Sin operadores para mostrar.</p>}</section>{edit&&<form className="ops-plot evo-form" onSubmit={save}><h3>{creating?'Nuevo operador':`Gestionar ${edit.name}`}</h3>{creating&&<><label>Nombre<input required value={edit.name} onChange={e=>setEdit({...edit,name:e.target.value})}/></label><label>Correo<input required type="email" value={edit.email} onChange={e=>setEdit({...edit,email:e.target.value})}/></label><label>Contraseña inicial<input required type="password" value={password} onChange={e=>setPassword(e.target.value)}/></label></>}<fieldset><legend>Capacidades</legend>{capabilityOptions.map(value=><label className="evo-check" key={value}><input type="checkbox" checked={edit.capabilities.includes(value)} onChange={()=>toggle('capabilities',value)}/>{value}</label>)}</fieldset><fieldset><legend>Especialidades</legend>{specialtyOptions.map(value=><label className="evo-check" key={value}><input type="checkbox" checked={edit.specialties.includes(value)} onChange={()=>toggle('specialties',value)}/>{destinations[value]}</label>)}</fieldset><label className="evo-check"><input type="checkbox" checked={edit.enabled} onChange={e=>setEdit({...edit,enabled:e.target.checked})}/> Cuenta habilitada</label><label className="evo-check"><input type="checkbox" checked={edit.available} onChange={e=>setEdit({...edit,available:e.target.checked})}/> Disponible para atención</label><div className="ops-actions"><Button disabled={busy}>{busy?'Guardando…':'Guardar cambios'}</Button><Button type="button" variant="outline" onClick={()=>setEdit(null)}>Cancelar</Button></div></form>}</div><section className="ops-plot evo-catalog"><div className="evo-row"><div><h3>Bitácora operativa</h3><p>Altas, cambios y reasignaciones auditadas.</p></div><Button variant="outline" onClick={()=>{setAuditError('');request<typeof audit>('/admin/audit').then(setAudit).catch(e=>setAuditError(errorText(e)))}}>Consultar bitácora</Button></div>{auditError&&<p className="alert error" role="alert">{auditError}</p>}{audit&&<div className="ops-table"><table><thead><tr><th>Fecha</th><th>Evento</th><th>Caso</th><th>Detalle</th></tr></thead><tbody>{audit.map(row=><tr key={row.id}><td>{new Date(row.created_at).toLocaleString('es-CO',{timeZone:'America/Bogota'})}</td><td>{row.kind}</td><td>{row.case_id??'—'}</td><td>{Object.entries(row.metadata??{}).map(([k,v])=>`${k}: ${String(v)}`).join(' · ')}</td></tr>)}</tbody></table>{!audit.length&&<p>Sin eventos disponibles.</p>}</div>}</section></div>;
+ return <div className="admin-page evo-page"><header className="ops-header"><div><span className="eyebrow">{demo?'ADMINISTRACIÓN':'SUPERADMINISTRACIÓN'}</span><h1>Operadores</h1><p>Capacidades, especialidades y disponibilidad del equipo.</p></div><Button onClick={()=>{setCreating(true);setEdit({id:'',name:'',email:'',capabilities:['n1'],specialties:[],enabled:true,available:true})}}>Nuevo operador</Button></header>{error&&<p className="alert error" role="alert">{error}</p>}<div className="evo-split"><section className="ops-plot">{!rows&&!error?<p role="status">Cargando operadores…</p>:rows?.length?rows.map(row=><div className="revision" key={row.id}><div><strong>{row.name}</strong><span>{row.email} · {row.capabilities.join(', ')}</span><span className="badge">{row.enabled?(row.available?'Disponible':'No disponible'):'Deshabilitado'}</span></div><Button variant="outline" onClick={()=>{setCreating(false);setEdit(row)}}>Gestionar</Button></div>):<p>Sin operadores para mostrar.</p>}</section>{edit&&<form className="ops-plot evo-form" onSubmit={save}><h3>{creating?'Nuevo operador':`Gestionar ${edit.name}`}</h3>{creating&&<><label>Nombre<input required value={edit.name} onChange={e=>setEdit({...edit,name:e.target.value})}/></label><label>Correo<input required type="email" value={edit.email} onChange={e=>setEdit({...edit,email:e.target.value})}/></label><label>Contraseña inicial<input required type="password" value={password} onChange={e=>setPassword(e.target.value)}/></label></>}<fieldset><legend>Capacidades</legend>{capabilityOptions.filter(value=>!demo||value!=='superadmin').map(value=><label className="evo-check" key={value}><input type="checkbox" checked={edit.capabilities.includes(value)} onChange={()=>toggle('capabilities',value)}/>{value}</label>)}</fieldset><fieldset><legend>Especialidades</legend>{specialtyOptions.map(value=><label className="evo-check" key={value}><input type="checkbox" checked={edit.specialties.includes(value)} onChange={()=>toggle('specialties',value)}/>{destinations[value]}</label>)}</fieldset><label className="evo-check"><input type="checkbox" checked={edit.enabled} onChange={e=>setEdit({...edit,enabled:e.target.checked})}/> Cuenta habilitada</label><label className="evo-check"><input type="checkbox" checked={edit.available} onChange={e=>setEdit({...edit,available:e.target.checked})}/> Disponible para atención</label><div className="ops-actions"><Button disabled={busy}>{busy?'Guardando…':'Guardar cambios'}</Button><Button type="button" variant="outline" onClick={()=>setEdit(null)}>Cancelar</Button></div></form>}</div><section className="ops-plot evo-catalog"><div className="evo-row"><div><h3>Bitácora operativa</h3><p>Altas, cambios y reasignaciones auditadas.</p></div><Button variant="outline" onClick={()=>{setAuditError('');request<typeof audit>('/admin/audit').then(setAudit).catch(e=>setAuditError(errorText(e)))}}>Consultar bitácora</Button></div>{auditError&&<p className="alert error" role="alert">{auditError}</p>}{audit&&<div className="ops-table"><table><thead><tr><th>Fecha</th><th>Evento</th><th>Caso</th><th>Detalle</th></tr></thead><tbody>{audit.map(row=><tr key={row.id}><td>{new Date(row.created_at).toLocaleString('es-CO',{timeZone:'America/Bogota'})}</td><td>{row.kind}</td><td>{row.case_id??'—'}</td><td>{Object.entries(row.metadata??{}).map(([k,v])=>`${k}: ${String(v)}`).join(' · ')}</td></tr>)}</tbody></table>{!audit.length&&<p>Sin eventos disponibles.</p>}</div>}</section></div>;
 }
 
 const intentNames:Record<Intent,string> = {
@@ -431,17 +673,18 @@ const churnActions = {
   standard_followup:'Sigue el cierre habitual y verifica si queda algún pendiente.'
 };
 
-export function CaseMl({caseId,signals,revision,verified,closing=false}:{
-  caseId:string;signals:CaseMlSignals;revision:number;verified:boolean;closing?:boolean
+export function CaseMl({caseId,signals,revision,verified,closing=false,demo=false}:{
+  caseId:string;signals:CaseMlSignals;revision:number;verified:boolean;closing?:boolean;demo?:boolean
 }){
   const [selection,setSelection]=useState<{predictionId:string;label:Intent}>();
   const [error,setError]=useState('');
   const [notice,setNotice]=useState('');
   const [busy,setBusy]=useState(false);
-  const [due,setDue]=useState('');
+  const [due,setDue]=useState<string>();
   const operation=useRef<{scope:string;id:string}>(null);
   const intent=closing?null:signals.intent;
   const {churn,follow_up:followUp}=signals;
+  const effectiveDue=due ?? signals.recommended_due_date ?? '';
   const label=selection?.predictionId===intent?.prediction_id ? selection?.label : intent?.label;
 
   async function send(path:string,body:Record<string,unknown>,success:string) {
@@ -478,21 +721,23 @@ export function CaseMl({caseId,signals,revision,verified,closing=false}:{
         },'Intención registrada.')}>{label===intent.label?'Confirmar intención':'Registrar corrección'}</Button>
       </>}
     </div>}
-    {verified&&<div className="suggestion">
-      <strong>Seguimiento a 90 días{churn.status==='available'&&` · Prioridad ${churn.priority}`}</strong>
+    {verified&&<div className="follow-up-card">
+      <div className="follow-up-card-title"><strong>Seguimiento recomendado</strong><PriorityBadge priority={followUp?.priority ??
+        (churn.status==='available'?churn.priority:'sin_prediccion')}/></div>
       {churn.status==='available'?<>
         <p>{churnActions[churn.recommendation]}</p>
-        <small>Corte {churn.fecha_corte} · {churn.model_version}{churn.synthetic&&' · Datos de prueba'}</small>
-      </>:<p>Sin datos disponibles para orientar el seguimiento.</p>}
-      {followUp ? <>
-        <p>{followUp.status==='completed'?'Seguimiento completado':'Seguimiento acordado'} · {followUp.due_date} · {followUp.responsible_name}</p>
-        {followUp.status==='agreed'&&<Button variant="outline" disabled={busy} onClick={()=>void send('follow-up',{
+        <small>Predicción de riesgo de baja a 90 días · {churn.model_version} · Corte {churn.fecha_corte}{churn.synthetic&&' · Datos de prueba'}</small>
+      </>:<p>Puedes acordar una fecha de contacto con el cliente.</p>}
+      {followUp&&followUp.status!=='cancelled' ? <>
+        <p>{followUpNames[followUp.status]} · {followUp.due_date} · {followUp.responsible_name}</p>
+        {(followUp.status==='agreed'||followUp.status==='overdue')&&<Button className="button outline"
+          variant="outline" disabled={busy} onClick={()=>void send('follow-up',{
           status:'completed',case_revision:revision
         },'Seguimiento completado.')}>Marcar completado</Button>}
-      </> : churn.status==='available'&&<>
-        <label>Fecha acordada<input type="date" value={due} onChange={event=>setDue(event.target.value)}/></label>
-        <Button variant="outline" disabled={busy||!due} onClick={()=>void send('follow-up',{
-          status:'agreed',due_date:due,case_revision:revision
+      </> : (demo||churn.status==='available')&&<>
+        <label>Fecha acordada<input type="date" value={effectiveDue} onChange={event=>setDue(event.target.value)}/></label>
+        <Button className="button outline" variant="outline" disabled={busy||!effectiveDue} onClick={()=>void send('follow-up',{
+          status:'agreed',due_date:effectiveDue,case_revision:revision
         },'Seguimiento acordado.')}>Acordar seguimiento</Button>
       </>}
     </div>}

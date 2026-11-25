@@ -1,5 +1,5 @@
 import type { AgentModelActivation, AgentModelCatalog, AgentModelExecutions, AgentModelPolicy, AgentModelRevision, AgentModelRevisions, ModelValidation } from '@claro/contracts';
-import type { CaseEvent, CaseSnapshot, CaseSummary, Contact, Dashboard, DashboardFilters, EvalJob, EvalStatus, PromptRevision, Viewer, BillingView, CrmView, InvoiceDetail, ManualAction, IntegrationHealth, IntegrationOperation, KnowledgeInventory, KnowledgeLabQuery, KnowledgeLabResult, KnowledgePassage } from '@claro/contracts';
+import type { CaseEvent, CaseSnapshot, CaseSummary, Contact, Dashboard, DashboardFilters, EvalJob, EvalStatus, PromptRevision, Viewer, BillingView, CrmView, InvoiceDetail, ManualAction, IntegrationHealth, IntegrationOperation, KnowledgeInventory, KnowledgeLabQuery, KnowledgeLabResult, KnowledgePassage, CaseDiscount, BillingDiscount, CloseCompletion, ClosureEvidenceSuggestion, FollowUpEntry } from '@claro/contracts';
 import type { LangfuseEvaluations } from '@claro/contracts';
 
 const fixtures = process.env.NEXT_PUBLIC_FIXTURES === 'true';
@@ -16,7 +16,7 @@ let cases = structuredClone(seed);
 let revisions: PromptRevision[] = [{revision:'rev-1',status:'active',prompts:{atencion:'Responde con claridad, respalda tus afirmaciones y protege los datos del cliente.',retencion:'Evalúa la elegibilidad y presenta opciones respaldadas por la política vigente.'}}];
 const contacts: Contact[] = [{ref:'C-1004',display_name:'Laura Martínez · C-1004',enabled:true},{ref:'C-1001',display_name:'María Rodríguez · C-1001',enabled:true},{ref:'C-1007',display_name:'Andrés Gómez · C-1007',enabled:true}];
 const dashboard: Dashboard = {sample:'synthetic',window_days:30,revision:'rev-1',metrics:[{id:'cases',label:'Casos atendidos',value:128,unit:'casos',denominator:128},{id:'fcr',label:'Resolución al primer contacto',value:78,unit:'%',denominator:128},{id:'aht',label:'Tiempo medio de atención',value:8.4,unit:'min',denominator:128},{id:'quality',label:'Respuestas con respaldo',value:92,unit:'%',denominator:75}],providers:[{name:'Plataforma',status:'operativo'},{name:'Agente',status:'operativo'},{name:'ML · modo sombra',status:'operativo'}]};
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
 async function request<T>(path:string, init?:RequestInit):Promise<T> { const response = await fetch(path,{...init,credentials:'same-origin',headers:{'Content-Type':'application/json',...init?.headers}}); if(!response.ok){let message = `No fue posible completar la solicitud (${response.status}).`; try {const data=await response.json(); if(typeof data.message==='string') message=data.message;}catch{} throw new ApiError(message,response.status);} return response.json() as Promise<T>; }
@@ -30,6 +30,11 @@ function verifiedCard(c:CaseSnapshot){ if(c.id==='C-1001') {c.card={intent:'fact
 const caseIntegration = (id: string) => `/api/v1/cases/${encodeURIComponent(id)}/integrations`;
 const adminIntegration = '/api/v1/admin/integrations';
 const directoryBilling = (id: string) => `/api/v1/crm/customers/${encodeURIComponent(id)}/billing`;
+const casePath=(id:string)=>`/api/v1/cases/${encodeURIComponent(id)}`;
+export type RetentionState={
+  discount?:CaseDiscount;schedule:BillingDiscount|null;
+  standard:{percentage:number;cycles:number}|null;maximum:number;amendment:boolean;can_authorize:boolean;
+};
 
 export const integrations = {
  crm: (id: string) => request<CrmView>(caseIntegration(id)+'/crm'),
@@ -52,6 +57,14 @@ export const integrations = {
  approve: (id: string, approved: boolean) => post<IntegrationOperation>(adminIntegration+'/approvals/'+encodeURIComponent(id),{approved})
 };
 export const api = {
+ retention:(id:string)=>request<RetentionState>(casePath(id)+'/retention-discount'),
+ updateRetention:(id:string,body:unknown)=>post<CaseDiscount>(casePath(id)+'/retention-discount',body),
+ issueRetentionInvoice:(id:string,period:string)=>post<InvoiceDetail>(casePath(id)+'/retention-discount/issue',{period}),
+ followUps:(search:URLSearchParams,signal:AbortSignal)=>request<{items:FollowUpEntry[];next_offset:number|null}>('/api/v1/follow-ups?'+search,{signal}),
+ followUp:(id:string,body:unknown)=>post(casePath(id)+'/ml/follow-up',body),
+ inbox:()=>fixtures ? Promise.resolve({assigned:copy(cases.filter(item=>item.owner_id==='advisor-demo')),
+   available:copy(cases.filter(item=>!item.owner_id && item.status==='open').map(item=>({...item,queued_at:item.updated_at}))),can_take:true})
+   : request<import('@claro/contracts').CaseInbox>('/api/v1/cases?view=inbox'),
   agentModelCatalog:()=>request<AgentModelCatalog>('/api/v1/admin/agent-models/catalog'),
   agentModelExecutions:()=>request<AgentModelExecutions>('/api/v1/admin/agent-models/executions'),
   agentModelRevisions:()=>request<AgentModelRevisions>('/api/v1/admin/agent-models/revisions'),
@@ -71,7 +84,11 @@ export const api = {
  open:(contact_ref:string,text:string)=>{if(!fixtures)return post<CaseSnapshot>('/api/v1/cases',{contact_ref,text,idempotency_key:key()}); const c:CaseSnapshot={id:contact_ref,conversation_id:`conv-${contact_ref}`,display_name:'Laura Martínez',channel:'telegram',attention_mode:'asistido',owner_id:'advisor-demo',verified:false,status:'open',revision:1,updated_at:now(),last_message:text,cursor:1,messages:[{id:key(),turn_seq:1,actor:'asesor',text,created_at:now()}],card:{intent:null,summary:'Contacto iniciado por el asesor.',facts:[],citations:[],pending:['Esperar respuesta del cliente'],next_action:'Continúa la conversación y valida al titular cuando sea necesario.',reason_codes:[]}}; cases=[c,...cases.filter(x=>x.id!==contact_ref)];return Promise.resolve(copy(c));},
  take:(id:string)=>fixtures?Promise.resolve(update(id,c=>{c.attention_mode='asistido';c.owner_id='advisor-demo';})):post<CaseSnapshot>(`/api/v1/cases/${encodeURIComponent(id)}/take`),
  send:(id:string,text:string,draft?:{run_id:string;case_revision:number})=>fixtures?Promise.resolve(update(id,c=>{c.messages.push({id:key(),turn_seq:c.messages.length+1,actor:'asesor',text,created_at:now()});c.last_message=text;if(c.id==='C-1004'&&c.verified&&c.card)c.card.pending=['Esperar confirmación del cliente'];})):post<CaseSnapshot>(`/api/v1/cases/${encodeURIComponent(id)}/messages`,{text,idempotency_key:key(),...(draft?{draft}:{})}),
- close:(id:string,resolved:boolean,retention_outcome?:'permanencia'|'baja'|'pendiente')=>fixtures?Promise.resolve(update(id,c=>{c.status='closed';})):post<CaseSnapshot>(`/api/v1/cases/${encodeURIComponent(id)}/close`,{resolved,...(retention_outcome?{retention_outcome}:{})}),
+ close:(id:string,resolved:boolean,retention_outcome?:'permanencia'|'baja'|'pendiente',completion?:CloseCompletion)=>
+   fixtures?Promise.resolve(update(id,c=>{c.status='closed';if(completion)c.closure={outcome:resolved?'resolved':'pending',evidence:completion.evidence,reason:completion.reason};})):post<CaseSnapshot>(casePath(id)+'/close',{resolved,retention_outcome,completion}),
+ closureSuggestion:(id:string,input:{case_revision:number;last_message_id:string|null;evidence:'cliente'|'operativa'},signal:AbortSignal)=>fixtures
+   ? Promise.resolve({suggestion:null})
+   : request<{suggestion:ClosureEvidenceSuggestion}>(casePath(id)+'/closure-suggestion',{method:'POST',body:JSON.stringify(input),signal}),
  decision:(id:string,proposalId:string,revision:number,decision:'approved'|'rejected')=>fixtures?Promise.resolve(update(id,c=>{if(c.card?.proposal){c.card.proposal.status=decision==='approved'?'confirmed':'rejected';if(decision==='approved')c.card.proposal.effect_ref='CRM-OFERTA-1004';}})):post<CaseSnapshot>(`/api/v1/proposals/${encodeURIComponent(proposalId)}/decision`,{decision,revision,idempotency_key:key()}),
  draftEvent:(id:string,run_id:string,case_revision:number,kind:'used'|'edited'|'feedback_positive'|'feedback_negative')=>post(`/api/v1/cases/${encodeURIComponent(id)}/draft-events`,{run_id,case_revision,event_id:key(),kind}),
  dashboard:(filters: DashboardFilters)=>fixtures?Promise.resolve(copy(dashboard)):request<Dashboard>('/api/v1/admin/dashboard?'+new URLSearchParams(filters)),
@@ -97,5 +114,12 @@ export const api = {
  eval:(revision:string)=>post<EvalJob>(`/api/v1/admin/prompts/${encodeURIComponent(revision)}/eval`),
  evalStatus:(revision:string)=>fixtures?Promise.resolve<EvalStatus>({job:null,report:null}):request<EvalStatus>(`/api/v1/admin/prompts/${encodeURIComponent(revision)}/eval`),
  activate:(revision:string)=>{if(!fixtures)return post<PromptRevision>(`/api/v1/admin/prompts/${encodeURIComponent(revision)}/activate`);revisions.forEach(r=>{if(r.status==='active')r.status='passed';if(r.revision===revision)r.status='active';});return Promise.resolve(copy(revisions.find(x=>x.revision===revision)!));},
- subscribe:(id:string,cursor:number,onEvent:(event:CaseEvent)=>void,onError:()=>void)=>{if(fixtures)return ()=>{};const stream=new EventSource(`/api/v1/cases/${encodeURIComponent(id)}/events?cursor=${cursor}`);stream.addEventListener('case.updated',event=>{try{onEvent(JSON.parse((event as MessageEvent).data) as CaseEvent);}catch{onError();}});stream.onerror=onError;return ()=>stream.close();}
+ subscribe:(id:string,cursor:number,onEvent:(event:CaseEvent)=>void,onError:()=>void,onAccessLost:()=>void)=>{
+   if(fixtures)return ()=>{};
+   const stream=new EventSource(`/api/v1/cases/${encodeURIComponent(id)}/events?cursor=${cursor}`);
+   stream.addEventListener('case.updated',event=>{try{onEvent(JSON.parse((event as MessageEvent).data) as CaseEvent);}catch{onError();}});
+   stream.addEventListener('case.access_lost',()=>{stream.close();onAccessLost();});
+   stream.onerror=onError;
+   return ()=>stream.close();
+ }
 };

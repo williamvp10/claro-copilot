@@ -1,11 +1,14 @@
 export { requestedAdvisor, acceptsAdvisorOffer } from './human-attention.js';
 export { requestModel, objectSchema, TurnModels } from './model-runtime.js';
+export { assistedHistory, assistedWriting } from './assisted-writing.js';
 export type { ModelCredentials } from './model-runtime.js';
 export { extractorInstructions, orchestratedPublicInstructions } from './turn-brief.js';
 export { createOpenAIPublicWriter, isModelObservation, modelObservationNames, validateDraft } from './generation.js';
 export type { AgentObservation, PublicWriter } from './generation.js';
 import { requestedAdvisor } from './human-attention.js';
 import { TurnModels, type ModelCredentials } from './model-runtime.js';
+import { assistedHistory, assistedWriting } from './assisted-writing.js';
+import { continuesCancellation, requestedDiscount, retentionAdvisorReply, retentionDialogue } from './retention-advisor.js';
 import { createBrief, extractBrief, extractorVersion, orchestratedPublicInstructions, modelDraft, modelEvidenceOrder, modelObjectiveOrder, type Brief, type Extracted } from './turn-brief.js';
 import type { AgentObservation, Profile, PublicWriter } from './generation.js';
 import { safeKnowledgeQuery } from './mcp.js';
@@ -16,8 +19,8 @@ export { renderCaseSummary } from './case-summary.js';
 import { withinDeadline } from './deadline.js';
 import { TurnReads } from './read-budget.js';
 import { guidePlans, homePlanPreference, plansDiscovery, prepareKnowledgeQuery, rankKnowledge, retentionPolicyQuery, wifiConfigurationSteps } from './retrieval.js';
-import { alternativePlan, cancellationRequest, changesCancellationToPlan, portabilityRequest, validObjectiveOrder, type ObjectivePlanner } from './objectives.js';
-export { changesCancellationToPlan, createOpenAIObjectivePlanner } from './objectives.js';
+import { alternativePlan, cancellationRequest, changesCancellationToPlan, portabilityRequest, requestsInvoiceCancellation, validObjectiveOrder, type ObjectivePlanner } from './objectives.js';
+export { changesCancellationToPlan, createOpenAIObjectivePlanner, requestsInvoiceCancellation } from './objectives.js';
 import { contextIntent, evolveContext, nextContextQuestion, questionById } from './context.js';
 import { billingCycleReply, esimCompatibilityFilter, homePlanReply, mobilePlanTopic, mobilePlanReply, publicReplyLimit, quotedPublicReply, shortPublicEvidence, triplePlayReply } from './public-reply.js';
 import { advisorEscalationReply, advisorPromotionReply, mobileCommitmentQuestion, mobileCommitmentReply, portabilityTimingQuestion, retentionOptionsReply } from './policy-reply.js';
@@ -63,7 +66,7 @@ function citation(doc: KnowledgeDocument): Citation {
 }
 function classify(text: string): Intent | undefined {
   if (changesCancellationToPlan(text)) return 'consulta_planes';
-  if (retentionPolicyQuery(text) || has(text, cancellationRequest)) return 'cancelacion';
+  if (retentionPolicyQuery(text) || has(text, cancellationRequest) || requestsInvoiceCancellation(text)) return 'cancelacion';
   if (has(text, /convergencia|convergente|\b(telefonia|linea|movil) pospago\b/) && has(text, /hogar|plan|combinar|paquete/)) return 'consulta_planes';
   if (has(text, portabilityRequest)) return 'portabilidad';
   if (has(text, /factur|saldo|cobr|vencimiento|pagar|pago|\b(?:debo|adeudo|deuda|f-\d{4,10})\b/)) return 'facturacion';
@@ -95,9 +98,13 @@ function planConversation(turn: AgentTurn, messages: Message[]): AgentTurn & Kno
   }
   return turn;
 }
+function isAffirmativeFollowUp(text: string): boolean {
+  return has(text,/\b(acepto|aceptamos|aceptaria|de acuerdo|si quiero|si acepto|me sirve|lo acepto|la acepto|tomare|quiero esa|quiero ese)\b/) &&
+    !has(text,/\b(no acepto|no quiero|no me sirve|acepto si|acepto cuando)\b/);
+}
 function recentPurpose(messages: Message[], turn: AgentTurn): Intent {
   const meaningful = messages.filter(m => m.actor === 'cliente' && m.turn_seq < turn.turn_seq).reverse()
-    .find(m => !accepted(m.text) && (contextIntent(m.text) || has(m.text,alternativePlan)));
+    .find(m => !isAffirmativeFollowUp(m.text) && (contextIntent(m.text) || has(m.text,alternativePlan)));
   const text=meaningful?.text ?? turn.text;
   return classify(text) ?? contextIntent(text) ?? 'soporte_tecnico';
 }
@@ -174,23 +181,6 @@ function asksReconnectionCharge(text: string): boolean {
 function cancellationWithFaults(text:string):boolean {
  return has(text,/\b(?:cancel\w*|retir\w*|dar de baja)\b/) && has(text,/\b(?:fallas?|averias?|intermitencia|caidas?|se cae|sin internet)\b/)
   && !has(text,/\b(?:sin fallas?|no (?:tengo|hay) fallas?|no (?:es )?por fallas?)\b/);
-}
-function accepted(text: string): boolean { return has(text, /\b(acepto|aceptamos|aceptaria|de acuerdo|si quiero|si acepto|me sirve|lo acepto|la acepto|tomare|quiero esa|quiero ese)\b/) && !has(text, /\b(no acepto|no quiero|no me sirve|acepto si|acepto cuando)\b/); }
-function selectOption(text: string, options: Retention['options'], messages: Message[]): Retention['options'][number] | undefined {
-  const context = norm(text);
-  const kind = /descuento|por ciento|%|rebaja/.test(context) ? 'discount' : /mejora|500|upgrade|velocidad/.test(context) ? 'upgrade' : undefined;
-  const choose = (s: string) => kind === 'discount' ? /descuento|por ciento|%|rebaja|discount/.test(s) : /mejora|500|upgrade|velocidad/.test(s);
-  if (kind) return options.find(o => choose(norm(`${o.id} ${o.title} ${o.detail}`)));
-  if (options.length === 1) return options[0];
-  const previous = [...messages].reverse().find(m => m.actor === 'asesor');
-  if (previous) {
-    const p = norm(previous.text), mentioned = options.filter(o => {
-      const s = norm(`${o.id} ${o.title} ${o.detail}`);
-      return (/descuento|%|discount/.test(s) && /descuento|%/.test(p)) || (/mejora|500|upgrade/.test(s) && /mejora|500/.test(p));
-    });
-    if (mentioned.length === 1) return mentioned[0];
-  }
-  return undefined;
 }
 function card(intent: Intent, summary: string, facts: Fact[], citations: Citation[], pending: string[], next_action: string, reason_codes: string[], proposal?: Awaited<ReturnType<AgentPorts['createProposal']>>): RunResult {
   return { type: 'card', route: intent, card: { intent, summary, facts, citations, pending, next_action, reason_codes, ...(proposal ? { proposal } : {}) } };
@@ -431,6 +421,11 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
   type CaseState = Awaited<ReturnType<AgentPorts['readCaseForRun']>>;
   function policyText(turn:AgentTurn,state:CaseState):string {
     const current=norm(turn.text);
+    if (turn.audience==='asesor' && state.assigned_destination==='supervision' && !contextIntent(turn.text)) {
+      const previous=state.messages.filter(message=>message.actor==='cliente' && message.turn_seq<turn.turn_seq).reverse()
+        .find(message=>mandatoryPolicyRoute(message.text)?.destination==='supervision');
+      if (previous) return `${previous.text} ${turn.text}`;
+    }
     if (/\blos\b/.test(current) || !/\b(?:\d+|un|una|dos|tres|cuatro|cinco|diez|media|varias|varios)\s*(?:minutos?|mins?|horas?|dias?)\b/.test(current)) return turn.text;
     const previous=state.messages.filter(m=>m.actor==='cliente' && m.turn_seq<turn.turn_seq).at(-1);
     return previous && needsLosDuration(previous.text) ? `${previous.text} ${turn.text}` : turn.text;
@@ -551,7 +546,22 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     const policyQuestion = (reconnectionCharge || has(turn.text,/\b(cual|cuales|cuanto|cuanta|como|que|cuando|plazo|politica|contrato|clausula|penalidad|nip|pqr|requisitos)\b/))
       && !explicitAccountBilling(turn.text) && !asksCurrentPlanAndBalance(turn.text) && !has(turn.text,/\b(mi cuenta|mi (plan|linea) actual|quiero cancelar|c-\d{4})\b/);
     const advisorKnowledge = turn.audience === 'asesor' && !state.verified;
+    if (advisorKnowledge && state.assigned_destination==='facturacion' && intent==='facturacion' &&
+        (explicitAccountBilling(turn.text) || state.intake?.intent==='facturacion' && state.intake.facts.objetivo)) {
+      const result=card('facturacion','El cliente solicita revisar un concepto de su factura. Su procedencia queda por comprobar.',[],[],
+        ['Verificar titularidad','Revisar el concepto en la factura'], 'Verificar la titularidad y consultar el detalle del cargo.',['account_verification_pending']);
+      if (result.type==='card') result.card.advisor_draft='Entiendo que quieras aclarar ese cargo. Primero verificaremos la titularidad y luego revisaré el concepto en la factura para explicarte de dónde salió.';
+      return result;
+    }
     const generalPortability = intent === 'portabilidad' && policyQuestion && !state.verified;
+    const technical=turn.audience==='asesor' && intent==='soporte_tecnico' && state.intake?.intent==='soporte_tecnico' ? state.intake.facts : undefined;
+    const contextTerms=technical ? [...new Set([technical.codigo,technical.sintoma,technical.equipo].filter(Boolean))].join(' ') : '';
+    const matchesTechnicalFocus=(doc:KnowledgeDocument) => {
+      const source=norm(doc.title+' '+doc.excerpt);
+      if (technical?.codigo) return source.replaceAll(' ','').replaceAll('-','').includes(norm(technical.codigo).replaceAll('-',''));
+      if (technical?.sintoma==='Luz LOS roja') return /\blos\b/.test(source) && /\broj[ao]\b/.test(source);
+      return true;
+    };
     if (retentionPolicyQuery(turn.text) || intent === 'consulta_planes' || (intent === 'soporte_tecnico' && (turn.audience==='cliente' || !state.verified)) || intent === 'portabilidad' || (intent === 'facturacion' && policyQuestion) || generalPortability || (advisorKnowledge && policyQuestion)) {
       if (turn.audience==='cliente' && state.intake?.facts.imagen==='Imagen recuperada' && !has(turn.text,/\be[ -]?202\b/)) {
         return {type:'answer',answer:'Me alegra que haya vuelto la imagen. Si vuelve a fallar, cuéntame qué aparece en pantalla.',citations:[],route:intent};
@@ -562,13 +572,15 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const resolved=planConversation(turn,state.messages);
       const detailFocus=state.conversation_memory?.focused_plan ?? state.conversation_memory?.selected_plan;
       const scopedDetail=intent==='consulta_planes' && detailFocus && commercialFor(turn,state)?.action==='detail';
-      const query={...resolved,text:scopedDetail ? `${detailFocus.name}. ${turn.text}` : resolved.text,intake:state.intake,deadline};
+      const text=scopedDetail ? `${detailFocus.name}. ${turn.text}` : contextTerms ? `${contextTerms}. ${resolved.text}` : resolved.text;
+      const query={...resolved,text,intake:state.intake,deadline};
       const objectives=Boolean(prompts.agent_objectives);
       const documents = await retrieve(query, profile, prompts, !objectives);
       const timing=prompts.agent_objectives && intent==='portabilidad' && portabilityTimingQuestion(turn.text);
       const compatibility = prompts.agent_objectives ? esimCompatibilityFilter(turn.text) : undefined;
       const applicable = documents.filter(doc => {
         if (compatibility) return compatibility(doc);
+        if (!matchesTechnicalFocus(doc)) return false;
         if (scopedDetail) return doc.type!=='catalogo' && !/^CAT-/.test(doc.version) &&
           norm(doc.title+' '+doc.excerpt).includes(norm(detailFocus.name));
         if (reconnectionCharge) return has(doc.excerpt,/\bcargo de reconexion\b/);
@@ -599,7 +611,8 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
         ? `${reply.answer} Para comprobar si tu pago ya aparece registrado, primero debemos verificar la titularidad y consultar la cuenta.`
         : reply.answer;
       return turn.audience === 'asesor'
-        ? card(intent,reply.answer,[],reply.citations,[],'Compartir la información pertinente.',['knowledge'])
+        ? card(intent,reply.answer,[],reply.citations,[],intent==='soporte_tecnico' && contextTerms
+          ? 'Retomar el diagnóstico desde los pasos ya realizados y confirmar el resultado.' : 'Compartir la información pertinente.',['knowledge'])
         : {type:'answer',answer:answer + (askDecoder && !answer.includes('?')
             ? '\n\nCuando termine la espera, cuéntame: ¿volvió la imagen?' : ''),citations:reply.used,route:intent,
           ...(intent==='consulta_planes' ? {conversation_memory:catalogMemoryFromReply(turn.text,reply.answer,reply.used,state.conversation_memory)} : {}),
@@ -666,7 +679,8 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
         [pending.length ? 'source_unavailable' : 'verified_account']);
     }
     const customerContext = () => readFacts('crm.get_customer_context','review_customer_context',() => ports.getCustomerContext(turn.run_id));
-    if (prompts.agent_objectives && intent==='cancelacion' && turn.actor==='cliente' && state.intake?.skip && !accepted(turn.text)) {
+    if (prompts.agent_objectives && intent==='cancelacion' && turn.actor==='cliente' && state.intake?.skip &&
+        (continuesCancellation(turn.text) || !isAffirmativeFollowUp(turn.text))) {
       return card(intent,'El cliente pide continuar con la baja.',[],[],['Tramitar la baja con el responsable de cancelaciones'],
         'Continuar el trámite de cancelación y confirmar el resultado cuando se haya registrado.',['cancellation_requested']);
     }
@@ -727,19 +741,39 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
           'Continuar el trámite solicitado sin ofrecer alternativas no elegibles.',['retention_ineligible']);
       }
       const alternatives = retention.options.map(o => `${o.title}: ${o.detail}`).join(' · ');
-      let proposal;
-      if (turn.actor === 'cliente' && accepted(turn.text)) {
-        const selected = selectOption(turn.text, retention.options, state.messages.filter(m => m.turn_seq < turn.turn_seq));
-        if (selected && Date.now() < deadline) proposal = await ports.createProposal(turn.run_id, {option_id:selected.id, citation_ids:[retention.policy.id]});
-        else return card(intent, `Alternativas elegibles: ${alternatives}`, facts, citations, ['Precisar la alternativa aceptada'], 'Preguntar cuál alternativa acepta el cliente.', ['option_unclear']);
+      const dialogue=retentionDialogue(turn,state.messages,retention.options);
+      if (dialogue.continueCancellation && !state.retention_discount) {
+        return card(intent,'El cliente pide continuar con la baja después de recibir una oferta.',facts,citations,['Tramitar la baja con el responsable de cancelaciones'],
+          'Continuar el trámite de cancelación y confirmar el resultado cuando se haya registrado.',['cancellation_requested']);
       }
-      const advisorPresented = state.messages.some(m => m.actor === 'asesor' && has(m.text, /oferta|descuento|mejora|alternativa/));
-      return card(intent, `Resultado de elegibilidad: ${retention.reason}. Alternativas: ${alternatives}`, facts, citations, proposal ? ['Aprobación del asesor'] : ['Decisión del cliente'], proposal ? 'Revisar y aprobar la propuesta en consola.' : advisorPresented ? 'Esperar la decisión del cliente.' : 'Presentar las alternativas y esperar la decisión del cliente.', ['retention_eligible'], proposal);
+      const selected=state.retention_discount ? undefined : dialogue.selected;
+      const prepare=selected?.discount && state.billable_retention;
+      const proposal=selected && !prepare && Date.now()<deadline
+        ? await ports.createProposal(turn.run_id,{option_id:selected.id,citation_ids:[retention.policy.id]}) : undefined;
+      const reason=prepare ? 'retention_prepare_discount' : proposal ? 'retention_proposal_pending' :
+        selected ? 'retention_choice_review' : dialogue.unclear ? 'option_unclear' :
+        dialogue.offered.length ? 'retention_awaiting_choice' : 'retention_present_options';
+      const next={
+        retention_prepare_discount:['Confirmar el servicio y las condiciones','Preparar el descuento desde CRM y confirmar los términos del servicio con el cliente.'],
+        retention_proposal_pending:['Aprobación del asesor','Revisar y aprobar la propuesta en consola.'],
+        retention_choice_review:['Verificar la alternativa elegida','Revisar la alternativa elegida antes de registrarla.'],
+        option_unclear:['Precisar la alternativa aceptada','Preguntar cuál de las alternativas enviadas acepta el cliente.'],
+        retention_awaiting_choice:['Decisión del cliente','Aclarar las condiciones que el cliente consulte y esperar su decisión.'],
+        retention_present_options:['Presentar las alternativas','Presentar las alternativas y esperar la decisión del cliente.']
+      }[reason];
+      const result=card(intent,`Resultado de elegibilidad: ${retention.reason}. Alternativas: ${alternatives}`,facts,citations,[next[0]],next[1],
+        ['retention_eligible',reason],proposal);
+      if (result.type==='card') {
+        result.card.retention_options=retention.options;
+        result.card.requested_discount=requestedDiscount(state.messages.filter(message=>message.turn_seq<=turn.turn_seq));
+      }
+      return result;
     }
     const relevantService=intent==='soporte_tecnico' && has(turn.text,/\b(mi (internet|fibra|modem|equipo|decodificador)|tengo intermitencia|sigo sin (internet|senal))\b/);
-    const [documents, supportFacts] = await Promise.all([retrieve({...turn,deadline},profile,prompts),
+    const supportText=contextTerms ? `${contextTerms}. ${turn.text}` : turn.text;
+    const [documents, supportFacts] = await Promise.all([retrieve({...turn,text:supportText,intake:state.intake,deadline},profile,prompts),
       relevantService ? getServices('identify_affected_service') : []]);
-    const citations = documents.map(citation);
+    const citations = documents.filter(matchesTechnicalFocus).map(citation);
     return card(intent, citations[0]?.excerpt ?? 'No hay evidencia suficiente para resolver la consulta.', supportFacts, citations,
       [...(citations.length ? [] : ['Consultar fuente autorizada']),...(sourceUnavailable(supportFacts) ? ['Consultar CRM · API mock'] : [])],
       citations.length ? 'Compartir el procedimiento aplicable.' : 'Solicitar información adicional o derivar.', [citations.length ? 'knowledge' : 'missing_evidence']);
@@ -764,7 +798,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     const empathy=issue && prompts.advisor_empathy ? renderTemplate(prompts.advisor_empathy,{reported_issue:issue}) : '';
     const domainKey=c.intent === 'soporte_tecnico' ? 'support_reply' : c.intent === 'facturacion' ? 'billing_reply' : 'commercial_reply';
     const domain=prompts[domainKey] ? renderTemplate(prompts[domainKey],{symptom_sentence:issue,authorized_guidance:guidance,billing_fact_sentence:facts,billing_explanation:c.summary,commercial_fact_sentence:facts || c.summary,applicable_condition:guidance}) : [c.summary,facts].filter(Boolean).join(' ');
-    const rendered=prompts.advisor_reply ? renderTemplate(prompts.advisor_reply,{empathy_sentence:empathy,domain_reply:domain,next_step_sentence:c.next_action}) : [empathy,domain,c.next_action].filter(Boolean).join('\n\n');
+    const rendered=c.advisor_draft ?? (prompts.advisor_reply ? renderTemplate(prompts.advisor_reply,{empathy_sentence:empathy,domain_reply:domain,next_step_sentence:c.next_action}) : [empathy,domain,c.next_action].filter(Boolean).join('\n\n'));
     const authorized=[c.summary,facts,guidance,c.next_action].join(' ');
     const nums=(v:string)=>v.match(/\d+(?:[.,:/-]\d+)*(?:\s*%)?/g) ?? [];
     const allowedNumbers=new Set(nums(authorized).map(x=>x.replace(/\s/g,'')));
@@ -776,7 +810,9 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     if (handoff) options.observe?.(turn.run_id,{name:'advisor.handoff_summary',started:handoffStarted,ended:Date.now(),metadata:{
       agent_id:'copiloto',step_id:'prepare_handoff',prompt_ref:'handoff_summary'
     }});
-    const question=c.suggested_escalation || c.proposal || c.reason_codes.some(reason=>['human_requested','support_followup','catalogue_comparison'].includes(reason)) ? undefined :
+    const question=c.suggested_escalation || c.proposal || c.reason_codes.some(reason=>[
+      'human_requested','support_followup','catalogue_comparison','retention_eligible','cancellation_requested'
+    ].includes(reason)) ? undefined :
       nextContextQuestion(state.intake ?? evolveContext(turn.text,undefined,c.intent ?? undefined));
     return {...result,card:{...c,...(objectives.length ? {objectives} : {}),context_question:question,advisor_draft:unsafe ? fallback : rendered,advisor_draft_run_id:turn.run_id,...(handoff && handoff.length < 4000 ? {handoff_summary:handoff} : {})}};
   }
@@ -784,7 +820,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     .addNode('load_case', async ({ turn, deadline }) => {
       const started = Date.now();
       const caseState = await ports.readCaseForRun(turn.run_id);
-      const config = await ports.getAgentConfig(turn.config_revision,turn.model_config_revision,turn.model_config_digest);
+      const config = await ports.getAgentConfig(turn.config_revision,turn.model_config_revision,turn.model_config_digest,turn.assisted_summary);
       if (config.revision !== turn.config_revision ||
           turn.prompt_manifest_digest && config.promptManifestDigest!==turn.prompt_manifest_digest) throw new Error('configuration revision mismatch');
       if (config.prompts.agent_objectives || turn.model_config_revision) {
@@ -832,13 +868,14 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const continuation=!explicitIntent ? (turn.actor==='asesor' ? caseState.conversation_context?.active : undefined) ?? context.domain ?? (isPublicContinuation(turn) ? caseState.public_route : undefined) : undefined;
       if (continuation) intent=continuation;
       else if (!explicitIntent && extracted) intent=extracted;
-      if (turn.actor === 'cliente' && !accepted(turn.text) && tokens(turn.text).length > 2) {
+      if (turn.actor === 'cliente' && !isAffirmativeFollowUp(turn.text) && tokens(turn.text).length > 2) {
         const activeOffer = intent === 'cancelacion' && !explicitIntent && has(turn.text,/\b(?:descuento|oferta)\b/);
         if (!activeOffer && !continuation) intent = classify(turn.text) ?? explicitIntent ?? extracted ?? intent;
       }
       const newPlan = changesCancellationToPlan(turn.text);
       if (newPlan) intent='consulta_planes';
-      else if (retentionPolicyQuery(turn.text) || asksRecurrenceOffer(turn,caseState) || cancellationWithFaults(turn.text) || has(turn.text, cancellationRequest)) intent='cancelacion';
+      else if (retentionPolicyQuery(turn.text) || asksRecurrenceOffer(turn,caseState) || cancellationWithFaults(turn.text) ||
+        has(turn.text,cancellationRequest) || requestsInvoiceCancellation(turn.text)) intent='cancelacion';
       else if ((has(turn.text, portabilityRequest) || prompts.agent_objectives && portabilityTimingQuestion(turn.text)) && !has(turn.text,/\b(?:junt\w*|combina\w*|convergen\w*)\b/)) intent='portabilidad';
       else if (prompts.agent_objectives && (asksReconnectionCharge(turn.text) ||
         !caseState.verified && turn.channel==='telegram' && turn.audience==='cliente' && claimedBillingAccount(turn.text) ||
@@ -1035,6 +1072,16 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const evidence=prompts.agent_objectives ? advisorEscalationReply(policy.reason_code,documents) : null;
       const citations = (evidence?.docs ?? documents).map(citation);
       const reason=evidence?.text ?? policyReasons[policy.reason_code] ?? `Se recomienda revisión por ${destination}.`;
+      if (caseState.assigned_destination===policy.destination) {
+        const result=card(policy.destination==='soporte_tecnico' ? 'soporte_tecnico' : intent,
+          [policyReasons[policy.reason_code] ?? reason,reported].filter(Boolean).join(' '),[],citations,
+          ['Revisar lo reportado y confirmar el siguiente paso'],
+          'Continuar la revisión del reporte desde el equipo asignado.',['escalation_assigned',policy.reason_code]);
+        if (result.type==='card') result.card.advisor_draft=policy.destination==='supervision'
+          ? 'Entiendo tu preocupación. Voy a revisar el reporte con lo que ya nos contaste y te indicaré el siguiente paso que podamos confirmar.'
+          : 'Gracias por contarnos qué pasó. Voy a continuar la revisión técnica desde los pasos que ya probaste.';
+        return {result};
+      }
       const out=card(policy.destination === 'soporte_tecnico' ? 'soporte_tecnico' : intent,
         [reason,reported].filter(Boolean).join(' '),[],citations,[`Revisar solicitud a ${destination}`],
         `Revisar y confirmar la solicitud de escalamiento a ${destination}.`,['human_requested',policy.reason_code]);
@@ -1114,13 +1161,62 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     .addNode('render_private_draft', async ({result,prompts,turn,caseState,objectives,profile}) => {
       const prepared=advisorDraft(result,prompts,turn,caseState,prompts.agent_objectives ? objectives : []);
       const current=runtime.get(turn.run_id);
-      if (prepared.type!=='card' || !current?.models || prepared.card.facts.length || prepared.card.pending.length ||
-          prepared.card.proposal || prepared.card.suggested_escalation || !prepared.card.reason_codes.includes('knowledge')) return {result:prepared};
-      const sources=prepared.card.citations.filter(({id,version})=>current.publicEvidence.has(JSON.stringify([id,version])));
-      if (!sources.length) return {result:prepared};
-      const draft=await modelDraft(current.models,'write_advisor',current.brief,turn.text,sources,
-        profile ?? 'economico',prompts.orchestrated_public_answer ?? orchestratedPublicInstructions);
-      return {result:draft ? {...prepared,card:{...prepared.card,advisor_draft:draft.answer}} : prepared};
+      if (prepared.type!=='card') return {result:prepared};
+      const card=prepared.card;
+      if (!turn.assisted_summary && current?.models && !card.facts.length && !card.pending.length && !card.proposal && !card.suggested_escalation &&
+          card.reason_codes.includes('knowledge')) {
+        const sources=card.citations.filter(({id,version})=>current.publicEvidence.has(JSON.stringify([id,version])));
+        if (sources.length) {
+          const instructions=prompts.orchestrated_public_answer ?? orchestratedPublicInstructions;
+          const draft=await modelDraft(current.models,'write_advisor',current.brief,turn.text,sources,
+            profile ?? 'economico',`${instructions}\nRedacta el mensaje que el asesor humano podría enviar al cliente, listo para revisar.`);
+          if (draft) card.advisor_draft=draft.answer;
+        }
+      }
+      if (turn.assisted_summary) {
+        const history=assistedHistory(caseState.messages,turn.turn_seq);
+        const summary=current?.models && prompts.assisted_case_summary ? await assistedWriting(current.models,'assisted_case_summary',
+          prompts.assisted_case_summary,profile ?? 'economico',history,{observed:card.summary,previous:caseState.previous_summary,
+            pending:card.pending,intake:caseState.intake?.facts,receipts:caseState.confirmed_receipts}) : null;
+        const previous=caseState.previous_summary;
+        const stale=!!current?.models && !summary && !!previous;
+        if (summary) card.summary=summary.text;
+        else {
+          const reports=history.filter(message=>message.actor==='cliente' && !requestedAdvisor(message.text));
+          const latest=reports.at(-1), anchor=[...reports].reverse().find(message=>message!==latest && contextIntent(message.text)===card.intent);
+          const declared=[anchor,latest].filter(item=>item && !card.summary.includes(item.text)).map(item=>`«${item!.text.slice(0,230)}»`);
+          if (declared.length) card.summary=`El cliente informó ${declared.join(' y ')}. ${card.summary}`;
+          else if (stale && previous) card.summary=previous.text;
+        }
+        card.summary_update={at:new Date().toISOString(),turn_id:turn.turn_id,revision:turn.case_revision,
+          origin:summary ? 'ia' : 'evidencia',...(stale ? {stale:true} : {})};
+        const retentionTopic=card.intent==='cancelacion' || card.intent==='facturacion' && /\b(?:descuento|beneficio de retenci[oó]n)\b/i.test(turn.text);
+        const discount=retentionTopic && !card.suggested_escalation ? caseState.retention_discount : undefined;
+        const retentionReply=retentionTopic && !card.suggested_escalation ? retentionAdvisorReply(card,discount,turn.actor) : undefined;
+        if (discount) {
+          const pending={requested:'Revisión de Administración',authorized:'Aceptación del cliente',
+            accepted:'Confirmación en CRM',crm_confirmed:'Programación en Facturación',scheduled:'Emisión del siguiente ciclo'} as const;
+          card.pending=discount.schedule?.last_invoice ? [] : [pending[discount.status]];
+          card.next_action=discount.schedule?.last_invoice ? 'Revisar la factura con el cliente.' :
+            discount.status==='authorized' ? 'Compartir los términos autorizados y confirmar la aceptación.' :
+            discount.status==='requested' ? 'Solicitar revisión de la excepción a Administración.' : 'Consultar los comprobantes del beneficio.';
+        }
+        if (retentionReply) {
+          card.advisor_draft=retentionReply;
+          const at=Date.now();
+          options.observe?.(turn.run_id,{name:'advisor.retention_reply',started:at,ended:at,metadata:{
+            step_id:'write_verified_retention_reply',agent_id:'copiloto',status:discount?.status ??
+              card.reason_codes.find(reason=>reason!=='retention_eligible') ?? 'eligibility'
+          }});
+        } else if (current?.models && prompts.assisted_reply && !card.proposal && !card.suggested_escalation) {
+          const reply=await assistedWriting(current.models,'assisted_reply',prompts.assisted_reply,profile ?? 'economico',history,{
+            facts:card.facts,citations:card.citations.map(source=>source.excerpt.slice(0,400)),
+            next_action:card.next_action,pending:card.pending,receipts:caseState.confirmed_receipts
+          });
+          if (reply) card.advisor_draft=reply.text;
+        }
+      }
+      return {result:prepared};
     })
     .addEdge('priority_handoff', 'render_private_draft')
     .addEdge('resolution_ready', 'render_private_draft')

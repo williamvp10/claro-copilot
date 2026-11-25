@@ -1,9 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowUp, FileText, MessageCircle, UserRound } from 'lucide-react';
+import { ArrowUp, ArrowUpRight, CheckCircle2, FileText, LoaderCircle, MessageCircle } from 'lucide-react';
 import type { WebChatEvent, WebChatSnapshot } from '@claro/contracts';
-import { demoVerifyInvitation, demoWelcome } from '@claro/contracts';
+import { demoVerifyInvitation, demoWelcome, escalationDestinations } from '@claro/contracts';
 import { Button } from '../../components/ui/button';
 import styles from './chat.module.css';
 
@@ -139,7 +139,14 @@ export default function CustomerChat() {
     <section className={styles.chat} aria-labelledby="customer-chat-title">
       <div className={styles.title}>
         <span className={styles.avatar}><MessageCircle size={22} /></span>
-        <div><h1 id="customer-chat-title">Chat de atención</h1><p role="status">{closed ? 'Conversación cerrada' : assisted ? 'Asesor asignado' : snapshot?.awaiting_advisor ? 'En espera de un asesor' : 'Asistente de Claro'}</p></div>
+        <div><h1 id="customer-chat-title">Chat de atención</h1>
+          <p className={styles.attentionState} data-state={closed ? undefined : snapshot?.attention?.stage} role="status" aria-atomic="true">
+            {closed ? 'Conversación cerrada' : snapshot?.attention?.stage==='escalated' ? <>
+              <ArrowUpRight size={14} aria-hidden="true" /> Caso escalado · En espera
+            </> : snapshot?.awaiting_advisor ? <><LoaderCircle size={14} aria-hidden="true" /> Buscando un asesor</>
+              : assisted ? <><CheckCircle2 size={14} aria-hidden="true" /> {snapshot?.attention?.stage==='assigned' && snapshot.attention.advisor_name
+                ? `Atención con ${snapshot.attention.advisor_name}` : 'Asesor en atención'}</> : 'Asistente de Claro'}
+          </p></div>
         {messages.length>0&&<Button type="button" variant="outline" size="sm" className={styles.newChat}
           disabled={sending||startingNew} onClick={()=>void startNew()}>{startingNew?'Abriendo…':'Nuevo chat'}</Button>}
       </div>
@@ -149,7 +156,11 @@ export default function CustomerChat() {
           <p>{demoVerifyInvitation} Puedes usar <strong>11111</strong> o empezar con una consulta general.</p>
           <div className={styles.suggestions}>{suggestions.map(text => <button key={text} type="button" onClick={() => void send(text)} disabled={!snapshot || sending}>{text}</button>)}</div>
         </div>}
-        {messages.map(message => <article key={message.id} className={message.actor === 'cliente' ? styles.customer : styles.agent}>
+        {messages.map(message => message.attention_notice ? <article key={message.id} className={styles.attentionNotice}
+          data-state={message.attention_notice==='escalated' ? 'escalated' : message.attention_notice==='closed' ? 'closed' : 'assigned'}>
+          {message.attention_notice==='escalated' ? <ArrowUpRight size={18} aria-hidden="true"/> : <CheckCircle2 size={18} aria-hidden="true"/>}
+          <div><strong>{message.attention_notice==='escalated' ? 'Caso escalado' : message.attention_notice==='closed' ? 'Caso cerrado' : 'En atención'}</strong><p>{message.text}</p></div>
+        </article> : <article key={message.id} className={message.actor === 'cliente' ? styles.customer : styles.agent}>
           <span className={styles.author}>{message.actor === 'cliente' ? 'Tú' : message.actor === 'asesor' ? 'Asesor Claro' : 'Claro Copiloto'}</span>
           <p>{message.text}</p>
           {message.citations?.filter((citation,index,all) => {
@@ -173,9 +184,8 @@ export default function CustomerChat() {
       </div>
       <div className={styles.composer}>
         {error && <div role="alert" className={styles.error}>{error} {!snapshot && <button type="button" onClick={() => void connect()}>Reintentar</button>}</div>}
-        {!closed && snapshot?.awaiting_advisor && <p className={styles.notice}><UserRound size={15} aria-hidden="true" /> Puedes seguir escribiendo mientras un asesor toma tu caso.</p>}
-        {!closed && assisted && !messages.some(message=>message.actor==='asesor') &&
-          <p className={styles.notice}><UserRound size={15} aria-hidden="true" /> Tu asesor recibió el historial. Su respuesta llegará aquí.</p>}
+        {!closed && snapshot?.attention?.stage==='escalated' && <p className={styles.notice}>
+          En espera de {escalationDestinations[snapshot.attention.destination]}. Puedes seguir escribiendo.</p>}
         <form onSubmit={submit}>
           <label className="sr-only" htmlFor="customer-message">Mensaje</label>
           <input id="customer-message" maxLength={4096} value={draft} onChange={event => setDraft(event.target.value)} placeholder={connecting ? 'Conectando…' : closed ? 'Conversación cerrada' : verification?.stage === 'code_sent' ? 'Escribe tu código de prueba' : verification?.stage === 'required' ? 'Escribe tu correo o teléfono de prueba' : 'Escribe tu mensaje'} disabled={!snapshot || closed || startingNew} />

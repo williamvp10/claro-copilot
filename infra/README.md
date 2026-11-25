@@ -25,7 +25,7 @@ Use `DEMO_ASESSOR_EMAIL` and `DEMO_ASESSOR_PASSWORD` for the advisor and the cor
 
 ## Dokploy and release evidence
 
-After CI passes on `main`, the candidate job publishes GHCR and produces separate candidate artifacts with the immutable `image@sha256:...` references after image scans. In Dokploy create a Compose application from this repository and set its compose path to `infra/compose.yaml`; supply the private environment values through Dokploy, including `CLARO_IMAGE` and, when enabling the ML profile, `ML_IMAGE` set to the corresponding digests. Configure the web domain/TLS in Dokploy, persist named volumes, and verify the version, migration completion, API `/healthz` and `/readyz`, and web login before routing demo traffic. Run `docker compose --env-file .env -f infra/compose.yaml ps` to check both simulators. Then confirm their status in the administration panel, verify the C-1001 web session and check an adjustment receipt. Pull the candidate image and use a deployment mode that does not rebuild it. Keep the previous verified digest and a database backup to support rollback. Do not roll back an incompatible schema without a tested recovery plan. No automatic deploy is configured.
+The VPS demo uses the GitHub provider in Dokploy with `main`, automatic deploy on push, and [compose.dokploy.yaml](../compose.dokploy.yaml) as its single entry point. The [VPS runbook](vps/README.md) covers promotion from `develop`, persistent data, and post-deploy verification. CI also publishes separately scanned candidate image digests for environments that use pinned images.
 
 For evidence, save the workflow run URL, commit, image digest, Compose configuration validation result, migration status, health checks and smoke-test outcome in the release record. Do not include credentials or the rendered Compose configuration, which may contain secrets.
 
@@ -110,7 +110,7 @@ En **Conocimiento RAG → Chat de prueba**, seleccionar audiencia, canal y fecha
 
 Configurar `INTEGRATION_MCP_TOKEN` con al menos 24 caracteres y `INTEGRATION_MCP_SIGNING_KEY` con al menos 32. CRM y Facturación tienen un proceso MCP privado cada uno. Cada proceso recibe las credenciales de su propia API mock. El worker emite una capacidad firmada, acotada a una tool, el run, el caso y su revisión. El servidor revalida el titular y la asignación antes de consultar. Las escrituras pasan por NestJS y el outbox.
 
-Para ensayar traspasos y gestión, completar las parejas `DEMO_N2_*`, `DEMO_SUPERVISOR_*` y `DEMO_SUPERADMIN_*` y volver a ejecutar el seed. El admin actual conserva aprobación de facturación. Las credenciales de prueba se configuran por instancia. Los usuarios de asesor y atención N2 acceden a conversaciones por asignación.
+Para ensayar traspasos y gestión, configurar `DEMO_ADMIN_*`, `DEMO_ASESSOR_*` y, si se requieren puestos especializados, `DEMO_N2_*` y `DEMO_SUPERVISOR_*`. Ejecutar el seed para habilitar esos usuarios y retirar la identidad dedicada de Superadministración de una instalación anterior. Administración gestiona modelos, operadores, CRM y aprobaciones del demo. Los usuarios de atención acceden a conversaciones por asignación.
 
 El catálogo [prompts.claro-copiloto.json](../docs/evolucion-mvp/prompts.claro-copiloto.json) se carga durante la migración de la plataforma. Con Langfuse autohospedado disponible y las claves de proyecto configuradas, importar sus plantillas iniciales con:
 

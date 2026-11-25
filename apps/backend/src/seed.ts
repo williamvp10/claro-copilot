@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { readFile } from 'node:fs/promises';
 import { createAuth } from './auth.js';
-import { createDatabase } from './database.js';
+import { audit, createDatabase } from './database.js';
 import { hashPassword, verifyPassword } from 'better-auth/crypto';
 import { initializeLocalModelPolicy } from './agent-model-storage.js';
 import { modelCredentials } from './agent-providers.js';
@@ -11,7 +11,7 @@ if (process.env.DEMO_MODE !== 'true') throw new Error('Set DEMO_MODE=true to see
 const db = await createDatabase().initialize();
 const { auth, database } = createAuth(true);
 
-async function upsertOperator(kind: 'ASESSOR' | 'ADMIN' | 'N2' | 'SUPERVISOR' | 'SUPERADMIN', name: string, role: 'asesor' | 'admin') {
+async function upsertOperator(kind: 'ASESSOR' | 'ADMIN' | 'N2' | 'SUPERVISOR', name: string, role: 'asesor' | 'admin') {
   const email = process.env[`DEMO_${kind}_EMAIL`]?.trim().toLowerCase();
   const password = process.env[`DEMO_${kind}_PASSWORD`];
   const local = ['localhost','127.0.0.1','[::1]'].includes(new URL(process.env.BETTER_AUTH_URL!).hostname);
@@ -43,8 +43,23 @@ try {
     throw new Error('Demo operators require different emails');
   }
   const advisor = await upsertOperator('ASESSOR', 'Asesor Claro', 'asesor');
-  await upsertOperator('ADMIN', 'Administración Claro', 'admin');
-  for (const [kind,name,caps,specialties] of [['N2','Soporte N2',['n2'],['soporte_tecnico','facturacion','comercial_portabilidad']],['SUPERVISOR','Supervisión',['supervisor'],[]],['SUPERADMIN','Superadministración',['superadmin'],[]]] as const) {
+  const admin=await upsertOperator('ADMIN', 'Administración Claro', 'admin');
+  await db.transaction(async tx=>{
+    await tx.query("SELECT pg_advisory_xact_lock(hashtext('superadmin-management'))");
+    const [current]=await tx.query("SELECT enabled AND 'admin'=ANY(capabilities) AS ready FROM operator_role WHERE user_id=$1 FOR UPDATE",[admin]);
+    if (!current?.ready) throw new Error('La cuenta Administración debe estar activa antes de retirar la identidad anterior');
+    const oldEmail=process.env.DEMO_SUPERADMIN_EMAIL?.trim().toLowerCase() ?? '';
+    const retired=await tx.query(`WITH retired AS (
+      UPDATE operator_role o SET enabled=false,available=false FROM "user" u
+      WHERE o.user_id=u.id AND o.user_id<>$1 AND o.enabled AND o.capabilities=ARRAY['superadmin']
+      AND (u.email=$2 OR u.name='Superadministración') RETURNING o.user_id
+    ) SELECT user_id FROM retired`,[admin,oldEmail]);
+    for (const {user_id} of retired) {
+      await tx.query('DELETE FROM session WHERE "userId"=$1',[user_id]);
+      await audit(tx,null,'operator_retired',{operator_id:admin,target_id:user_id});
+    }
+  });
+  for (const [kind,name,caps,specialties] of [['N2','Soporte N2',['n2'],['soporte_tecnico','facturacion','comercial_portabilidad']],['SUPERVISOR','Supervisión',['supervisor'],[]]] as const) {
     if (!process.env[`DEMO_${kind}_EMAIL`] || !process.env[`DEMO_${kind}_PASSWORD`]) continue;
     const id = await upsertOperator(kind, name, 'asesor');
     await db.query('UPDATE operator_role SET capabilities=$2,specialties=$3 WHERE user_id=$1',[id,caps,specialties]);

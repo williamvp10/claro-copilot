@@ -9,11 +9,16 @@ if (!origin || process.env.DEMO_MODE!=='true') throw new Error('Run on a seeded 
 const db = new Client({connectionString:process.env.DATABASE_URL});
 await db.connect();
 
-async function http(path, {cookie,data,method='GET',status=200,token,endpoint=target}={}) {
+async function http(path, {cookie,data,method='GET',status=200,token,endpoint=target}={},attempt=0) {
   const response = await fetch(endpoint+path,{
     method,headers:{Origin:origin,...cookie&&{Cookie:cookie},...token&&{Authorization:'Bearer '+token},
       ...data&&{'Content-Type':'application/json'}},body:data&&JSON.stringify(data),signal:AbortSignal.timeout(7000)
   });
+  if (path==='/api/auth/sign-in/email' && response.status===429 && attempt<3) {
+    await response.body?.cancel();
+    await wait(11000);
+    return http(path,{cookie,data,method,status,token,endpoint},attempt+1);
+  }
   const body = await response.json();
   assert.equal(response.status,status,`${method} ${path}: ${JSON.stringify(body)}`);
   return {body, cookie:response.headers.getSetCookie().map(item=>item.split(';')[0]).join('; ')};
@@ -38,7 +43,7 @@ async function until(check, label) {
   throw new Error('Timeout: '+label);
 }
 
-async function assertDirectoryBilling(admin, advisor, superAdmin) {
+async function assertDirectoryBilling(admin, advisor) {
   const customerPath = '/crm/customers/C-1001';
   const billingPath = customerPath + '/billing';
 
@@ -57,13 +62,11 @@ async function assertDirectoryBilling(admin, advisor, superAdmin) {
   assert.ok(customer.servicios.length > 0);
 
   assert.equal((await get(admin, '/me')).body.can_read_mock_billing, true);
-  assert.equal((await get(superAdmin, '/me')).body.can_read_mock_billing, true);
   assert.equal((await get(advisor, '/me')).body.can_read_mock_billing, false);
   const { balance, invoices } = (await get(admin, billingPath)).body;
   assert.equal(balance.cliente_id, 'C-1001');
   assert.equal(invoices.length, 3);
   assert.ok(invoices.every(invoice => invoice.cliente_id === 'C-1001'));
-  assert.deepEqual((await get(superAdmin, billingPath)).body.invoices, invoices);
   const invoicePath = billingPath + '/invoices/' + invoices[0].factura_id;
   const invoice = (await get(admin, invoicePath)).body;
   assert.ok(invoice.detalle.length > 0);
@@ -80,21 +83,20 @@ async function assertDirectoryBilling(admin, advisor, superAdmin) {
   const nonDemoTarget = process.env.PLATFORM_NON_DEMO_E2E_TARGET;
   if (nonDemoTarget) {
     const read = (cookie, path, status) => http(api + path, { cookie, status, endpoint: nonDemoTarget });
-    for (const cookie of [admin, superAdmin]) {
-      assert.equal((await read(cookie, '/me')).body.can_read_mock_billing, false);
-      await read(cookie, billingPath, 403);
-      await read(cookie, invoicePath, 403);
-    }
+    assert.equal((await read(admin, '/me')).body.can_read_mock_billing, false);
+    assert.equal((await read(admin, '/me')).body.can_manage_administration, false);
+    await read(admin, billingPath, 403);
+    await read(admin, invoicePath, 403);
+    await read(admin, '/admin/operators', 403);
     assert.deepEqual((await read(admin, '/crm/customers?q=C-1001')).body, []);
-    assert.equal((await read(superAdmin, '/crm/customers?q=C-1001')).body[0].cliente_id, 'C-1001');
   }
 }
 
 async function main() {
-  const [admin,n1,n2,supervisor,superAdmin] = await Promise.all(
-    ['ADMIN','ASESSOR','N2','SUPERVISOR','SUPERADMIN'].map(account)
+  const [admin,n1,n2,supervisor] = await Promise.all(
+    ['ADMIN','ASESSOR','N2','SUPERVISOR'].map(account)
   );
-  await assertDirectoryBilling(admin, n1, superAdmin);
+  await assertDirectoryBilling(admin, n1);
   if (process.argv.includes('--directory-only')) {
     console.log('CRM directory and account billing verified through authenticated HTTP.');
     return;
@@ -143,13 +145,13 @@ async function main() {
   await write(admin,'/admin/prompts',{prompts:{advisor_empathy:'Texto sin variable'}},400);
   assert.equal((await get(admin,'/admin/prompts')).body.find(row=>row.activated).revision,active.revision);
 
-  await get(admin,'/admin/operators',403);
-  const newOperator=(await write(superAdmin,'/admin/operators',{
+  await get(n1,'/admin/operators',403);
+  const newOperator=(await write(admin,'/admin/operators',{
     name:'Segundo N2 de prueba',email:`n2-${randomUUID()}@example.test`,password:'Synthetic-operation-123',
     capabilities:['n2'],specialties:['soporte_tecnico'],enabled:true,available:true
   })).body;
   const otherN2=await signIn(newOperator.email,'Synthetic-operation-123');
-  const crm=(await get(superAdmin,'/crm/customers?q=C-1007')).body;
+  const crm=(await get(admin,'/crm/customers?q=C-1007')).body;
   assert.deepEqual(crm.map(row=>row.cliente_id),['C-1007']);
   await get(n2,'/crm/customers/C-1007',404);
   const {body:support} = await get(n1,'/cases');
@@ -162,21 +164,27 @@ async function main() {
   },'policy suggestion and private card');
   assert.ok(suggested.verified);
   await get(n2,`/cases/${scenario.id}`,404);
-  const escalated=(await write(n1,`/cases/${scenario.id}/escalations`,{
+  const escalationRequest={
     destination:'soporte_tecnico',reason_code:suggested.card.suggested_escalation.reason_code,
+    reason_text:'La luz LOS sigue roja y requiere una revisión técnica.',
     case_revision:suggested.revision,idempotency_key:randomUUID()
-  })).body;
+  };
+  const escalated=(await write(n1,`/cases/${scenario.id}/escalations`,escalationRequest)).body;
+  assert.equal((await write(n1,`/cases/${scenario.id}/escalations`,escalationRequest)).body.id,escalated.id);
+  assert.equal((await get(admin,'/escalations')).body.find(row=>row.id===escalated.id)?.can_claim,true);
+  assert.equal((await get(admin,'/escalations')).body.find(row=>row.id===escalated.id)?.reason_text,undefined);
+  await write(n1,`/cases/${scenario.id}/messages`,{text:'No se debe enviar durante la espera.',idempotency_key:randomUUID()},409);
   const claim = (cookie) => fetch(target+`${api}/escalations/${escalated.id}/claim`,{
-    method:'POST',headers:{Origin:origin,Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({case_revision:suggested.revision})
+    method:'POST',headers:{Origin:origin,Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({case_revision:escalated.case_revision})
   }).then(response=>({cookie,status:response.status}));
   const results=await Promise.all([claim(n2),claim(otherN2)]);
   assert.deepEqual(results.map(entry=>entry.status).sort(),[201,409]);
   const winner=results.find(entry=>entry.status===201).cookie;
   const handoff=(await get(winner,`/cases/${scenario.id}`)).body;
-  assert.equal(handoff.revision,suggested.revision+1);
-  assert.equal(handoff.messages.length,suggested.messages.length);
-  assert.equal(handoff.card.advisor_draft_status,'stale');
-  assert.equal(handoff.card.advisor_draft,undefined);
+  assert.equal(handoff.revision,escalated.case_revision+1);
+  assert.deepEqual(handoff.messages.filter(item=>!item.attention_notice),suggested.messages.filter(item=>!item.attention_notice));
+  assert.deepEqual(handoff.messages.slice(-2).map(item=>item.attention_notice),['escalated','escalation_taken']);
+  assert.equal(handoff.tracking.escalation.reason_text,escalationRequest.reason_text);
   await get(n1,`/cases/${scenario.id}`,404);
   await get(supervisor,`/cases/${scenario.id}`,404);
 
@@ -212,7 +220,7 @@ async function main() {
   await write(n1,`/escalations/${escalated.id}/resolve`,{case_revision:current.revision});
   const createdSpecialists=[];
   for (const specialty of ['facturacion','comercial_portabilidad']) {
-    const created=(await write(superAdmin,'/admin/operators',{
+    const created=(await write(admin,'/admin/operators',{
       name:`Especialista ${specialty} de prueba`,email:`${specialty}-${randomUUID()}@example.test`,password:'Synthetic-operation-123',
       capabilities:['n2'],specialties:[specialty],enabled:true,available:true
     })).body;
@@ -226,12 +234,12 @@ async function main() {
     const specialistQueue=(await get(specialist,'/escalations')).body;
     const queued=specialistQueue.find(item=>item.id===transfer.id);
     assert.equal(queued.destination,specialty);
-    assert.equal(queued.case_revision,current.revision);
+    assert.equal(queued.case_revision,transfer.case_revision);
     assert.equal(queued.messages,undefined);
     assert.ok(!(await get(otherN2,'/escalations')).body.some(item=>item.id===transfer.id));
     await get(specialist,`/cases/${scenario.id}`,404);
-    await write(otherN2,`/escalations/${transfer.id}/claim`,{case_revision:current.revision},409);
-    await write(specialist,`/escalations/${transfer.id}/claim`,{case_revision:current.revision});
+    await write(otherN2,`/escalations/${transfer.id}/claim`,{case_revision:transfer.case_revision},409);
+    await write(specialist,`/escalations/${transfer.id}/claim`,{case_revision:transfer.case_revision});
     await get(n1,`/cases/${scenario.id}`,404);
     const assigned=(await get(specialist,`/cases/${scenario.id}`)).body;
     assert.equal(assigned.owner_id,created.id);
@@ -248,7 +256,7 @@ async function main() {
     assert.equal(review.messages,undefined);
     const supervisorQueue=(await get(supervisor,'/escalations')).body.find(item=>item.id===forwarded.id);
     assert.equal(supervisorQueue.destination,'supervision');
-    await write(supervisor,`/escalations/${forwarded.id}/claim`,{case_revision:assigned.revision});
+    await write(supervisor,`/escalations/${forwarded.id}/claim`,{case_revision:forwarded.case_revision});
     const supervised=(await get(supervisor,`/cases/${scenario.id}`)).body;
     assert.equal(supervised.conversation_id,suggested.conversation_id);
     await reassign(forwarded.id,supervised.revision);
@@ -259,70 +267,68 @@ async function main() {
   const cancelled=(await write(n1,`/cases/${scenario.id}/escalations`,{
     destination:'soporte_tecnico',reason_code:'cancelacion_prueba',case_revision:current.revision,idempotency_key:randomUUID()
   })).body;
-  assert.ok((await get(superAdmin,'/escalations')).body.some(item=>item.id===cancelled.id));
-  await write(n1,`/escalations/${cancelled.id}/cancel`,{case_revision:current.revision});
-  await write(otherN2,`/escalations/${cancelled.id}/claim`,{case_revision:current.revision},409);
+  assert.ok((await get(admin,'/escalations')).body.some(item=>item.id===cancelled.id));
+  const restored=(await write(n1,`/escalations/${cancelled.id}/cancel`,{case_revision:cancelled.case_revision})).body;
+  await write(otherN2,`/escalations/${cancelled.id}/claim`,{case_revision:restored.case_revision},409);
 
   // A dedicated mock customer exercises directory permissions, revision fencing and idempotency.
   let customerRef;
   for (let index=0;index<100;index++) {
     const ref='C-'+String(8000+Math.floor(Math.random()*1000));
-    if (!(await get(superAdmin,`/crm/customers?q=${ref}`)).body.some(item=>item.cliente_id===ref)) { customerRef=ref; break; }
+    if (!(await get(admin,`/crm/customers?q=${ref}`)).body.some(item=>item.cliente_id===ref)) { customerRef=ref; break; }
   }
   assert.ok(customerRef,'Need an unused synthetic customer id');
   const key=randomUUID(),suffix=randomUUID().slice(0,8),name=`Cliente sintetico ${suffix}`;
   const createCustomer={cliente_id:customerRef,nombre:name,tipo_documento:'CC',numero_documento:`test-${suffix}`,
     celular:`9${Date.now()}${Math.floor(Math.random()*100)}`,email:`synthetic-${suffix}@example.test`,motivo:'Alta sintetica',idempotency_key:key};
   await write(admin,'/admin/customers',createCustomer,403);
-  const receipt=(await write(superAdmin,'/admin/customers',createCustomer)).body;
-  assert.deepEqual((await write(superAdmin,'/admin/customers',createCustomer)).body,receipt);
+  const receipt=(await write(admin,'/admin/customers',createCustomer)).body;
+  assert.deepEqual((await write(admin,'/admin/customers',createCustomer)).body,receipt);
   assert.equal(receipt.revision,1);
-  assert.equal((await get(superAdmin,`/crm/customers?q=${encodeURIComponent(name)}&offset=0&limit=1`)).body[0].cliente_id,customerRef);
+  assert.equal((await get(admin,`/crm/customers?q=${encodeURIComponent(name)}&offset=0&limit=1`)).body[0].cliente_id,customerRef);
   await get(n1,`/crm/customers/${customerRef}`,404);
   assert.match((await get(admin, `/crm/customers/${customerRef}/billing`, 404)).body.message, /no tiene registro/);
-  const customer=(await get(superAdmin,`/crm/customers/${customerRef}`)).body;
+  const customer=(await get(admin,`/crm/customers/${customerRef}`)).body;
   assert.notEqual(customer.customer.email,createCustomer.email);
   assert.notEqual(customer.customer.celular,createCustomer.celular);
   assert.ok(Array.isArray(customer.customer.servicios) && Array.isArray(customer.customer.tickets_recientes));
   const update={revision:1,motivo:'Cambio sintetico',nombre:`${name} actualizado`,idempotency_key:randomUUID()};
-  await write(admin, `/admin/customers/${customerRef}`, update, 403, 'PATCH');
-  assert.equal((await write(superAdmin,`/admin/customers/${customerRef}`,update,200,'PATCH')).body.revision,2);
-  await write(superAdmin,`/admin/customers/${customerRef}`,{...update,idempotency_key:randomUUID()},409,'PATCH');
-  assert.equal((await get(superAdmin,`/crm/customers/${customerRef}`)).body.customer.nombre,update.nombre);
-  const history=(await get(superAdmin,'/crm/customers/C-1013')).body.case_history;
-  assert.ok(history.some(row=>row.case_id===scenario.id));
+  await write(n1, `/admin/customers/${customerRef}`, update, 403, 'PATCH');
+  assert.equal((await write(admin,`/admin/customers/${customerRef}`,update,200,'PATCH')).body.revision,2);
+  await write(admin,`/admin/customers/${customerRef}`,{...update,idempotency_key:randomUUID()},409,'PATCH');
+  assert.equal((await get(admin,`/crm/customers/${customerRef}`)).body.customer.nombre,update.nombre);
+  const history=(await get(admin,'/crm/customers/C-1013')).body.case_history;
+  assert.ok(history.every(row=>row.case_id!==scenario.id));
   assert.ok(history.every(row=>row.messages===undefined && row.card===undefined));
-  const adminHistory = (await get(admin, '/crm/customers/C-1013')).body.case_history;
-  assert.ok(adminHistory.every(row => row.case_id !== scenario.id));
   await get(admin, `/cases/${scenario.id}`, 404);
-  const auditRows=(await get(superAdmin,'/admin/audit')).body;
+  const auditRows=(await get(admin,'/admin/audit')).body;
   assert.ok(auditRows.some(row=>row.kind==='customer_created' && row.metadata.customer_ref===customerRef));
   assert.ok(auditRows.some(row=>row.kind==='escalation_claim' && row.case_id===scenario.id));
 
   const disabled=createdSpecialists[0];
   const oldSession=await signIn(disabled.email,'Synthetic-operation-123');
-  await write(superAdmin,`/admin/operators/${disabled.id}`,{
+  await write(admin,`/admin/operators/${disabled.id}`,{
     capabilities:disabled.capabilities,specialties:disabled.specialties,enabled:false,available:false
   },200,'PATCH');
   await get(oldSession,'/me',401);
   // With no available billing specialist, the waiting case remains with N1 and appears to supervision.
-  const seededN2=(await get(superAdmin,'/admin/operators')).body.find(operator=>operator.email===process.env.DEMO_N2_EMAIL);
+  const seededN2=(await get(admin,'/admin/operators')).body.find(operator=>operator.email===process.env.DEMO_N2_EMAIL);
   assert.ok(seededN2);
   const fields=operator=>({capabilities:operator.capabilities,specialties:operator.specialties,enabled:operator.enabled,available:operator.available});
   try {
-    await write(superAdmin,`/admin/operators/${seededN2.id}`,{...fields(seededN2),available:false},200,'PATCH');
+    await write(admin,`/admin/operators/${seededN2.id}`,{...fields(seededN2),available:false},200,'PATCH');
     current=(await get(n1,`/cases/${scenario.id}`)).body;
     const waiting=(await write(n1,`/cases/${scenario.id}/escalations`,{
       destination:'facturacion',reason_code:'sin_especialista',case_revision:current.revision,idempotency_key:randomUUID()
     })).body;
     assert.ok((await get(supervisor,'/escalations')).body.some(item=>item.id===waiting.id));
     assert.equal((await get(n1,`/cases/${scenario.id}`)).body.owner_id,n1Id);
-    await write(n1,`/escalations/${waiting.id}/cancel`,{case_revision:current.revision});
+    await write(n1,`/escalations/${waiting.id}/cancel`,{case_revision:waiting.case_revision});
   } finally {
-    await write(superAdmin,`/admin/operators/${seededN2.id}`,fields(seededN2),200,'PATCH');
+    await write(admin,`/admin/operators/${seededN2.id}`,fields(seededN2),200,'PATCH');
   }
-  const self=(await get(superAdmin,'/me')).body;
-  await write(superAdmin,`/admin/operators/${self.id}`,{
+  const self=(await get(admin,'/me')).body;
+  await write(admin,`/admin/operators/${self.id}`,{
     capabilities:[],specialties:[],enabled:false,available:false
   },409,'PATCH');
   console.log('MVP evolution verified through HTTP: metric groups, synthetic release evidence, prompt gates, CRM scope, all escalation queues, CRM and operator administration, and private drafts.');

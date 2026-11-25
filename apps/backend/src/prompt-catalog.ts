@@ -146,11 +146,13 @@ export function runPromptDigest(config:RunPromptConfig) {
     .map(([key,value])=>[key,value.version,value.sha256])));
 }
 
-export async function readRunPromptConfig(db: DataSource | EntityManager, revision: string, includeTurnBrief=false): Promise<RunPromptConfig> {
+export async function readRunPromptConfig(db: DataSource | EntityManager, revision: string, includeTurnBrief=false, assisted=false): Promise<RunPromptConfig> {
   const [row]: PromptRevisionRow[] = await db.query('SELECT revision,prompts,manifest FROM prompt_revision WHERE revision=$1', [revision]);
   if (!row) return { revision, prompts: {}, prompt_metadata: {} };
   const config=runPromptConfig(row);
-  if (includeTurnBrief) for (const key of ['conversation_extract','orchestrated_public_answer']) {
+  const fallbackKeys = [...(includeTurnBrief ? ['conversation_extract','orchestrated_public_answer'] : []),
+    ...(assisted ? ['assisted_case_summary','escalation_reason','assisted_reply'] : [])];
+  for (const key of fallbackKeys) {
     if (config.prompts[key]) continue;
     const definition=definitions.get(key)!;
     const {template,...metadata}=promptEntry(key,definition.template,'git_bootstrap');

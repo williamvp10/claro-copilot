@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { synchronizeDiscount } from './retention-discount.js';
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { setTimeout as wait } from 'node:timers/promises';
@@ -40,8 +41,8 @@ const basePorts = businessPorts(db);
 const ports = process.env.CRM_MCP_URL && process.env.BILLING_MCP_URL ? integrationMcpPorts(db, basePorts) : basePorts;
 const runner = createAgent({
   ...ports,
-  async getAgentConfig(revision,modelRevision,modelDigest) {
-    const [config,modelPolicy]=await Promise.all([readRunPromptConfig(db,revision,!!modelRevision),
+  async getAgentConfig(revision,modelRevision,modelDigest,assisted) {
+    const [config,modelPolicy]=await Promise.all([readRunPromptConfig(db,revision,!!modelRevision,assisted),
       modelRevision ? loadAgentModelPolicy(db,modelRevision,modelDigest) : undefined]);
     return {...config,modelPolicy,promptManifestDigest:runPromptDigest(config)};
   }
@@ -74,8 +75,11 @@ const runner = createAgent({
 async function claim(db: DataSource, ml: boolean): Promise<CaseJob | undefined> {
   const token = randomUUID();
   const [jobs] = await db.query(`WITH job AS (
-    SELECT id FROM outbox WHERE (kind IN ('ml','ml_churn','ml_label'))=$1 AND (attempts<5 OR kind IN ('effect','integration')) AND
+    SELECT current_job.id FROM outbox current_job WHERE (kind IN ('ml','ml_churn','ml_label'))=$1 AND (attempts<5 OR kind IN ('effect','integration','retention')) AND
       ((status='queued' AND available_at<=now()) OR (status='processing' AND lease_until<=now()))
+      AND (kind<>'deliver' OR NOT EXISTS (SELECT 1 FROM outbox prior WHERE prior.case_id=current_job.case_id
+        AND prior.kind='deliver' AND prior.status IN ('queued','processing') AND prior.attempts<5
+        AND (prior.created_at,prior.id)<(current_job.created_at,current_job.id)))
     ORDER BY available_at,created_at,id LIMIT 1 FOR UPDATE SKIP LOCKED
   ) UPDATE outbox o SET status='processing',attempts=o.attempts+1,lease_token=$2,lease_until=now()+interval '60 seconds'
     FROM job WHERE o.id=job.id RETURNING o.*`, [ml, token]);
@@ -200,7 +204,8 @@ async function resume(result: RunResume) {
   await db.transaction(async (tx) => {
     const { row, turn } = await runContext(tx, result.run_id, true);
     if (!stillCurrent(row, turn) || row.snapshot.card?.proposal?.id !== result.effect_id) return;
-    row.snapshot.card = { ...generated.card, proposal: row.snapshot.card.proposal };
+    row.snapshot.card = { ...generated.card, proposal: row.snapshot.card.proposal,
+      summary_update:{at:new Date().toISOString(),turn_id:turn.turn_id,revision:row.snapshot.revision,origin:'evidencia'} };
     await saveCase(tx, row);
   });
 }
@@ -217,7 +222,7 @@ async function deliver(job: Extract<CaseJob, {kind: 'deliver'}>) {
       await audit(tx, row.id, 'telegram_stale');
       return;
     }
-    if (sender === 'sistema' && turn_seq !== undefined && row.snapshot.status !== 'open') return;
+    if (sender === 'sistema' && !job.payload.attention_notice && turn_seq !== undefined && row.snapshot.status !== 'open') return;
     const [contact] = await tx.query('SELECT chat_id FROM telegram_contact WHERE ref=$1 AND enabled', [row.contact_ref]);
     const token = process.env.TELEGRAM_BOT_TOKEN;
     if (!token || !contact?.chat_id) {
@@ -279,7 +284,7 @@ async function handle(job: CaseJob) {
       }
       if (!stillCurrent(row, job.payload)) return audit(db.manager, job.case_id, 'agent_stale');
       const started = Date.now();
-      const promptConfig = await readRunPromptConfig(db, job.payload.config_revision,!!job.payload.model_config_revision);
+      const promptConfig = await readRunPromptConfig(db, job.payload.config_revision,!!job.payload.model_config_revision,job.payload.assisted_summary);
       const spans: AgentObservation[] = [];
       observations.set(job.payload.run_id, spans);
       const result = await runner.run(job.payload).finally(() => observations.delete(job.payload.run_id));
@@ -332,6 +337,7 @@ async function handle(job: CaseJob) {
       break;
     }
     case 'integration': await executeIntegration(db,job.case_id,job.payload.operation_id); break;
+    case 'retention': await synchronizeDiscount(db,job.case_id,job.payload.discount_id); break;
     case 'deliver': await deliver(job); break;
     case 'ml': await predictIntent(db,job.payload); break;
     case 'ml_churn': await predictChurn(db,job.case_id,job.payload); break;
@@ -353,7 +359,7 @@ async function poll(ml: boolean) {
         await handle(job);
         await db.query("UPDATE outbox SET status='done',lease_until=NULL WHERE id=$1 AND lease_token=$2", [job.id, job.lease_token]);
       } catch (error) {
-        const reconcile = job.kind === 'effect' || job.kind === 'integration';
+        const reconcile = job.kind === 'effect' || job.kind === 'integration' || job.kind === 'retention';
         if (job.attempts === 5) await audit(db.manager,job.case_id,'job_failed',{kind:job.kind});
         const retry = reconcile || job.attempts < 5;
         const backoff = reconcile ? Math.min(60,2 ** Math.min(job.attempts,6)) : 1;

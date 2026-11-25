@@ -7,7 +7,7 @@ import {
 } from '@claro/contracts';
 import type { DataSource, EntityManager } from 'typeorm';
 import type { z } from 'zod';
-import { checkCase, clearPersonalData, customerReference, loadCase, saveCase } from './cases.js';
+import { checkCase, clearPersonalData, customerReference, latestAnalyzable, loadCase, saveCase } from './cases.js';
 import { DATABASE, audit, enqueue, type CaseRow } from './database.js';
 import { SimulatorFailure, simulators } from './simulator-client.js';
 
@@ -203,6 +203,12 @@ async function project(tx: EntityManager, row: CaseRow, record: OperationRow) {
       await audit(tx,row.id,'retention_confirmed');
     } else {
       await audit(tx,row.id,'billing_adjustment_confirmed');
+    }
+    const card=row.snapshot.card, turn=latestAnalyzable(row.snapshot);
+    if (card && turn && record.reference) {
+      const effect=record.action.kind==='ticket' ? 'Ticket de soporte' : record.action.kind==='offer' ? 'Oferta' : 'Ajuste de facturación';
+      card.summary=`${card.summary}\n${effect} registrado · ${record.reference}.`;
+      card.summary_update={at:new Date().toISOString(),turn_id:turn.id,revision:row.snapshot.revision,origin:'evidencia'};
     }
   }
   if (agent && (record.status === 'confirmed' || record.status === 'rejected' || record.status === 'expired')) {

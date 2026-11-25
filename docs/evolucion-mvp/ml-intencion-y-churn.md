@@ -87,6 +87,8 @@ El score de intención es una separación de clases sin calibrar. La recomendaci
 
 El seguimiento usa `POST /api/v1/cases/:id/ml/follow-up` con `case_revision`, `event_id` y `status`. Para `agreed` requiere fecha de compromiso y una banda disponible para el titular. El servidor asigna como responsable al asesor que acuerda. Para `completed` requiere un acuerdo del mismo caso y titular. El asesor asignado puede completarlo desde la ficha de un caso cerrado. Una transacción permite un seguimiento por caso y titular y protege los reintentos concurrentes. Este registro es interno y queda asociado a la versión y corte que orientaron al asesor.
 
+La ampliación propuesta agrega fechas sugeridas por prioridad, programación manual para titulares verificados sin predicción y una agenda operativa después del cierre. [Especificación de cierre y seguimiento](../../specs/002-atencion-asistida/spec.md#at-08--cierre-y-seguimiento)
+
 | Alias para el OTP de demo | Cuenta en CRM y facturación | Prioridad con `churn-logistic-1` | Qué probar |
 | --- | --- | --- | --- |
 | `11111` · `cliente1@example.test` | C-1001 | Habitual | Saldo y plan activo de una cuenta convergente. |

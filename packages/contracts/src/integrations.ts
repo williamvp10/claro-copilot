@@ -34,15 +34,53 @@ export const Customer = z.object({
 });
 export const Eligibility = z.object({
   eligible: z.boolean(), reason: z.string(), options: z.array(z.object({
-    id: z.enum(['discount', 'upgrade']), codigo: OfferCode, title: z.string(), detail: z.string()
+    id: z.enum(['discount', 'upgrade']), codigo: OfferCode, title: z.string(), detail: z.string(),
+    discount: z.object({percentage:z.number().int().positive(),cycles:z.number().int().min(1).max(12)}).optional()
   }))
 });
+export const RETENTION_POLICY_VERSION = 'POL-RET-2026 v3.1';
+export const DiscountTerms = z.object({
+  service_id:z.string().min(1).max(128), plan:z.string().min(1).max(160),
+  base:z.number().int().positive().lte(10_000_000), percentage:z.number().int().min(1).max(100),
+  cycles:z.number().int().min(1).max(12), policy_version:z.literal(RETENTION_POLICY_VERSION)
+}).strict();
+export type DiscountTerms = z.infer<typeof DiscountTerms>;
+export const BillingPeriod = z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/);
+export const InvoiceDiscount = DiscountTerms.extend({
+  offer_ref:z.string(), amount:z.number().int().nonnegative(), net:z.number().int().nonnegative()
+});
+export const DiscountOffer = z.object({
+  terms:DiscountTerms, approval_id:z.string().min(1).max(128), acceptance_id:z.string().min(1).max(128),
+  previous_offer:z.string().min(1).max(128).optional()
+}).strict();
+export const DiscountSchedule = z.object({
+  terms:DiscountTerms, offer_ref:z.string().min(1).max(128)
+}).strict();
+export const BillingDiscount = DiscountSchedule.extend({
+  start_period:BillingPeriod,end_period:BillingPeriod,next_period:BillingPeriod,
+  last_invoice:InvoiceId.optional()
+});
+export type BillingDiscount = z.infer<typeof BillingDiscount>;
+export const CaseDiscount = z.object({
+  id:z.string(), terms:DiscountTerms, requested_by:z.string(),
+  status:z.enum(['requested','authorized','accepted','crm_confirmed','scheduled']),
+  authorized_turn:z.number().int().nonnegative().optional(),
+  approval_id:z.string().optional(),
+  previous_offer:z.string().optional(), crm_ref:z.string().optional(), accepted_message_id:z.string().optional(),
+  schedule:BillingDiscount.optional(), error:z.string().nullable().optional()
+});
+export type CaseDiscount = z.infer<typeof CaseDiscount>;
+export function demoDiscountLimit(value:string | undefined) {
+  const limit=Number(value ?? '35');
+  return Number.isInteger(limit) && limit>=30 && limit<=100 ? limit : 30;
+}
 export const Invoice = z.object({
   factura_id: InvoiceId, cliente_id: CustomerId, periodo: z.string(), fecha_corte: z.iso.date(),
   fecha_limite_pago: z.iso.date(), valor_total: z.number().int(),
   detalle: z.array(z.object({ concepto: z.string(), valor: z.number().int() })),
   estado: z.enum(['pagada', 'pendiente', 'vencida']), fecha_pago: z.iso.date().nullable(),
-  saldo_abierto: z.number().int().nonnegative(), total_ajustado: z.number().int().nonnegative()
+  saldo_abierto: z.number().int().nonnegative(), total_ajustado: z.number().int().nonnegative(),
+  descuentos:z.array(InvoiceDiscount).optional()
 });
 export const Balance = z.object({
   cliente_id: CustomerId, saldo_pendiente: z.number().int(), saldo_vencido: z.number().int(),
@@ -54,7 +92,7 @@ export const AdjustmentInput = z.object({
 export const Adjustment = AdjustmentInput.extend({ ajuste_id: z.string(), fecha: z.iso.date() });
 export const InvoiceDetail = Invoice.extend({ ajustes: z.array(Adjustment) });
 export const Receipt = z.object({
-  clave: OperationKey, referencia: z.string(), tipo: z.enum(['ticket', 'oferta', 'ajuste'])
+  clave: OperationKey, referencia: z.string(), tipo: z.enum(['ticket', 'oferta', 'ajuste','programacion','factura'])
 });
 export const ManualAction = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('ticket'), ticket: TicketInput }),

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CustomerId, OfferInput, TicketInput } from '@claro/contracts';
+import { CustomerId, DiscountOffer, OfferInput, TicketInput, demoDiscountLimit } from '@claro/contracts';
 import { ApiError, notFound, operation } from './storage.mjs';
 
 async function customer(db, ref) {
@@ -43,7 +43,7 @@ export function retentionEligibility(profile, recentOffers, recentTickets) {
     const charge = onlyPlan ? ` de $${new Intl.NumberFormat('es-CO').format(onlyPlan.valor_mensual)}` : '';
     options = [
       { id:'discount', codigo:'RET-A', title:`${senior ? 30 : 20} % de descuento`,
-        detail:`Sobre el cargo fijo${charge}, durante ${term}.` },
+        detail:`Sobre el cargo fijo${charge}, durante ${term}.`, discount:{percentage:senior ? 30 : 20,cycles:senior ? 6 : 3} },
       { id:'upgrade', codigo:'RET-B', title:exact ? 'Mejora a Fibra 500' : 'Mejora al siguiente plan',
         detail:`Sin costo adicional durante ${term}.` }
     ];
@@ -116,8 +116,12 @@ export function crmRoutes(router, pool, date, write) {
   });
   router.get('/clientes/:id/elegibilidad-retencion', async (req, res) => {
     const ref = CustomerId.parse(req.params.id);
+    const previous=z.string().max(128).optional().parse(req.query.previous);
     const { profile } = await customer(pool,ref);
-    const [recentOffers, recentTickets] = await Promise.all([offers(pool,ref,date), tickets(pool,ref,date,90)]);
+    const recent=previous ? pool.query(`SELECT body FROM crm_offer WHERE customer_ref=$1
+      AND business_date BETWEEN $2::date - interval '12 months' AND $2::date
+      AND (ref<>$3 OR body->>'codigo'<>'RET-A')`,[ref,date,previous]).then(result=>result.rows.map(row=>row.body)) : offers(pool,ref,date);
+    const [recentOffers, recentTickets] = await Promise.all([recent, tickets(pool,ref,date,90)]);
     res.json(retentionEligibility(profile, recentOffers, recentTickets));
   });
   router.post('/clientes/:id/tickets', async (req, res) => {
@@ -144,6 +148,35 @@ export function crmRoutes(router, pool, date, write) {
       const body = { ...payload, descripcion:`${option.title}. ${option.detail}`, fecha:date };
       await db.query('INSERT INTO crm_offer VALUES ($1,$2,$3,$4)', [id,ref,date,body]);
       return { type:'oferta' };
+    }));
+  });
+  router.post('/clientes/:id/descuentos-retencion', async (req,res) => {
+    const ref=CustomerId.parse(req.params.id);
+    const input=DiscountOffer.parse(req.body);
+    await write(req,res,key=>operation(pool,key,{type:'descuento_retencion',ref,input},async (db,id)=>{
+      await db.query("SELECT pg_advisory_xact_lock(hashtext('crm-customer'),hashtext($1))",[ref]);
+      const {profile}=await customer(db,ref);
+      const {terms,previous_offer}=input;
+      const service=profile.servicios.find(item=>item.servicio_id===terms.service_id && item.estado==='activo');
+      if (service?.plan!==terms.plan || service.valor_mensual!==terms.base) {
+        throw new ApiError(409,'SERVICIO_CAMBIO','El servicio o su cargo fijo cambió');
+      }
+      const {rows:recent}=await db.query(`SELECT ref,body,business_date::text FROM crm_offer
+        WHERE customer_ref=$1 AND business_date BETWEEN $2::date - interval '12 months' AND $2::date`,[ref,date]);
+      const amendment=recent.find(item=>item.ref===previous_offer && item.body.codigo==='RET-A');
+      if (previous_offer && !amendment) throw new ApiError(409,'OFERTA_CAMBIO','La oferta de referencia ya no aplica');
+      const eligibility=retentionEligibility(profile,recent.filter(item=>item!==amendment).map(item=>item.body),await tickets(db,ref,date,90));
+      const standard=eligibility.options.find(item=>item.codigo==='RET-A')?.discount;
+      if (!standard || terms.cycles!==standard.cycles || terms.percentage<standard.percentage ||
+          terms.percentage>demoDiscountLimit(process.env.DEMO_RETENTION_MAX_PERCENT)) {
+        throw new ApiError(409,'NO_ELEGIBLE',eligibility.eligible ? 'Condiciones fuera de política' : eligibility.reason);
+      }
+      const reference=amendment?.ref ?? id;
+      const body={codigo:'RET-A',descripcion:`${terms.percentage} % sobre el cargo fijo de ${terms.plan} durante ${terms.cycles} ciclos.`,
+        fecha:amendment?.business_date ?? date,asesor_id:input.approval_id,terms,acceptance_id:input.acceptance_id};
+      if (amendment) await db.query('UPDATE crm_offer SET body=$2 WHERE ref=$1',[reference,body]);
+      else await db.query('INSERT INTO crm_offer VALUES ($1,$2,$3,$4)',[reference,ref,date,body]);
+      return {type:'oferta',body:{oferta_id:reference}};
     }));
   });
 }

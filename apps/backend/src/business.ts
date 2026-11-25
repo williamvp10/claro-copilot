@@ -55,14 +55,20 @@ export function businessPorts(db: DataSource): AgentPorts {
   }
   return {
     readCaseForRun: (runId) => scoped(runId, false, async (tx, row, turn) => {
-      const [support]=turn.actor==='cliente' && waitingForSupportVisit(turn.text) ? await tx.query(`SELECT EXISTS(SELECT 1 FROM escalation WHERE case_id=$1
-        AND destination='soporte_tecnico' AND status IN ('en_cola','tomado')) AS pending`,[row.id]) : [];
+      const [escalation]=turn.audience==='asesor' || turn.actor==='cliente' && waitingForSupportVisit(turn.text)
+        ? await tx.query(`SELECT destination,status FROM escalation WHERE case_id=$1 AND status IN ('en_cola','tomado')`,[row.id]) : [];
       return {
-        messages: row.snapshot.messages.filter(m => !m.verification_input).map(m => ({ ...m, text: clearPersonalData(m.text) })),
+        messages: row.snapshot.messages.filter(m => !m.verification_input && !m.attention_notice).map(m => ({ ...m, text: clearPersonalData(m.text) })),
         verified: row.snapshot.verified, pending: row.handoff_pending, handoff_reason:row.snapshot.handoff_reason, intake: row.snapshot.intake, conversation_memory: row.snapshot.conversation_memory,
         public_route: row.snapshot.public_route,
         conversation_context: row.snapshot.conversation_context,
-        pending_support_handoff:support?.pending===true,
+        pending_support_handoff:escalation?.destination==='soporte_tecnico' && turn.actor==='cliente' && waitingForSupportVisit(turn.text),
+        assigned_destination:escalation?.status==='tomado' ? escalation.destination : undefined,
+        retention_discount:turn.audience==='asesor' && row.snapshot.verified ? row.snapshot.retention_discount : undefined,
+        billable_retention:process.env.DEMO_MODE==='true' && turn.channel==='web' && turn.audience==='asesor' && row.snapshot.verified,
+        previous_summary:turn.audience==='asesor' && row.snapshot.card ? {
+          text:clearPersonalData(row.snapshot.card.summary),pending:row.snapshot.card.pending.map(clearPersonalData)
+        } : undefined,
         confirmed_receipts: turn.audience === 'asesor' && row.snapshot.verified ? await confirmedCaseReceipts(tx,row.id) : []
       };
     }),

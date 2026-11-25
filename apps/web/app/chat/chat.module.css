@@ -7,6 +7,17 @@
 .title { display: flex; align-items: center; gap: 13px; padding: 18px 24px; border-bottom: 1px solid var(--border); }
 .title h1 { font-size: 20px; letter-spacing: -.4px; }
 .title p { color: #5d626c; font-size: 13px; }
+.title .attentionState { display: flex; gap: 6px; align-items: center; width: fit-content; margin-top: 3px; }
+.title .attentionState[data-state] { border-radius: 6px; padding: 3px 7px; font-weight: 650; }
+.title .attentionState[data-state='waiting'] { color: #1e40af; background: #eff6ff; }
+.attentionState[data-state='waiting'] svg { flex: none; animation: attention-spin 1.5s linear infinite; }
+.title .attentionState[data-state='assigned'], .attentionNotice[data-state='assigned'] { color: #166534; background: #f0fdf4; }
+.title .attentionState[data-state='escalated'], .attentionNotice[data-state='escalated'] { color: #92400e; background: #fffbeb; }
+.attentionNotice { display: flex; align-self: center; gap: 9px; align-items: flex-start; max-width: 100%; border-radius: 10px; padding: 10px 14px; font-size: 13px; }
+.attentionNotice svg { flex: none; margin-top: 1px; }
+.attentionNotice p { overflow-wrap: anywhere; }
+@keyframes attention-spin { to { transform: rotate(1turn); } }
+@media (prefers-reduced-motion: reduce) { .attentionState[data-state='waiting'] svg { animation: none; } }
 .newChat { margin-inline-start: auto; white-space: nowrap; }
 .avatar { display: grid; place-items: center; flex-shrink: 0; width: 43px; height: 43px; border-radius: 50%; color: var(--primary); background: #fae8eb; }
 .history { display: flex; flex-direction: column; overflow: auto; gap: 14px; padding: 24px; min-width: 0; scroll-behavior: smooth; }

@@ -13,11 +13,19 @@ const datasetOnly = args.includes('--dataset-only');
 const namedManifest = args.includes('--manifest-evaluator');
 const catalogue = args.includes('--catalogue');
 const context = args.includes('--context');
-if (args.length !== Number(datasetOnly)+Number(namedManifest)+Number(catalogue)+Number(context) ||
-    datasetOnly && namedManifest || catalogue && context) {
-  throw new Error('Uso: bootstrap-langfuse-calls.mjs [--catalogue | --context] [--dataset-only | --manifest-evaluator]');
+const assisted = args.includes('--assisted');
+const retention = args.includes('--retention');
+const suites = Number(catalogue)+Number(context)+Number(assisted)+Number(retention);
+if (args.length !== Number(datasetOnly)+Number(namedManifest)+suites || datasetOnly && namedManifest || suites>1) {
+  throw new Error('Uso: bootstrap-langfuse-calls.mjs [--catalogue | --context | --assisted | --retention] [--dataset-only | --manifest-evaluator]');
 }
-const dataset = context ? {
+const dataset = retention ? {
+  name:'claro-retencion-seguimiento-v1',description:'Oferta en voz del asesor, excepción, ciclo facturado y cierre contextual por web',
+  source:'retencion-seguimiento-evals.v1.jsonl',items:3
+} : assisted ? {
+  name:'claro-atencion-asistida-v1',description:'Resumen, motivo editable y continuidad de la respuesta después de un escalamiento',
+  source:'atencion-asistida-evals.v1.jsonl',items:3
+} : context ? {
   name:'claro-contexto-conversacional-v1',description:'Cambios de tema y retomadas en chats largos del demo',
   source:'contexto-conversacional-evals.v1.jsonl',items:2
 } : catalogue ? {
@@ -44,7 +52,7 @@ const items = suite.toString('utf8').trim().split(/\r?\n/).map(line => {
   const { id, turns, intent, required, forbidden, sources, fixture } = JSON.parse(line);
   const nonEmptyStrings = values => Array.isArray(values) && values.length > 0 &&
     values.every(value => typeof value === 'string' && value.trim());
-  if (!(context ? /^CTX-\d{2}$/ : catalogue ? /^COM-\d{2}$/ : /^TRX-\d{4}$/).test(id) || typeof intent !== 'string' || !intent.trim() ||
+  if (!(retention ? /^(RET|SEG)-\d{2}$/ : assisted ? /^HITL-\d{2}$/ : context ? /^CTX-\d{2}$/ : catalogue ? /^COM-\d{2}$/ : /^TRX-\d{4}$/).test(id) || typeof intent !== 'string' || !intent.trim() ||
       context && fixture!=='standard' ||
       catalogue && !['standard','edition-change','conflict','reserved'].includes(fixture) ||
       ![turns, required, forbidden, sources].every(nonEmptyStrings)) {

@@ -3,6 +3,7 @@ import type { DataSource, EntityManager } from 'typeorm';
 import { CaseMlSignals, Intent, type AgentTurn } from '@claro/contracts';
 import { audit, enqueue, type CaseRow } from './database.js';
 import { customerReference, latestAnalyzable, loadCase, saveCase } from './cases.js';
+import { bogotaDate, recommendedFollowUp } from './follow-up.js';
 
 const counts=z.object({cancelacion:z.number().int().nonnegative(),consulta_planes:z.number().int().nonnegative(),facturacion:z.number().int().nonnegative(),portabilidad:z.number().int().nonnegative(),soporte_tecnico:z.number().int().nonnegative(),categoria_no_disponible:z.number().int().nonnegative()}).strict();
 export const ChurnFeatures=z.object({fecha_corte:z.iso.date(),ciudad:z.string().min(1).max(100).nullable(),tipo_servicio:z.enum(['hogar','movil','convergente']),plan_hogar:z.string().min(1).max(100).nullable(),plan_movil:z.string().min(1).max(100).nullable(),metodo_pago:z.string().min(1).max(100),valor_mensual:z.number().finite().nonnegative(),antiguedad_meses:z.number().int().nonnegative().nullable(),dias_mora:z.number().int().nonnegative(),tickets_90d:z.number().int().nonnegative(),tickets_tecnicos_90d:z.number().int().nonnegative(),caidas_servicio_90d:z.number().int().nonnegative().nullable(),uso_datos_gb_mes:z.number().finite().nonnegative().nullable(),nps_ultimo:z.number().int().min(0).max(10).nullable(),ofertas_retencion_12m:z.number().int().min(0).max(1),historial_30d:counts,historial_90d:counts,dias_desde_ultimo_ticket:z.number().finite().positive().nullable()}).strict().superRefine((v,ctx)=>{
@@ -52,10 +53,10 @@ export function demoChurnFeatures(customer:DemoCustomer, cutoff:string) {
   });
 }
 
-async function call(path:string,body:unknown) {
+async function call(path:string,body:unknown,timeout=1000) {
   const url=process.env.ML_API_URL, token=process.env.ML_SERVICE_TOKEN;
   if (!url || !token) throw new Error('ML no configurado');
-  const response=await fetch(new URL(path,url),{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify(body),signal:AbortSignal.timeout(1000)});
+  const response=await fetch(new URL(path,url),{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify(body),signal:AbortSignal.timeout(timeout)});
   if (!response.ok) throw new Error('ML no disponible');
   return response.json();
 }
@@ -70,16 +71,19 @@ export async function privateSignals(db:Pick<EntityManager,'query'>,row:CaseRow)
       (SELECT jsonb_build_object('label',m.payload->>'label','synchronized',m.synchronized_at IS NOT NULL)
         FROM ml_feedback m WHERE m.case_id=c.id AND kind='intent' AND m.payload->>'prediction_id'=s.intent->>'prediction_id'
         ORDER BY m.created_at DESC,m.event_id DESC LIMIT 1) AS feedback,
-      CASE WHEN f.case_id IS NOT NULL THEN jsonb_build_object('status',CASE WHEN f.completed_at IS NULL THEN 'agreed' ELSE 'completed' END,
-        'due_date',to_char(f.due_date,'YYYY-MM-DD'),'responsible_name',u.name) END AS follow_up
+      CASE WHEN f.case_id IS NOT NULL THEN jsonb_build_object('status',CASE WHEN f.cancelled_at IS NOT NULL THEN 'cancelled'
+        WHEN f.completed_at IS NOT NULL THEN 'completed' WHEN f.due_date<$3::date THEN 'overdue' ELSE 'agreed' END,
+        'due_date',to_char(f.due_date,'YYYY-MM-DD'),'responsible_name',u.name,'priority',f.priority) END AS follow_up
     FROM attention_case c LEFT JOIN case_ml_signal s ON s.case_id=c.id
     LEFT JOIN case_ml_follow_up f ON f.case_id=c.id AND f.customer_ref=$2 LEFT JOIN "user" u ON u.id=f.responsible_id
-    WHERE c.id=$1`,[row.id,ref]);
+    WHERE c.id=$1`,[row.id,ref,bogotaDate()]);
   const last=latestAnalyzable(row.snapshot);
   const intent=row.snapshot.status==='open' && signals?.intent && last?.actor==='cliente' && last.id===signals.intent.turn_id
     ? CaseMlSignals.shape.intent.parse({...signals.intent,case_revision:row.snapshot.revision,feedback:signals.feedback}) : null;
   const churn=CaseMlSignals.shape.churn.safeParse(ref && signals?.churn_customer_ref===ref ? signals.churn : null);
-  return {intent,churn:churn.success?churn.data:{status:'unavailable'},follow_up:signals?.follow_up ?? null};
+  const signal=churn.success ? churn.data : {status:'unavailable' as const};
+  const recommended=recommendedFollowUp(signal);
+  return {intent,churn:signal,follow_up:signals?.follow_up ?? null,...(recommended ? {recommended_due_date:recommended} : {})};
 }
 export async function predictIntent(db:DataSource,turn:AgentTurn) {
   try {
@@ -109,7 +113,7 @@ export async function predictChurn(db:DataSource,caseId:string,job:{case_revisio
   let churn:CaseMlSignals['churn']={status:'unavailable'};
   if (features.success && features.data.fecha_corte===photo.date) {
     try {
-      const result=ChurnResult.parse(await call('/internal/v1/predict-churn',features.data));
+      const result=ChurnResult.parse(await call('/internal/v1/predict-churn',features.data,3000));
       if (result.fecha_corte!==features.data.fecha_corte) throw new Error('Corte inconsistente');
       churn={status:'available',priority:result.priority,recommendation:result.recommendation,
         fecha_corte:result.fecha_corte,model_version:result.model_version,synthetic:photo.synthetic};

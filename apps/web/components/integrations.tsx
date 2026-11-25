@@ -2,12 +2,13 @@
 
 import { Tabs } from 'radix-ui';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { BillingView, CrmView, IntegrationOperation, InvoiceDetail, ManualAction } from '@claro/contracts';
+import type { BillingView, CaseSnapshot, CrmView, IntegrationOperation, InvoiceDetail, ManualAction } from '@claro/contracts';
 import { ADVISOR_ADJUSTMENT_LIMIT } from '@claro/contracts';
 import { integrations, key } from '@/lib/api';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from './ui/dialog';
+import { RetentionBilling, RetentionControls } from './retention';
 
 const currency = new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0});
 const money = (value: number) => currency.format(value);
@@ -16,6 +17,7 @@ const categories = {
   soporte_tecnico:'Soporte técnico',facturacion:'Facturación',consulta_planes:'Consulta de planes',
   cancelacion:'Cancelación',portabilidad:'Portabilidad'
 };
+const invoiceStates={pendiente:'Pendiente',vencida:'Vencida',pagada:'Pagada'};
 const operationStatus = {
   queued:'En cola',pending_supervisor:'Pendiente de aprobación',pending_verification:'Pendiente de verificación',
   confirmed:'Confirmada',rejected:'Rechazada',expired:'Vencida'
@@ -99,7 +101,9 @@ function ActionDialog({draft,confirm,close}:{draft:Draft;confirm:(action:ManualA
   </Dialog>;
 }
 
-function CrmPanel({caseId,open,revision,prepare}:{caseId:string;open:boolean;revision:number;prepare:(draft:Draft)=>void}) {
+type RetentionUi={snapshot:CaseSnapshot;canIssue:boolean;onUse:(text:string)=>void;refresh:()=>Promise<unknown>};
+function CrmPanel({caseId,open,revision,prepare,retention}:{caseId:string;open:boolean;revision:number;
+  prepare:(draft:Draft)=>void;retention?:RetentionUi}) {
   const read = useCallback(()=>integrations.crm(caseId),[caseId]);
   const result = useProvider(read,revision);
   if (!result.data) return <IntegrationLoading name="CRM" {...result}/>;
@@ -121,8 +125,9 @@ function CrmPanel({caseId,open,revision,prepare}:{caseId:string;open:boolean;rev
     <p>{eligibility.reason}</p>
     {eligibility.options.map(option=><div className="integration-choice" key={option.codigo}>
       <strong>{option.title}</strong><p>{option.detail}</p>
-      {open&&<Button size="sm" variant="outline" onClick={()=>prepare({kind:'offer',option})}>Registrar {option.codigo}</Button>}
+      {open&&!(retention?.snapshot.channel==='web'&&option.discount)&&<Button size="sm" variant="outline" onClick={()=>prepare({kind:'offer',option})}>Registrar {option.codigo}</Button>}
     </div>)}
+    {retention&&<RetentionControls {...retention} crm={result.data} open={open}/>}
     {customer.ofertas_retencion_12m.length>0&&<ul>{customer.ofertas_retencion_12m.map((offer,index)=><li key={offer.codigo+index}>
       <strong>{offer.codigo} · {offer.fecha}</strong><span>{offer.descripcion}</span>
     </li>)}</ul>}
@@ -143,17 +148,23 @@ function InvoicePanel({refId, readInvoice, revision, prepare}: {
     <h3>Detalle de {invoice.factura_id}</h3>
     <p>Corte {invoice.fecha_corte} · vence {invoice.fecha_limite_pago}</p>
     <ul>{invoice.detalle.map((line,index)=><li key={line.concepto+index}><span>{line.concepto}</span><strong>{money(line.valor)}</strong></li>)}</ul>
+    {!!invoice.descuentos?.length&&<><h3>Descuentos aplicados</h3><ul>{invoice.descuentos.map(item=><li key={item.offer_ref}>
+      <strong>{item.plan} · {item.percentage} %</strong>
+      <span>Cargo fijo {money(item.base)} · descuento {money(item.amount)} · neto {money(item.net)}</span>
+    </li>)}</ul></>}
     <p>Saldo abierto <strong>{money(invoice.saldo_abierto)}</strong></p>
     {invoice.ajustes.length>0&&<><h3>Ajustes aplicados</h3><ul>{invoice.ajustes.map(credit=><li key={credit.ajuste_id}><span>{credit.fecha} · {credit.motivo}</span><strong>−{money(credit.valor)}</strong></li>)}</ul></>}
     {prepare && invoice.saldo_abierto>0 && <Button size="sm" variant="outline" onClick={()=>prepare({kind:'adjustment',invoice})}>Solicitar ajuste</Button>}
   </div>;
 }
 
-function BillingPanel({read, readInvoice, revision = 0, prepare, directory = false}: {
+function BillingPanel({read, readInvoice, revision = 0, prepare, directory = false, recentInvoice}: {
   read: () => Promise<BillingView | null>; readInvoice: InvoiceRead; revision?: number; prepare?: PrepareAdjustment; directory?: boolean;
+  recentInvoice?:string;
 }) {
   const result = useProvider(read, revision);
-  const [selected,setSelected] = useState<string|null>(null);
+  const [selection,setSelection] = useState<{value:string|null;recent?:string}>();
+  const selected=selection?.recent===recentInvoice ? selection?.value : recentInvoice;
   if (result.data === null) return <p role="status">Esta cuenta aún no tiene registro en Facturación.</p>;
   if (!result.data) return <IntegrationLoading name="Facturación" {...result}/>;
   const {balance,invoices} = result.data;
@@ -169,14 +180,15 @@ function BillingPanel({read, readInvoice, revision = 0, prepare, directory = fal
         <div><strong>{invoice.periodo}</strong><span className="integration-ref">{invoice.factura_id}</span></div>
         <strong className="integration-invoice-total">{money(invoice.valor_total)}</strong>
       </> : <strong>{invoice.periodo} · {money(invoice.valor_total)}</strong>}
-      <span className="integration-invoice-state" data-state={invoice.estado}>
-        {invoice.estado !== 'pagada' && invoice.saldo_abierto === 0 ? 'Saldada por ajuste' : invoice.estado}
+      <span className="integration-invoice-state" data-state={invoice.estado !== 'pagada' && invoice.saldo_abierto===0 ? 'ajuste' : invoice.estado}>
+        {invoice.estado !== 'pagada' && invoice.saldo_abierto === 0 ? 'Saldada por ajuste' : invoiceStates[invoice.estado]}
       </span>
-      <Button size="sm" variant="outline" aria-expanded={selected===invoice.factura_id} onClick={()=>setSelected(current=>current===invoice.factura_id?null:invoice.factura_id)}>
+      <Button size="sm" variant="outline" aria-expanded={selected===invoice.factura_id}
+        onClick={()=>setSelection({value:selected===invoice.factura_id?null:invoice.factura_id,recent:recentInvoice})}>
         Ver factura {invoice.factura_id}
       </Button>
+      {selected===invoice.factura_id&&<InvoicePanel refId={invoice.factura_id} readInvoice={readInvoice} revision={revision} prepare={prepare}/>}
     </li>)}</ul> : <p>Sin facturas para esta cuenta.</p>}
-    {selected && <InvoicePanel key={selected} refId={selected} readInvoice={readInvoice} revision={revision} prepare={prepare}/>}
   </>;
 }
 
@@ -186,7 +198,8 @@ export function DirectoryBillingPanel({customerId}: {customerId: string}) {
   return <BillingPanel key={customerId} read={read} readInvoice={readInvoice} directory/>;
 }
 
-export function CaseIntegrationTabs({caseId,enabled,open,children}:{caseId:string;enabled:boolean;open:boolean;children:ReactNode}) {
+export function CaseIntegrationTabs({caseId,enabled,open,customerRegistration,children,retention}:{caseId:string;enabled:boolean;open:boolean;
+  customerRegistration?:ReactNode;children:ReactNode;retention?:RetentionUi}) {
   const [draft,setDraft] = useState<Draft|null>(null);
   const readBilling = useCallback(() => integrations.billing(caseId), [caseId]);
   const readInvoice = useCallback((ref: string) => integrations.invoice(caseId, ref), [caseId]);
@@ -194,6 +207,7 @@ export function CaseIntegrationTabs({caseId,enabled,open,children}:{caseId:strin
   const [operations,setOperations] = useState<IntegrationOperation[]>([]);
   const [operationError,setOperationError] = useState('');
   const [revision,setRevision] = useState(0);
+  const [recentInvoice,setRecentInvoice]=useState<string>();
   const previousConfirmed = useRef('');
   const submission = useRef<{ fingerprint:string; key:string }|null>(null);
   const refresh = useCallback(async () => {
@@ -216,7 +230,6 @@ export function CaseIntegrationTabs({caseId,enabled,open,children}:{caseId:strin
     const timer = window.setInterval(()=>{if (document.visibilityState==='visible') void refresh();},3000);
     return ()=>window.clearInterval(timer);
   },[enabled,tab,refresh]);
-  if (!enabled) return <>{children}</>;
   async function confirm(action:ManualAction) {
     const fingerprint = JSON.stringify(action);
     if (submission.current?.fingerprint !== fingerprint) submission.current = {fingerprint,key:key()};
@@ -238,19 +251,30 @@ export function CaseIntegrationTabs({caseId,enabled,open,children}:{caseId:strin
     </>;
   };
   return <Tabs.Root value={tab} onValueChange={setTab}>
-    <Tabs.List className="integration-tabs" aria-label="Ficha del caso">
-      <Tabs.Trigger value="summary">Resumen</Tabs.Trigger><Tabs.Trigger value="crm">CRM</Tabs.Trigger><Tabs.Trigger value="billing">Facturación</Tabs.Trigger>
+    <Tabs.List className="integration-tabs assisted-primary-tabs" aria-label="Ficha del caso">
+      <Tabs.Trigger value="summary">Resumen</Tabs.Trigger><Tabs.Trigger value="customer">Datos del cliente</Tabs.Trigger>
     </Tabs.List>
     <Tabs.Content value="summary">{children}</Tabs.Content>
-    <Tabs.Content value="crm" className="integration-panel">
-      <Badge variant="secondary">CRM · API mock</Badge>
-      <CrmPanel caseId={caseId} open={open} revision={revision} prepare={setDraft}/>
-      {history('crm')}
-    </Tabs.Content>
-    <Tabs.Content value="billing" className="integration-panel">
-      <Badge variant="secondary">Facturación · API mock</Badge>
-      <BillingPanel key={caseId} read={readBilling} readInvoice={readInvoice} revision={revision} prepare={open ? setDraft : undefined}/>
-      {history('billing')}
+    <Tabs.Content value="customer">
+      <Tabs.Root defaultValue="crm">
+        <Tabs.List className="integration-tabs assisted-secondary-tabs" aria-label="Datos del cliente">
+          <Tabs.Trigger value="crm">CRM</Tabs.Trigger><Tabs.Trigger value="billing">Facturación</Tabs.Trigger>
+        </Tabs.List>
+        <Tabs.Content value="crm" className="integration-panel">
+          {enabled ? <><Badge variant="secondary">CRM · API mock</Badge>
+            <CrmPanel caseId={caseId} open={open} revision={revision} prepare={setDraft} retention={retention}/>{history('crm')}</>
+            : customerRegistration ?? <p>El cliente debe verificar su titularidad para consultar CRM.</p>}
+        </Tabs.Content>
+        <Tabs.Content value="billing" className="integration-panel">
+          {enabled ? <><Badge variant="secondary">Facturación · API mock</Badge>
+            {retention&&<RetentionBilling snapshot={retention.snapshot} canIssue={retention.canIssue} updated={async invoice=>{
+              setRecentInvoice(invoice);setRevision(value=>value+1);await retention.refresh();
+            }}/>}
+            <BillingPanel key={caseId} read={readBilling} readInvoice={readInvoice} revision={revision} recentInvoice={recentInvoice}
+              prepare={open ? setDraft : undefined}/>
+            {history('billing')}</> : <p>El cliente debe verificar su titularidad para consultar Facturación.</p>}
+        </Tabs.Content>
+      </Tabs.Root>
     </Tabs.Content>
     {draft && <ActionDialog draft={draft} confirm={confirm} close={()=>setDraft(null)}/>}
   </Tabs.Root>;

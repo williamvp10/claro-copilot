@@ -14,6 +14,11 @@ export function createAuth(seed = false) {
   const auth = betterAuth({
     database, baseURL, secret,
     emailAndPassword: { enabled: true, disableSignUp: !seed },
+    databaseHooks:{session:{create:{before:async session=>{
+      if (seed) return;
+      const {rows:[operator]}=await database.query('SELECT enabled FROM operator_role WHERE user_id=$1',[session.userId]);
+      if (!operator?.enabled) return false;
+    }}}},
     trustedOrigins: [new URL(baseURL).origin]
   });
   return { auth, database };
@@ -31,6 +36,10 @@ export async function getViewer(request: Request, auth: ReturnType<typeof create
 export function canReadMockBilling(viewer: Viewer) {
   return process.env.DEMO_MODE === 'true' &&
     !!viewer.capabilities?.some(capability => capability === 'admin' || capability === 'superadmin');
+}
+
+export function canManageAdministration(viewer: Pick<Viewer,'capabilities'>) {
+  return (viewer.capabilities ?? []).includes(process.env.DEMO_MODE==='true' ? 'admin' : 'superadmin');
 }
 
 export const AUTH = Symbol('BETTER_AUTH');

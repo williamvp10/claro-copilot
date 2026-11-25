@@ -10,7 +10,7 @@ Como administrador de la demo quiero buscar clientes del mock y consultar su fic
 
 1. Dada una sesión de administración en modo demo, al abrir el directorio el filtro superior permite ver la primera página del catálogo y buscar por nombre o identificador. Al elegir un resultado, la lista se cierra y la ficha usa el ancho disponible.
 2. Al seleccionar C-1001 se muestran su ficha, servicios, tickets e historial según el alcance del operador. Cada servicio destaca el plan, la mensualidad y el estado; cada ticket muestra categoría, referencia, fecha y estado. Las ofertas aparecen cuando existen registros. La API mantiene enmascarados el correo y el teléfono.
-3. Un asesor sigue viendo sus cuentas verificadas y asignadas. Las altas y ediciones siguen reservadas a superadministración. La consulta administrativa de una cuenta conserva el control de acceso a sus conversaciones e historial.
+3. Un asesor sigue viendo sus cuentas verificadas y asignadas. El alta y la edición desde el Directorio CRM requieren superadministración. La consulta administrativa de una cuenta conserva el control de acceso a sus conversaciones e historial. [Alta propuesta desde un caso de atención](../002-atencion-asistida/spec.md#datos-del-cliente)
 
 ### US2 · Consultar Facturación por cuenta (P1)
 
@@ -34,3 +34,8 @@ Como administrador o superadministrador de la demo quiero consultar el saldo y l
 - Un administrador de la demo encuentra C-1001 desde el catálogo y abre sus tres facturas sin crear un caso.
 - La suite integrada comprueba las restricciones por sesión, modo y pertenencia.
 - La validación en navegador cubre el caso exitoso, la cuenta sin facturación, la caída de Facturación y una respuesta tardía.
+
+## Ampliación propuesta del demo
+
+- La cuenta **Administración** hereda la gestión del Directorio CRM y los otros permisos administrativos del demo conforme a [AT-09](../002-atencion-asistida/spec.md#at-09--una-cuenta-de-administración-en-el-demo). El control por cuenta, conversación y titularidad se comprueba en el backend.
+- CRM conserva la oferta aprobada y aceptada, y Facturación conserva la programación y los descuentos efectivamente aplicados a cada factura. El detalle de cada ciclo muestra el servicio, cargo fijo base, porcentaje, descuento y cargo neto. La vista de Directorio CRM consulta el estado dentro del alcance autorizado. [AT-07 y pruebas de retención](../002-atencion-asistida/plan.md#pruebas-de-aceptación)
