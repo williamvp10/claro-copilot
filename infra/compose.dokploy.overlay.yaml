@@ -76,6 +76,40 @@ services:
     volumes: !override
       - private-inputs:/publication-root:ro
     command: [node, apps/backend/dist/knowledge-ingest.js, /publication-root/publication/corpus.json, /publication-root/publication/manifest.json]
+  platform-release-backup:
+    image: pgvector/pgvector:pg17
+    restart: 'no'
+    mem_limit: 128m
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set the administrative database URL using the postgres service hostname}
+    volumes:
+      - platform-release-backups:/backups
+    depends_on:
+      postgres: {condition: service_healthy}
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        umask 077
+        migrations=$$(psql -XAt -v ON_ERROR_STOP=1 "$$DATABASE_URL" -c "SELECT to_regclass('public.claro_migrations')")
+        if [ -z "$$migrations" ]; then
+          echo 'Fresh platform database. No previous schema to back up.'
+          exit 0
+        fi
+        applied=$$(psql -XAt -v ON_ERROR_STOP=1 "$$DATABASE_URL" -c 'SELECT count(*) FROM public.claro_migrations WHERE "timestamp" = 1795260000028')
+        if [ "$$applied" = 1 ]; then
+          echo 'Assisted attention migrations already applied.'
+          exit 0
+        fi
+        chmod 700 /backups
+        snapshot=$$(mktemp /backups/.platform.XXXXXX)
+        trap 'rm -f "$$snapshot"' EXIT
+        pg_dump --format=custom --file="$$snapshot" "$$DATABASE_URL"
+        pg_restore --list "$$snapshot" >/dev/null
+        mv "$$snapshot" "/backups/platform-before-assisted-attention-$$(date -u +%Y%m%dT%H%M%SZ)-$${snapshot##*.}.dump"
+        echo 'Platform database backup verified.'
+  migrate:
+    depends_on:
+      platform-release-backup: {condition: service_completed_successfully}
   prompts-init:
     image: ${CLARO_IMAGE:-claro-copiloto:local}
     restart: 'no'
@@ -133,6 +167,7 @@ volumes:
   private-inputs:
     name: ${CLARO_INPUT_VOLUME:-claro-copilot-private-inputs}
   encoder-cache:
+  platform-release-backups:
 configs:
   train-demo:
     file: ./vps/train-demo.py

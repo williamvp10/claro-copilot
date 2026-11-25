@@ -21,6 +21,8 @@ Respalda los volúmenes de aplicación, Langfuse y MLflow antes de cambios de es
 
 Los cambios se prueban en `develop` y se integran en `main` conservando la configuración de la VPS. El push a `main` activa el despliegue existente de Dokploy. Antes del push, ejecuta `pnpm build`, `pnpm typecheck`, `pnpm test` y la validación de Compose de CI. Confirma un respaldo recuperable cuando la revisión cambie el esquema.
 
+El despliegue que incorpora atención asistida usa `platform-release-backup` para guardar un archivo de PostgreSQL previo a la migración en el volumen privado `platform-release-backups`. Dokploy espera a que `pg_restore --list` pueda leer el archivo antes de migrar. Conserva una copia fuera de la VPS como parte de la operación de respaldo.
+
 Después del despliegue, comprueba que las tareas de migración, usuarios, publicación documental y bootstrap de prompts finalizaron. Verifica en HTTPS el acceso de Asesor, Administración, Soporte N2 y Supervisión. Administración gestiona los modelos, los prompts y las funciones administrativas del demo. La cuenta anterior de Superadministración queda retirada al ejecutar el seed.
 
 Prueba un chat sintético con una cita, un traspaso y un cierre asistido. Comprueba en Langfuse la sesión de ese chat, la entrada y salida publicables, y la revisión de los prompts o del modelo cuando intervengan. Verifica los experimentos de intención y de riesgo de baja en MLflow. Registra el commit desplegado y los resultados fuera de las credenciales del entorno.
