@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { ArrowDownRight, ArrowUpRight, Check, ChevronRight, CircleHelp, FileClock, Network, Pencil, Radio, RefreshCw, Router, SlidersHorizontal } from 'lucide-react';
 import {
-  AgentModelPolicy, initialAgentModelPolicy, ModelProfile, modelComponentByStep, modelProfileRank,
+  AgentModelPolicy, initialAgentModelPolicy, maxModelCallMs, ModelProfile, modelComponentByStep, modelProfileRank,
   type AgentModelCatalog, type AgentModelExecutions, type AgentModelRevision, type AgentModelRevisions,
   type ModelAssignment, type ModelStep
 } from '@claro/contracts';
@@ -323,7 +323,7 @@ export function AdminAgentModels() {
                   <div className={styles.fields}>
                     <OptionalNumber label="Tope del componente por turno en USD" min={0.0001} max={1} precision="0.0001"
                       value={componentLimits?.max_cost_usd} placeholder={String(policy.max_cost_usd)} onChange={value=>updateLimit('max_cost_usd',value)}/>
-                    <OptionalNumber label="Tiempo del componente por llamada en ms" min={350} max={10000}
+                    <OptionalNumber label="Tiempo del componente por llamada en ms" min={350} max={maxModelCallMs}
                       value={componentLimits?.max_call_ms} placeholder={String(policy.max_call_ms)} onChange={value=>updateLimit('max_call_ms',value)}/>
                   </div>
                 </fieldset>
@@ -334,7 +334,7 @@ export function AdminAgentModels() {
                   <div className={styles.fields}>
                     <label>Presupuesto por turno en USD<input type="number" step="0.0001" min="0.0001" max="1" value={Number.isNaN(policy.max_cost_usd)?'':policy.max_cost_usd}
                       onChange={event=>{const value=event.target.valueAsNumber;updatePolicy(current=>({...current,max_cost_usd:value}));}} required/></label>
-                    <label>Tiempo predeterminado por llamada en ms<input type="number" min="350" max="10000" value={Number.isNaN(policy.max_call_ms)?'':policy.max_call_ms}
+                    <label>Tiempo predeterminado por llamada en ms<input type="number" min="350" max={maxModelCallMs} value={Number.isNaN(policy.max_call_ms)?'':policy.max_call_ms}
                       onChange={event=>{const value=event.target.valueAsNumber;updatePolicy(current=>({...current,max_call_ms:value}));}} required/></label>
                   </div>
                 </details>

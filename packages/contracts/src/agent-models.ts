@@ -73,7 +73,8 @@ export const ModelAssignment = z.discriminatedUnion('mode', [
 ]);
 export type ModelAssignment = z.infer<typeof ModelAssignment>;
 const Cost = z.number().min(0.0001).max(1);
-const Timeout = z.number().int().min(350).max(10000);
+export const maxModelCallMs = 30000;
+const Timeout = z.number().int().min(350).max(maxModelCallMs);
 export const AgentModelPolicy = z.object({
   steps:z.record(ModelStep,ModelAssignment),
   max_cost_usd:Cost,

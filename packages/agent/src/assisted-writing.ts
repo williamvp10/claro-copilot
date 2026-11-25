@@ -16,7 +16,7 @@ export async function assistedWriting(models:TurnModels, promptRef:'assisted_cas
   const allowedIds=new Set(history.map(message=>message.id));
   const numbers=(value:string)=>value.match(/\d+(?:[.,]\d+)*/g) ?? [];
   const knownNumbers=new Set(numbers(JSON.stringify({history:history.map(message=>message.text),context})));
-  return models.call({step:'write_advisor',profile,promptRef,instructions,input:{history,context},schema,maxOutput:450,
+  return models.call({step:'write_advisor',profile,promptRef,instructions,input:{history,context},schema,maxOutput:promptRef==='closure_evidence.v1' ? 220 : 450,
     accept(value) {
       if (!value || typeof value!=='object') return null;
       const fields=value as Record<string,unknown>;

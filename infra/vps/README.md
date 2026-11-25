@@ -8,6 +8,8 @@ Langfuse usó cerca de 2,7 GiB en reposo en el demo local. El perfil `shared-dem
 
 El perfil completo de Compose deja 8 GiB a ClickHouse y 4 GiB a cada proceso web y worker. Para ejecutarlo junto al resto del demo en un host dedicado, el punto de partida es 12 vCPU, 48 GiB de RAM y 120 GiB SSD. Para x86-64 verifica AVX2. [Requisitos de LM Studio](https://lmstudio.ai/docs/app/system-requirements)
 
+La política inicial de Llama en la VPS usa hasta 25 segundos por llamada. Administración puede revisar el límite de cada componente en **Modelos del agente**. El plazo de `AGENT_TURN_TIMEOUT_MS` limita el trabajo total de cada turno.
+
 ## Arranque y actualización
 
 1. Prepara el corpus con `prepare_corpus.py --contextual`. Empaqueta `publication/corpus.json`, `publication/manifest.json`, `originals/`, `ml/data/tickets.csv` y `ml/data/clientes_churn.csv` en `demo-inputs.tgz`. Incluye únicamente los insumos aprobados para el demo. El SHA de la publicación está en el manifiesto. [Entrenamiento y publicación del corpus](../../docs/08-demo-local.md)

@@ -46,7 +46,7 @@ export async function initializeLocalModelPolicy(db:DataSource, key:string) {
 
   const policy = AgentModelPolicy.parse({
     ...initialAgentModelPolicy,
-    max_call_ms:10000,
+    max_call_ms:25000,
     steps:Object.fromEntries(ModelStep.options.map(step=>[step,{mode:'fixed',model:localLlamaModel.id}]))
   });
   const digest = agentModelDigest(policy);

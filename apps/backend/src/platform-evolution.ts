@@ -92,7 +92,9 @@ export class PlatformEvolutionController {
     const policy=await loadAgentModelPolicy(this.db,model.revision,model.digest);
     const observations:AgentObservation[]=[];
     const started=Date.now();
-    const models=new TurnModels(policy,agentProviders().modelCredentials ?? {},model.revision,started+4500,span=>observations.push(span));
+    const providers=agentProviders();
+    const budget=Math.min(providers.turnTimeoutMs ?? 4500,policy.component_limits?.orquestador?.max_call_ms ?? policy.max_call_ms);
+    const models=new TurnModels(policy,providers.modelCredentials ?? {},model.revision,started+budget,span=>observations.push(span));
     const draft=await assistedWriting(models,'closure_evidence.v1',closureEvidencePrompt,'economico',history,{evidence});
     const latest=await read();
     if (latest.evidence!==evidence) throw new ConflictException('La evidencia cambió. Revisa el caso.');
