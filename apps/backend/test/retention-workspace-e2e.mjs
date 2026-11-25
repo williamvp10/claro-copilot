@@ -124,9 +124,12 @@ if (base) {
   const thanks=await send('Listo, gracias.');
   assert.equal((await snapshot(admin)).customer_resolution,undefined);
   await change(admin,'accept',{message_id:customerId(thanks)},409);
-  const approval=await send('Acepto el 35 % de descuento sobre el cargo fijo de Hogar Fibra 500 durante 6 ciclos de facturación.');
+  await send('si!');
+  await operatorSend(admin,'Política de retención y descuentos · POL-RET-2026 v3.1');
+  const approval=await send('si acepto');
   const accepted=await change(admin,'accept',{message_id:customerId(approval)});
   assert.equal(accepted.status,'accepted');
+  assert.equal(accepted.accepted_message_id,customerId(approval));
   const scheduled=await until(async()=>{
     const state=await snapshot(admin);
     if (state.retention_discount?.error) throw Error('Scheduling failed: '+state.retention_discount.error);

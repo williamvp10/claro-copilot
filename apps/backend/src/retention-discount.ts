@@ -38,6 +38,7 @@ function authorizedAccount(viewer:Viewer,row:CaseRow) {
 
 const normalize=(text:string)=>text.normalize('NFD').replace(/\p{M}/gu,'').toLowerCase().trim();
 const units=['','un','dos','tres','cuatro','cinco','seis','siete','ocho','nueve','diez','once','doce'];
+const statedCycles=new RegExp(`\\b(\\d+|${units.slice(1).join('|')})\\s+(?:ciclos?|mes(?:es)?)\\b`,'g');
 function offersTerms(text:string,terms:DiscountTerms) {
   const value=normalize(text);
   const percentages=[...value.matchAll(/(\d+)\s*(?:%|por ciento)/g)].map(match=>Number(match[1]));
@@ -50,15 +51,20 @@ function offersTerms(text:string,terms:DiscountTerms) {
 export function discountAcceptance(messages:Message[],discount:CaseDiscount,messageId:string) {
   const conversation=messages.filter(message=>!message.attention_notice && !message.verification_input);
   const accepted=conversation.findLast(message=>message.actor==='cliente');
-  if (!accepted || accepted.id!==messageId || accepted.turn_seq<=(discount.authorized_turn ?? 0)) return null;
+  const authorizedTurn=discount.authorized_turn ?? 0;
+  if (!accepted || accepted.id!==messageId || accepted.turn_seq<=authorizedTurn) return null;
   const text=normalize(accepted.text);
-  if (!/\b(?:acepto|lo tomo|estoy de acuerdo|me quedo con)\b/.test(text) ||
-      /\b(?:no|pero|si me|otra|aunque|quisiera|prefiero)\b|\?/.test(text)) return null;
+  const affirmative=/^[¡!]*(?:si|claro que si|de acuerdo)[.!\s]*$/.test(text) ||
+    /^[¡!]*(?:(?:si|listo)[,.!\s]+)?(?:acepto|lo tomo|estoy de acuerdo|me quedo con (?:el descuento|la oferta|el beneficio|es[eo]|esa))\b/.test(text);
+  if (!affirmative || /\b(?:no|pero|aunque|otr[oa]|quisiera|prefiero|si me|acepto si|solo si|siempre que)\b|[¿?]/.test(text)) return null;
   const percentages=[...text.matchAll(/(\d+)\s*(?:%|por ciento)/g)].map(match=>Number(match[1]));
-  if (percentages.some(value=>value!==discount.terms.percentage)) return null;
-  const prior=conversation.findLast(message=>message.actor==='asesor' && message.turn_seq<accepted.turn_seq);
-  return prior && prior.turn_seq>(discount.authorized_turn ?? 0) && offersTerms(prior.text,discount.terms) &&
-    (percentages.length===0 || offersTerms(text,discount.terms)) ? accepted : null;
+  const cycles=[...text.matchAll(statedCycles)].map(([,count])=>units.includes(count) ? units.indexOf(count) : Number(count));
+  if (percentages.some(value=>value!==discount.terms.percentage) || cycles.some(value=>value!==discount.terms.cycles)) return null;
+  if (/\b(?:mejora|cancelar el servicio|dar de baja)\b/.test(text)) return null;
+  const reference=`politica de retencion y descuentos · ${normalize(discount.terms.policy_version)}`;
+  const prior=conversation.findLast(message=>message.actor!=='cliente' && message.turn_seq<accepted.turn_seq &&
+    normalize(message.text).replace(/^fuente:\s*/,'').replace(/\.$/,'')!==reference);
+  return prior?.actor==='asesor' && prior.turn_seq>authorizedTurn && offersTerms(prior.text,discount.terms) ? accepted : null;
 }
 
 async function external<T>(action:()=>Promise<T>) {
@@ -167,7 +173,7 @@ export class RetentionDiscountController {
           await audit(tx,id,'retention_discount_authorized',{operator_id:viewer.id,offer_id:discount.id});
         } else if (input.action==='accept') {
           if (discount.status!=='authorized' || !discountAcceptance(row.snapshot.messages,discount,input.message_id)) {
-            throw new ConflictException('Envía los términos autorizados y registra una aceptación explícita del cliente');
+            throw new ConflictException('Confirma un sí del cliente a la oferta vigente enviada en el chat');
           }
           discount={...discount,status:'accepted',accepted_message_id:input.message_id};
           await audit(tx,id,'retention_discount_accepted',{operator_id:viewer.id,offer_id:discount.id,message_id:input.message_id});
