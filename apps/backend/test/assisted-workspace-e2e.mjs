@@ -91,4 +91,12 @@ assert.equal(alternateCase.customer_registration.customer_ref,registration.clien
 assert.equal(alternateCase.verified,false);
 await get(n1,`/cases/${alternate.id}/integrations/billing`,403);
 assert.equal((await get(second.cookie,'/web-chat/history')).verification.stage,'required');
+const challenge=await post(second.cookie,'/web-chat/verification/start',{identifier:registration.email});
+const verified=await post(second.cookie,'/web-chat/verification/confirm',{
+  challenge_id:challenge.verification.challenge_id,code:process.env.DEMO_HOLDER_CODE
+});
+assert.equal(verified.verification.stage,'verified');
+const crm=await get(n1,`/cases/${alternate.id}/integrations/crm`);
+assert.equal(crm.customer.cliente_id,registration.cliente_id);
+await get(n1,`/cases/${alternate.id}/integrations/billing`,404);
 console.log('Bandeja por llegada, traspaso exclusivo, avisos web, toma de nivel 2, borrador privado y alta CRM verificados.');

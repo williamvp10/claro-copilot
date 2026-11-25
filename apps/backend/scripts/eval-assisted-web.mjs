@@ -3,8 +3,9 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const [targetFile,reportFile,flag]=process.argv.slice(2);
-assert.ok(targetFile && reportFile && (!flag || flag==='--publish'),'Use TARGETS.json REPORT.json [--publish]');
+const [targetFile,reportFile,...flags]=process.argv.slice(2);
+assert.ok(targetFile && reportFile && flags.every(flag=>['--publish','--candidate-only'].includes(flag)),
+  'Use TARGETS.json REPORT.json [--publish] [--candidate-only]');
 const targets=JSON.parse(await readFile(targetFile,'utf8'));
 const corpus=await readFile(new URL('../../../docs/agente/atencion-asistida-evals.v1.jsonl',import.meta.url));
 const cases=corpus.toString('utf8').trim().split(/\r?\n/).map(JSON.parse);
@@ -85,12 +86,12 @@ async function replay(target,variant) {
 
 const result={dataset:datasetName,corpus_sha256:corpusHash,revisions:{}};
 assert.equal(targets.base.business_date,targets.candidate.business_date,'Use the same business date');
-for (const label of ['base','candidate']) {
+for (const label of flags.includes('--candidate-only') ? ['candidate'] : ['base','candidate']) {
   const target=targets[label];
   result.revisions[label]={runtime:target.runtime,business_date:target.business_date,cases:await replay(target,label)};
 }
 
-if (flag==='--publish') {
+if (flags.includes('--publish')) {
   const langfuse=loopback(process.env.LANGFUSE_UI_URL);
   const {LANGFUSE_PUBLIC_KEY:publicKey,LANGFUSE_SECRET_KEY:secret}=process.env;
   assert.ok(publicKey&&secret,'Configure the Langfuse project keys');
