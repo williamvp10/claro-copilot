@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { acceptsAdvisorOffer, recordPublishedReply, requestedAdvisor, asksToChangeMobilePlan, catalogComparison, changesCancellationToPlan, claimedBillingAccount, commercialHandoff, contextIntent, evolveContext, interpretConversation, mandatoryPolicyRoute, nextContextQuestion, platformBillingContext, recordQuestion, renderCaseSummary, traceConversation } from '@claro/agent';
+import { acceptsAdvisorOffer, recordPublishedReply, requestedAdvisor, asksToChangeMobilePlan, catalogComparison, changesCancellationToPlan, claimedBillingAccount, commercialHandoff, contextIntent, evolveContext, interpretConversation, mandatoryPolicyRoute, nextContextQuestion, platformBillingContext, recordQuestion, renderCaseSummary, requestsInvoiceCancellation, traceConversation } from '@claro/agent';
 import { ConflictException, ForbiddenException, ServiceUnavailableException, Inject, Injectable, NotFoundException, UnauthorizedException, HttpException, UnprocessableEntityException } from '@nestjs/common';
 import { type z } from 'zod';
 import {
@@ -79,6 +79,7 @@ function handoffReason(row: CaseRow) {
 
 function assistanceReason(row:CaseRow, text:string) {
   const intake=row.snapshot.intake;
+  if (requestsInvoiceCancellation(text)) return accountHandoffReason(text);
   if (intake?.intent==='facturacion' && intake.facts.objetivo) return `Consulta de facturación. ${intake.facts.objetivo}.`;
   if (intake?.intent!=='cancelacion') return accountHandoffReason(text);
   const reason=intake.facts.motivo;
@@ -715,6 +716,7 @@ export class Cases {
     const context=row.snapshot.conversation_context;
     const reading=demo ? interpretConversation(text,context) : undefined;
     let requested = demo ? accountInquiry(text) : null;
+    const invoiceCancellation=requested==='assistance' && requestsInvoiceCancellation(text);
     let contextualBilling = false;
     if (reading && !requested) {
       const billingResumed=reading.resuming && reading.domain==='facturacion';
@@ -767,7 +769,7 @@ export class Cases {
         await audit(tx,row.id,'proposal_expired',{proposal_id:proposal.id,reason:'cancellation_withdrawn'});
       }
       const handoffReason = row.snapshot.handoff_reason ?? row.handoff_pending ?? '';
-      const cancellationHandoff = /^El cliente solicita cancelar el servicio\.|^Solicitud de cancelación$/i.test(handoffReason);
+      const cancellationHandoff = /^El cliente solicita cancelar (?:el servicio|su factura)\.|^Solicitud de cancelación$/i.test(handoffReason);
       if (row.snapshot.attention_mode==='autoservicio' && !row.snapshot.owner_id &&
           (!row.handoff_pending || cancellationHandoff)) {
         if (row.handoff_pending) await audit(tx,row.id,'case_autoservice_resumed',{
@@ -780,11 +782,11 @@ export class Cases {
         this.clearChallenge(row);
       }
     }
-    const collectingCancellation=demo && row.snapshot.attention_mode==='autoservicio' && !pending &&
+    const collectingCancellation=demo && row.snapshot.attention_mode==='autoservicio' && !pending && !invoiceCancellation &&
       (requested==='assistance' && contextIntent(text)==='cancelacion' ||
         previousIntake?.intent==='cancelacion' && !!previousIntake.pending);
     const verificationInput = !linkedVerification || isVerificationContact(text,aliases) || !!activeChallenge && codes.length>0;
-    const verificationTurn = verificationInput && !verified && !handoff && !priority && !claimedBilling &&
+    const verificationTurn = verificationInput && !invoiceCancellation && !verified && !handoff && !priority && !claimedBilling &&
       (requested==='identify' || !!pending && (!requested || !!activeChallenge));
     const message = addMessage(row,'cliente',verificationTurn
       ? '[Dato de verificación oculto]'
@@ -884,6 +886,7 @@ export class Cases {
       await this.requestHumanAttention(tx,row,planChange ? 'El cliente solicita cambiar su plan móvil.' :
         handoff && intake?.intent!=='cancelacion' ? 'El cliente pidió hablar con un asesor.' : assistanceReason(row,text),
         planChange ? 'Te paso con un asesor para revisar y tramitar el cambio de plan.' :
+        invoiceCancellation ? 'Tu solicitud de cancelación quedó en espera de un asesor. Puedes seguir escribiendo aquí.' :
         handoff ? 'Dejé tu solicitud en espera de un asesor. Puedes seguir escribiendo en este chat.'
           : 'Entiendo que quieres revisar tu solicitud con un asesor. Ya está en espera y podrás continuar en este mismo chat.');
       return;
@@ -968,13 +971,17 @@ export class Cases {
     row.snapshot.card = null;
     await audit(tx,row.id,'holder_verified',{method:'demo_chat',channel:row.snapshot.channel});
     await queueChurn(tx,row);
+    const source=latestAnalyzable(row.snapshot)?.text ?? '';
+    // Older challenges can have an invoice read saved for a cancellation request.
+    const invoiceCancellation=inquiry!=='identify' && requestsInvoiceCancellation(source);
     if (row.snapshot.attention_mode === 'asistido') {
       await this.channelReply(tx,row,'Cuenta de prueba verificada.');
       await queueRun(tx,row,latestAnalyzable(row.snapshot),true);
-    } else if (inquiry === 'assistance' || row.handoff_pending === 'Atención humana') {
-      const source=latestAnalyzable(row.snapshot)?.text ?? '';
-      await this.requestHumanAttention(tx,row,row.snapshot.handoff_reason ?? assistanceReason(row,source),
-        'Cuenta de prueba verificada. Tu solicitud quedó en espera de un asesor en este mismo chat.');
+    } else if (inquiry === 'assistance' || invoiceCancellation || row.handoff_pending === 'Atención humana') {
+      if (invoiceCancellation) row.snapshot.intake=evolveContext(source,row.snapshot.intake,'cancelacion');
+      await this.requestHumanAttention(tx,row,invoiceCancellation ? accountHandoffReason(source) : row.snapshot.handoff_reason ?? assistanceReason(row,source),
+        invoiceCancellation ? 'Cuenta de prueba verificada. Tu solicitud de cancelación quedó en espera de un asesor en este mismo chat.'
+          : 'Cuenta de prueba verificada. Tu solicitud quedó en espera de un asesor en este mismo chat.');
     } else if (inquiry==='identify') {
       await this.channelReply(tx,row,'Listo, verifiqué tu cuenta de prueba. ¿En qué te puedo ayudar?');
     } else {

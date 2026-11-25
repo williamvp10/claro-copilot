@@ -132,6 +132,41 @@ try {
   assert.match(otherVerified.messages.at(-1).text, /89\.900.*pagada/);
   assert.doesNotMatch(JSON.stringify(otherVerified),/169\.315|example\.test/);
 
+  const cancellationBrowser=await startWeb();
+  const cancelText='Quiero cancelar mi factura.';
+  const cancelStarted=(await sendWeb(cancelText,randomUUID(),cancellationBrowser)).json;
+  assert.equal(cancelStarted.verification.stage,'required');
+  assert.equal(cancelStarted.awaiting_advisor,false);
+  await sendWeb('Mi correo es Cliente2@example.test.',randomUUID(),cancellationBrowser);
+  const cancelConfirmed=(await sendWeb('El código es 351740.',randomUUID(),cancellationBrowser)).json;
+  assert.equal(cancelConfirmed.verification.stage,'verified');
+  assert.equal(cancelConfirmed.awaiting_advisor,true);
+  assert.match(cancelConfirmed.messages.at(-1).text,/cancelación.*en espera de un asesor/i);
+  assert.doesNotMatch(JSON.stringify(cancelConfirmed),/última factura|saldo pendiente|89\.900/i);
+  await sendWeb(cancelText,randomUUID(),cancellationBrowser);
+  const cancellationCase=(await get('/cases?view=inbox')).available.find(item=>item.conversation_id===cancelConfirmed.conversation_id);
+  assert.ok(cancellationCase,'The invoice cancellation is available in the advisor queue');
+  assert.match((await get('/cases/'+cancellationCase.id)).handoff_reason,/cancelar su factura/i);
+  assert.equal(await count(cancellationCase.id,'handoff_requested'),1);
+  assert.equal(await count(cancellationCase.id,'billing_read'),0);
+
+  const verifiedCancellation=(await sendWeb('Necesito anular el recibo.',randomUUID(),otherBrowser)).json;
+  assert.equal(verifiedCancellation.verification.stage,'verified');
+  assert.equal(verifiedCancellation.awaiting_advisor,true);
+  assert.match(verifiedCancellation.messages.at(-1).text,/cancelación.*en espera de un asesor/i);
+  const afterInquiryCase=(await get('/cases?view=inbox')).available.find(item=>item.conversation_id===verifiedCancellation.conversation_id);
+  assert.equal(await count(afterInquiryCase.id,'billing_read'),1,'Only the earlier invoice inquiry reads billing');
+
+  const switchingBrowser=await startWeb();
+  await sendWeb('Quiero consultar mi factura.',randomUUID(),switchingBrowser);
+  await sendWeb('Mi correo es Cliente2@example.test.',randomUUID(),switchingBrowser);
+  const switched=(await sendWeb('Quiero anular mi última factura.',randomUUID(),switchingBrowser)).json;
+  assert.equal(switched.verification.stage,'code_sent');
+  assert.ok(switched.messages.some(message=>message.actor==='cliente' && /anular mi última factura/i.test(message.text)));
+  const switchedConfirmed=(await sendWeb('El código es 452871.',randomUUID(),switchingBrowser)).json;
+  assert.equal(switchedConfirmed.awaiting_advisor,true);
+  assert.doesNotMatch(JSON.stringify(switchedConfirmed),/última factura \(20|saldo pendiente|89\.900/i);
+
   await sendWeb('Quiero hablar con un asesor.');
   const webCase=await until(async()=> (await get('/cases')).find(c=>c.conversation_id===publicAnswer.conversation_id),'web handoff to advisor');
   assert.equal((await post(`/cases/${webCase.id}/take`)).verified, true);
@@ -181,7 +216,7 @@ try {
   await verifyByChat('C-1004',process.env.DEMO_RETENTION_CHAT_ID,'cliente2@example.test');
   await cards(eligible.id, x=>x.card?.reason_codes.includes('retention_eligible'));
   await post(`/cases/${eligible.id}/messages`, {text:'Puedo ofrecer el descuento del 30 %.',idempotency_key:randomUUID()});
-  await cards(eligible.id, x=>x.card?.next_action.includes('Esperar la decisión'));
+  await cards(eligible.id, x=>x.card?.reason_codes.includes('retention_awaiting_choice'));
   await incoming('C-1004','Acepto el descuento del 30 %.');
   const withdrawn=(await cards(eligible.id,x=>x.card?.proposal?.status==='pending_approval')).card.proposal;
   await incoming('C-1004','Ya no quiero cancelar. Mejor quiero cambiarme a un plan más barato.');
@@ -192,6 +227,7 @@ try {
   assert.equal(await count(eligible.id,'retention_confirmed'),0);
   await incoming('C-1004','Quiero cancelar el servicio.');
   await cards(eligible.id,x=>x.card?.reason_codes.includes('retention_eligible') && !x.card.proposal);
+  await post(`/cases/${eligible.id}/messages`, {text:'Puedo ofrecer el descuento del 30 %.',idempotency_key:randomUUID()});
   await incoming('C-1004','Acepto el descuento del 30 %.');
   const proposed = await cards(eligible.id, x=>x.card?.proposal?.status==='pending_approval');
   const p = proposed.card.proposal;

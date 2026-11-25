@@ -1,11 +1,12 @@
 import type { Fact, Service } from '@claro/contracts';
-import { mobilePlanTopic, retentionPolicyQuery } from '@claro/agent';
+import { mobilePlanTopic, requestsInvoiceCancellation, retentionPolicyQuery } from '@claro/agent';
 import type { z } from 'zod';
 import { simulators } from './simulator-client.js';
 
 export const accountVerificationPrompt = 'Para verificar tu cuenta, escribe tu correo o teléfono de prueba en el chat.';
 
 export function accountHandoffReason(text: string) {
+  if (requestsInvoiceCancellation(text)) return 'El cliente solicita cancelar su factura.';
   const value = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   if (/\b(?:cancelar|cancelacion|dar de baja|retirar(?:me)?)\b/.test(value)) {
     if (/\b(?:fallas?|intermitencia|se cae|no funciona|sin internet)\b/.test(value)) return 'El cliente solicita cancelar el servicio y reporta fallas.';
@@ -19,6 +20,7 @@ export type AccountRead = Exclude<AccountInquiry,'identify'|'assistance'>;
 
 export function accountInquiry(text: string): AccountInquiry | null {
   if (retentionPolicyQuery(text) || mobilePlanTopic(text)==='change') return null;
+  if (requestsInvoiceCancellation(text)) return 'assistance';
   const value = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   if (/\b(mis tickets|mis casos|tickets abiertos|mis solicitudes)\b/.test(value)) return 'tickets';
   if (/\b(saldo|cuanto debo|cuanto adeudo|mi mora)\b/.test(value)) return 'balance';

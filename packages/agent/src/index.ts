@@ -19,8 +19,8 @@ export { renderCaseSummary } from './case-summary.js';
 import { withinDeadline } from './deadline.js';
 import { TurnReads } from './read-budget.js';
 import { guidePlans, homePlanPreference, plansDiscovery, prepareKnowledgeQuery, rankKnowledge, retentionPolicyQuery, wifiConfigurationSteps } from './retrieval.js';
-import { alternativePlan, cancellationRequest, changesCancellationToPlan, portabilityRequest, validObjectiveOrder, type ObjectivePlanner } from './objectives.js';
-export { changesCancellationToPlan, createOpenAIObjectivePlanner } from './objectives.js';
+import { alternativePlan, cancellationRequest, changesCancellationToPlan, portabilityRequest, requestsInvoiceCancellation, validObjectiveOrder, type ObjectivePlanner } from './objectives.js';
+export { changesCancellationToPlan, createOpenAIObjectivePlanner, requestsInvoiceCancellation } from './objectives.js';
 import { contextIntent, evolveContext, nextContextQuestion, questionById } from './context.js';
 import { billingCycleReply, esimCompatibilityFilter, homePlanReply, mobilePlanTopic, mobilePlanReply, publicReplyLimit, quotedPublicReply, shortPublicEvidence, triplePlayReply } from './public-reply.js';
 import { advisorEscalationReply, advisorPromotionReply, mobileCommitmentQuestion, mobileCommitmentReply, portabilityTimingQuestion, retentionOptionsReply } from './policy-reply.js';
@@ -66,7 +66,7 @@ function citation(doc: KnowledgeDocument): Citation {
 }
 function classify(text: string): Intent | undefined {
   if (changesCancellationToPlan(text)) return 'consulta_planes';
-  if (retentionPolicyQuery(text) || has(text, cancellationRequest)) return 'cancelacion';
+  if (retentionPolicyQuery(text) || has(text, cancellationRequest) || requestsInvoiceCancellation(text)) return 'cancelacion';
   if (has(text, /convergencia|convergente|\b(telefonia|linea|movil) pospago\b/) && has(text, /hogar|plan|combinar|paquete/)) return 'consulta_planes';
   if (has(text, portabilityRequest)) return 'portabilidad';
   if (has(text, /factur|saldo|cobr|vencimiento|pagar|pago|\b(?:debo|adeudo|deuda|f-\d{4,10})\b/)) return 'facturacion';
@@ -874,7 +874,8 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       }
       const newPlan = changesCancellationToPlan(turn.text);
       if (newPlan) intent='consulta_planes';
-      else if (retentionPolicyQuery(turn.text) || asksRecurrenceOffer(turn,caseState) || cancellationWithFaults(turn.text) || has(turn.text, cancellationRequest)) intent='cancelacion';
+      else if (retentionPolicyQuery(turn.text) || asksRecurrenceOffer(turn,caseState) || cancellationWithFaults(turn.text) ||
+        has(turn.text,cancellationRequest) || requestsInvoiceCancellation(turn.text)) intent='cancelacion';
       else if ((has(turn.text, portabilityRequest) || prompts.agent_objectives && portabilityTimingQuestion(turn.text)) && !has(turn.text,/\b(?:junt\w*|combina\w*|convergen\w*)\b/)) intent='portabilidad';
       else if (prompts.agent_objectives && (asksReconnectionCharge(turn.text) ||
         !caseState.verified && turn.channel==='telegram' && turn.audience==='cliente' && claimedBillingAccount(turn.text) ||

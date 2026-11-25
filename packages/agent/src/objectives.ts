@@ -6,6 +6,12 @@ export const alternativePlan = /\b(?:cambiarme?|pasarme?|buscar|quiero|prefiero|
 export const changeOfGoal = /\b(?:ya no|mejor|en vez de|ahora prefiero|cambie de opinion)\b/;
 export const portabilityRequest = /\b(?:portabilidad|portab\w*|portar\w*|mismo numero|conserv\w* (?:mi|el) numero|mant\w* (?:mi|el) numero)\b/;
 
+export function requestsInvoiceCancellation(text: string) {
+  const value=text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  const action=/\b(?:cancel(?:ar|en|es|a)|anul(?:ar|en|es|a)|dar de baja|(?:cancelacion|anulacion) de)\s+(?:(?:mi|mis|la|las|el|los|esta|estas|este|estos)\s+)?(?:ultim[ao]s?\s+)?(?:facturas?|recibos?)\b/;
+  return action.test(value) && !/\b(?:no (?:quiero |necesito |deseo )?|evitar |sin )(?:cancel(?:ar|en|es|a)|anul(?:ar|en|es|a)|dar de baja)\b/.test(value);
+}
+
 export function changesCancellationToPlan(text: string) {
   const normalized = text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
   return changeOfGoal.test(normalized) && alternativePlan.test(normalized);

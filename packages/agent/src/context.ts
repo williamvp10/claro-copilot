@@ -1,5 +1,5 @@
 import type { CaseIntake, ContextQuestion, Intent } from '@claro/contracts';
-import { changesCancellationToPlan, portabilityRequest } from './objectives.js';
+import { changesCancellationToPlan, portabilityRequest, requestsInvoiceCancellation } from './objectives.js';
 
 const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
 const measuredSpeed = /\b(?:me da|me marca|me llegan?)\s+\d{1,4}\s*(?:megas?|mbps)\b/;
@@ -53,7 +53,8 @@ export function questionById(id?:string): ContextQuestion|undefined {
 export function contextIntent(input:string):Intent|undefined {
   const text=normalize(input);
   if (changesCancellationToPlan(text)) return 'consulta_planes';
-  if (/\b(?:cancel\w*|dar de baja|retirar el servicio)\b/.test(text) && !/\bpolitica de retencion\b/.test(text)) return 'cancelacion';
+  if (requestsInvoiceCancellation(text) || /\b(?:cancel\w*|dar de baja|retirar el servicio)\b/.test(text) &&
+      !/\bpolitica de retencion\b/.test(text)) return 'cancelacion';
   if (portabilityRequest.test(text)) return 'portabilidad';
   if (/\b(?:factur\w*|saldo|cobro|cargo|pague|pagar|pago|pse|fecha de corte)\b/.test(text)) return 'facturacion';
   if (measuredSpeed.test(text) || /\b(?:e[ -]?202|los roja?|wi[ -]?fi|lent\w*|intermiten\w*|se cae|sin internet|sin senal|decodificador|decobox|modem|control parental)\b/.test(text)) return 'soporte_tecnico';
