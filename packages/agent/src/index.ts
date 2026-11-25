@@ -433,6 +433,11 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
   type CaseState = Awaited<ReturnType<AgentPorts['readCaseForRun']>>;
   function policyText(turn:AgentTurn,state:CaseState):string {
     const current=norm(turn.text);
+    if (turn.audience==='asesor' && state.assigned_destination==='supervision' && !contextIntent(turn.text)) {
+      const previous=state.messages.filter(message=>message.actor==='cliente' && message.turn_seq<turn.turn_seq).reverse()
+        .find(message=>mandatoryPolicyRoute(message.text)?.destination==='supervision');
+      if (previous) return `${previous.text} ${turn.text}`;
+    }
     if (/\blos\b/.test(current) || !/\b(?:\d+|un|una|dos|tres|cuatro|cinco|diez|media|varias|varios)\s*(?:minutos?|mins?|horas?|dias?)\b/.test(current)) return turn.text;
     const previous=state.messages.filter(m=>m.actor==='cliente' && m.turn_seq<turn.turn_seq).at(-1);
     return previous && needsLosDuration(previous.text) ? `${previous.text} ${turn.text}` : turn.text;
@@ -553,7 +558,22 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     const policyQuestion = (reconnectionCharge || has(turn.text,/\b(cual|cuales|cuanto|cuanta|como|que|cuando|plazo|politica|contrato|clausula|penalidad|nip|pqr|requisitos)\b/))
       && !explicitAccountBilling(turn.text) && !asksCurrentPlanAndBalance(turn.text) && !has(turn.text,/\b(mi cuenta|mi (plan|linea) actual|quiero cancelar|c-\d{4})\b/);
     const advisorKnowledge = turn.audience === 'asesor' && !state.verified;
+    if (advisorKnowledge && state.assigned_destination==='facturacion' && intent==='facturacion' &&
+        (explicitAccountBilling(turn.text) || state.intake?.intent==='facturacion' && state.intake.facts.objetivo)) {
+      const result=card('facturacion','El cliente solicita revisar un concepto de su factura. Su procedencia queda por comprobar.',[],[],
+        ['Verificar titularidad','Revisar el concepto en la factura'], 'Verificar la titularidad y consultar el detalle del cargo.',['account_verification_pending']);
+      if (result.type==='card') result.card.advisor_draft='Entiendo que quieras aclarar ese cargo. Primero verificaremos la titularidad y luego revisaré el concepto en la factura para explicarte de dónde salió.';
+      return result;
+    }
     const generalPortability = intent === 'portabilidad' && policyQuestion && !state.verified;
+    const technical=turn.audience==='asesor' && intent==='soporte_tecnico' && state.intake?.intent==='soporte_tecnico' ? state.intake.facts : undefined;
+    const contextTerms=technical ? [...new Set([technical.codigo,technical.sintoma,technical.equipo].filter(Boolean))].join(' ') : '';
+    const matchesTechnicalFocus=(doc:KnowledgeDocument) => {
+      const source=norm(doc.title+' '+doc.excerpt);
+      if (technical?.codigo) return source.replaceAll(' ','').replaceAll('-','').includes(norm(technical.codigo).replaceAll('-',''));
+      if (technical?.sintoma==='Luz LOS roja') return /\blos\b/.test(source) && /\broj[ao]\b/.test(source);
+      return true;
+    };
     if (retentionPolicyQuery(turn.text) || intent === 'consulta_planes' || (intent === 'soporte_tecnico' && (turn.audience==='cliente' || !state.verified)) || intent === 'portabilidad' || (intent === 'facturacion' && policyQuestion) || generalPortability || (advisorKnowledge && policyQuestion)) {
       if (turn.audience==='cliente' && state.intake?.facts.imagen==='Imagen recuperada' && !has(turn.text,/\be[ -]?202\b/)) {
         return {type:'answer',answer:'Me alegra que haya vuelto la imagen. Si vuelve a fallar, cuéntame qué aparece en pantalla.',citations:[],route:intent};
@@ -564,13 +584,15 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const resolved=planConversation(turn,state.messages);
       const detailFocus=state.conversation_memory?.focused_plan ?? state.conversation_memory?.selected_plan;
       const scopedDetail=intent==='consulta_planes' && detailFocus && commercialFor(turn,state)?.action==='detail';
-      const query={...resolved,text:scopedDetail ? `${detailFocus.name}. ${turn.text}` : resolved.text,intake:state.intake,deadline};
+      const text=scopedDetail ? `${detailFocus.name}. ${turn.text}` : contextTerms ? `${contextTerms}. ${resolved.text}` : resolved.text;
+      const query={...resolved,text,intake:state.intake,deadline};
       const objectives=Boolean(prompts.agent_objectives);
       const documents = await retrieve(query, profile, prompts, !objectives);
       const timing=prompts.agent_objectives && intent==='portabilidad' && portabilityTimingQuestion(turn.text);
       const compatibility = prompts.agent_objectives ? esimCompatibilityFilter(turn.text) : undefined;
       const applicable = documents.filter(doc => {
         if (compatibility) return compatibility(doc);
+        if (!matchesTechnicalFocus(doc)) return false;
         if (scopedDetail) return doc.type!=='catalogo' && !/^CAT-/.test(doc.version) &&
           norm(doc.title+' '+doc.excerpt).includes(norm(detailFocus.name));
         if (reconnectionCharge) return has(doc.excerpt,/\bcargo de reconexion\b/);
@@ -601,7 +623,8 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
         ? `${reply.answer} Para comprobar si tu pago ya aparece registrado, primero debemos verificar la titularidad y consultar la cuenta.`
         : reply.answer;
       return turn.audience === 'asesor'
-        ? card(intent,reply.answer,[],reply.citations,[],'Compartir la información pertinente.',['knowledge'])
+        ? card(intent,reply.answer,[],reply.citations,[],intent==='soporte_tecnico' && contextTerms
+          ? 'Retomar el diagnóstico desde los pasos ya realizados y confirmar el resultado.' : 'Compartir la información pertinente.',['knowledge'])
         : {type:'answer',answer:answer + (askDecoder && !answer.includes('?')
             ? '\n\nCuando termine la espera, cuéntame: ¿volvió la imagen?' : ''),citations:reply.used,route:intent,
           ...(intent==='consulta_planes' ? {conversation_memory:catalogMemoryFromReply(turn.text,reply.answer,reply.used,state.conversation_memory)} : {}),
@@ -739,9 +762,10 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       return card(intent, `Resultado de elegibilidad: ${retention.reason}. Alternativas: ${alternatives}`, facts, citations, proposal ? ['Aprobación del asesor'] : ['Decisión del cliente'], proposal ? 'Revisar y aprobar la propuesta en consola.' : advisorPresented ? 'Esperar la decisión del cliente.' : 'Presentar las alternativas y esperar la decisión del cliente.', ['retention_eligible'], proposal);
     }
     const relevantService=intent==='soporte_tecnico' && has(turn.text,/\b(mi (internet|fibra|modem|equipo|decodificador)|tengo intermitencia|sigo sin (internet|senal))\b/);
-    const [documents, supportFacts] = await Promise.all([retrieve({...turn,deadline},profile,prompts),
+    const supportText=contextTerms ? `${contextTerms}. ${turn.text}` : turn.text;
+    const [documents, supportFacts] = await Promise.all([retrieve({...turn,text:supportText,intake:state.intake,deadline},profile,prompts),
       relevantService ? getServices('identify_affected_service') : []]);
-    const citations = documents.map(citation);
+    const citations = documents.filter(matchesTechnicalFocus).map(citation);
     return card(intent, citations[0]?.excerpt ?? 'No hay evidencia suficiente para resolver la consulta.', supportFacts, citations,
       [...(citations.length ? [] : ['Consultar fuente autorizada']),...(sourceUnavailable(supportFacts) ? ['Consultar CRM · API mock'] : [])],
       citations.length ? 'Compartir el procedimiento aplicable.' : 'Solicitar información adicional o derivar.', [citations.length ? 'knowledge' : 'missing_evidence']);
@@ -766,7 +790,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     const empathy=issue && prompts.advisor_empathy ? renderTemplate(prompts.advisor_empathy,{reported_issue:issue}) : '';
     const domainKey=c.intent === 'soporte_tecnico' ? 'support_reply' : c.intent === 'facturacion' ? 'billing_reply' : 'commercial_reply';
     const domain=prompts[domainKey] ? renderTemplate(prompts[domainKey],{symptom_sentence:issue,authorized_guidance:guidance,billing_fact_sentence:facts,billing_explanation:c.summary,commercial_fact_sentence:facts || c.summary,applicable_condition:guidance}) : [c.summary,facts].filter(Boolean).join(' ');
-    const rendered=prompts.advisor_reply ? renderTemplate(prompts.advisor_reply,{empathy_sentence:empathy,domain_reply:domain,next_step_sentence:c.next_action}) : [empathy,domain,c.next_action].filter(Boolean).join('\n\n');
+    const rendered=c.advisor_draft ?? (prompts.advisor_reply ? renderTemplate(prompts.advisor_reply,{empathy_sentence:empathy,domain_reply:domain,next_step_sentence:c.next_action}) : [empathy,domain,c.next_action].filter(Boolean).join('\n\n'));
     const authorized=[c.summary,facts,guidance,c.next_action].join(' ');
     const nums=(v:string)=>v.match(/\d+(?:[.,:/-]\d+)*(?:\s*%)?/g) ?? [];
     const allowedNumbers=new Set(nums(authorized).map(x=>x.replace(/\s/g,'')));
@@ -1038,9 +1062,14 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const citations = (evidence?.docs ?? documents).map(citation);
       const reason=evidence?.text ?? policyReasons[policy.reason_code] ?? `Se recomienda revisión por ${destination}.`;
       if (caseState.assigned_destination===policy.destination) {
-        return {result:card(policy.destination==='soporte_tecnico' ? 'soporte_tecnico' : intent,
-          [reason,reported].filter(Boolean).join(' '),[],citations,['Revisar lo reportado y confirmar el siguiente paso'],
-          'Continúa la revisión desde este equipo y comunica al cliente el siguiente paso confirmado.',['escalation_assigned',policy.reason_code])};
+        const result=card(policy.destination==='soporte_tecnico' ? 'soporte_tecnico' : intent,
+          [policyReasons[policy.reason_code] ?? reason,reported].filter(Boolean).join(' '),[],citations,
+          ['Revisar lo reportado y confirmar el siguiente paso'],
+          'Continuar la revisión del reporte desde el equipo asignado.',['escalation_assigned',policy.reason_code]);
+        if (result.type==='card') result.card.advisor_draft=policy.destination==='supervision'
+          ? 'Entiendo tu preocupación. Voy a revisar el reporte con lo que ya nos contaste y te indicaré el siguiente paso que podamos confirmar.'
+          : 'Gracias por contarnos qué pasó. Voy a continuar la revisión técnica desde los pasos que ya probaste.';
+        return {result};
       }
       const out=card(policy.destination === 'soporte_tecnico' ? 'soporte_tecnico' : intent,
         [reason,reported].filter(Boolean).join(' '),[],citations,[`Revisar solicitud a ${destination}`],
@@ -1141,10 +1170,12 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
         const previous=caseState.previous_summary;
         const stale=!!current?.models && !summary && !!previous;
         if (summary) card.summary=summary.text;
-        else if (stale && previous) card.summary=previous.text;
         else {
-          const reported=[...history].reverse().find(message=>message.actor==='cliente' && !requestedAdvisor(message.text));
-          if (reported && !card.summary.includes(reported.text)) card.summary=`El cliente dice «${reported.text.slice(0,260)}». ${card.summary}`;
+          const reports=history.filter(message=>message.actor==='cliente' && !requestedAdvisor(message.text));
+          const latest=reports.at(-1), anchor=[...reports].reverse().find(message=>message!==latest && contextIntent(message.text)===card.intent);
+          const declared=[anchor,latest].filter(item=>item && !card.summary.includes(item.text)).map(item=>`«${item!.text.slice(0,230)}»`);
+          if (declared.length) card.summary=`El cliente informó ${declared.join(' y ')}. ${card.summary}`;
+          else if (stale && previous) card.summary=previous.text;
         }
         card.summary_update={at:new Date().toISOString(),turn_id:turn.turn_id,revision:turn.case_revision,
           origin:summary ? 'ia' : 'evidencia',...(stale ? {stale:true} : {})};

@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { hashPassword } from 'better-auth/crypto';
 import { z } from 'zod';
 import type { DataSource, EntityManager } from 'typeorm';
-import { assistedHistory, assistedWriting, TurnModels, type AgentObservation } from '@claro/agent';
+import { assistedHistory, assistedWriting, requestedAdvisor, TurnModels, type AgentObservation } from '@claro/agent';
 import { CustomerId, EscalationDestination, escalationDestinations, InvoiceId, type Viewer } from '@claro/contracts';
 import { AUTH, canReadMockBilling, getViewer, type createAuth } from './auth.js';
 import { audit, DATABASE, enqueue, type CaseRow } from './database.js';
@@ -148,15 +148,23 @@ export class PlatformEvolutionController {
       });
     const latest=await read();
     const stale=latest.snapshot.messages.at(-1)?.id!==row.snapshot.messages.at(-1)?.id;
-    const status=stale ? 'stale' : suggested ? 'suggested' : 'unavailable';
+    const customerReports=history.filter(message=>message.actor==='cliente' && !requestedAdvisor(message.text));
+    const evidence=customerReports.slice(-2);
+    const fromHistory=evidence.length ? {
+      text:`El cliente informó ${evidence.map(item=>`«${item.text.slice(0,165)}»`).join(' y ')}. Se solicita a ${escalationDestinations[input.destination]} revisar el caso.`,
+      references:evidence.map(item=>item.id)
+    } : null;
+    const draft=suggested ?? fromHistory;
+    const source=suggested ? 'ia' : fromHistory ? 'historial' : undefined;
+    const status=stale ? 'stale' : draft ? 'suggested' : 'unavailable';
     observations.push({name:'advisor.escalation_reason',started,ended:Date.now(),metadata:{step_id:'draft_escalation_reason',
-      agent_id:'copiloto',prompt_ref:'escalation_reason',status}});
+      agent_id:'copiloto',prompt_ref:'escalation_reason',status,source:source ?? 'none'}});
     await exportAgentSpan({run_id,conversation_id:row.snapshot.conversation_id,channel:row.snapshot.channel,audience:'asesor',
       config_revision:revision.revision, model_config_revision:model.revision,model_config_digest:model.digest,
       prompt_manifest_digest:runPromptDigest(prompts)},started,'escalation_reason',status,observations,prompts.prompt_metadata,
       row.web_visitor_ref ?? row.contact_ref);
     if (stale) throw new ConflictException('Llegó un mensaje nuevo. Puedes volver a sugerir el motivo.');
-    return {status,suggestion:suggested,destination:input.destination,case_revision:input.case_revision};
+    return {status,suggestion:draft,source,destination:input.destination,case_revision:input.case_revision};
   }
   @Post('cases/:caseId/escalations')
   async request(@Req() req:Request,@Param('caseId') caseId:string,@Body() raw:unknown) {

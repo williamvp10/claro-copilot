@@ -32,6 +32,7 @@ export function EscalationRequest({caseId,revision,turnId,active,suggestion,onDo
   const [destination,setDestination]=useState<EscalationDestination|''>('');
   const [reason,setReason]=useState('');
   const [preview,setPreview]=useState('');
+  const [previewSource,setPreviewSource]=useState<'ia'|'historial'>();
   const [generating,setGenerating]=useState(false);
   const [generationNotice,setGenerationNotice]=useState('');
   const [attempt,setAttempt]=useState(0);
@@ -45,12 +46,12 @@ export function EscalationRequest({caseId,revision,turnId,active,suggestion,onDo
   useEffect(()=>{
     if (!open || !destination) return;
     const controller=new AbortController();
-    setGenerating(true);setPreview('');setGenerationNotice('');
-    request<{suggestion:{text:string}|null}>(path+'/suggestion',{
+    setGenerating(true);setPreview('');setPreviewSource(undefined);setGenerationNotice('');
+    request<{suggestion:{text:string}|null;source?:'ia'|'historial'}>(path+'/suggestion',{
       method:'POST',body:JSON.stringify({destination,case_revision:revision}),signal:controller.signal
-    }).then(({suggestion:generated})=>{
+    }).then(({suggestion:generated,source})=>{
       if (controller.signal.aborted) return;
-      if (generated) setPreview(generated.text);
+      if (generated) {setPreview(generated.text);setPreviewSource(source);}
       else setGenerationNotice('Puedes escribir el motivo o volver a pedir una sugerencia.');
     }).catch(failure=>{if(!controller.signal.aborted)setGenerationNotice(errorText(failure));})
       .finally(()=>{if(!controller.signal.aborted)setGenerating(false);});
@@ -95,7 +96,7 @@ export function EscalationRequest({caseId,revision,turnId,active,suggestion,onDo
           <option key={value} value={value}>{label}</option>)}
       </select></label>
       {destination&&<div className="assisted-reason-preview">
-        <strong><Sparkles size={15} aria-hidden="true"/> Motivo sugerido por IA</strong>
+        <strong>{previewSource==='historial' ? 'Motivo sugerido desde el historial' : <><Sparkles size={15} aria-hidden="true"/> Motivo sugerido por IA</>}</strong>
         {generating ? <p role="status">Preparando una sugerencia…</p> : <>
           {preview ? <><p>{preview}</p><Button type="button" variant="outline" onClick={()=>setReason(preview)}>Usar motivo</Button></>
             : generationNotice&&<p role="status">{generationNotice}</p>}

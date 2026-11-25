@@ -19,6 +19,22 @@ function expectAnOfferToEscalate(result) {
  assert.deepEqual(result.citations,[]);
  assert.match(result.answer,/¿Quieres hablar con uno\?/);
 }
+test('a support transfer keeps the reported equipment and excludes procedures for a different fault',async()=>{
+ const reported=msg('Revisé el cable del módem y la luz LOS sigue roja.','cliente',1);
+ const followup=msg('El servicio volvió unos minutos, pero volvió a caer.','cliente',3);
+ for (const verified of [false,true]) {
+  const {ports}=fixture({verified});
+  ports.readCaseForRun=async()=>({messages:[reported,followup],verified,pending:null,assigned_destination:'soporte_tecnico',
+    intake:{intent:'soporte_tecnico',facts:{sintoma:'Luz LOS roja',cable:'Estado del cable informado'},asked:[]}});
+  const docs=[{id:'fibra',title:'Módem de fibra',excerpt:'Si la luz LOS está roja, revisa el cable de fibra.',version:'1',scope:'public',effective_from:'2026-01-01'},
+    {id:'tv',title:'Decodificador',excerpt:'Si el servicio volvió a caer por E-202, refresca la señal del decodificador.',version:'1',scope:'public',effective_from:'2026-01-01'}];
+  const result=await createAgent(ports,{documents:docs}).run(turn({turn_seq:3,text:followup.text}));
+  assert.equal(result.type,'card');
+  assert.equal(result.card.intent,'soporte_tecnico');
+  assert.ok(result.card.citations.every(source=>source.id!=='tv'));
+  assert.doesNotMatch(result.card.summary,/decodificador|E-202/i);
+ }
+});
 test('unverified account never accesses account ports',async()=>{const f=fixture({verified:false}); const out=await createAgent(f.ports).run(turn({text:'mi factura'})); assert.equal(out.type,'card'); assert.deepEqual(f.calls,[]);});
 test('public plan answer has public citation; unavailable source abstains',async()=>{const f=fixture();const a=createAgent(f.ports);const out=await a.run(turn({audience:'cliente',attention_mode:'autoservicio',text:'¿Cuánto cuesta Fibra 500?'}));assert.equal(out.type,'answer');assert.ok(out.citations.length);assert.deepEqual(f.calls,[]);const b=createAgent(f.ports,{documents:[]});expectAnOfferToEscalate(await b.run(turn({audience:'cliente',text:'precio Fibra 500'})));});
 test('retention proposes only explicit customer acceptance and correct option',async()=>{const f=fixture({messages:[msg('quiero cancelar','cliente',1),msg('Le ofrezco descuento o mejora a Fibra 500','asesor',2),msg('Acepto el descuento','cliente',3)]});const a=createAgent(f.ports);const out=await a.run(turn({turn_seq:3,text:'Acepto el descuento'}));assert.equal(out.type,'card');assert.equal(out.card.proposal.detail,'discount');assert.deepEqual(f.calls.at(-1),{option_id:'discount',citation_ids:['policy']});await a.run(turn({turn_seq:3,text:'Acepto el descuento'}));assert.equal(f.calls.filter(x=>typeof x==='object').length,1);const resumed=await a.resume({run_id:'run1',effect_id:'p1',status:'confirmed',effect_ref:'crm-1'});assert.match(resumed.card.summary,/crm-1/);});
