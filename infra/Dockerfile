@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 FROM node:24-trixie-slim AS build
 WORKDIR /app
-ENV BACKEND_URL=http://api:3000 NEXT_TELEMETRY_DISABLED=1
+ENV BACKEND_URL=http://claro-copiloto-api:3000 NEXT_TELEMETRY_DISABLED=1
 RUN corepack enable && corepack prepare pnpm@11.25.0 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/backend/package.json apps/backend/
