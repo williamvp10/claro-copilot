@@ -188,6 +188,10 @@
 .assisted-summary .assisted-intent { text-transform:capitalize; }
 .assisted-facts div { display:flex; gap:8px; flex-wrap:wrap; padding:4px 0; }
 .assisted-facts dd { font-weight:650; }
+.assisted-draft-links { display:flex; align-items:center; gap:8px; min-height:44px; font-size:12px; }
+.assisted-draft-links input { accent-color:var(--primary); }
+.message-text { white-space:pre-wrap; overflow-wrap:anywhere; }
+.message-text a { text-decoration:underline; text-underline-offset:2px; }
 .assisted-draft-actions { display:flex; flex-wrap:wrap; gap:6px; justify-content:space-between; }
 .assisted-draft-actions button { min-height:44px; }
 .assisted-registration { font-size:13px; color:#41424b; }
