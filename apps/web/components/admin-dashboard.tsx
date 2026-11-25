@@ -81,17 +81,42 @@ type SummaryMetric={id:string;label:string;value:number|null;unit:string;sample:
 type SummaryResult={metrics:SummaryMetric[]};
 const summaryGroups=[
   {id:'negocio',label:'Negocio',metric:'cases'},
-  {id:'calidad-llm',label:'Calidad del LLM',metric:'groundedness'},
-  {id:'tecnica',label:'Técnica',metric:'first_content_p95'},
+  {id:'calidad-llm',label:'Calidad del LLM',metric:'jev_pass_rate'},
+  {id:'tecnica',label:'Técnica',metric:'reply_p95'},
   {id:'agentes',label:'Agentes',metric:'agent_success'},
   {id:'machine-learning',label:'Machine learning',metric:'intent_f1'},
-  {id:'devops',label:'DevOps',metric:'coverage'}
+  {id:'devops',label:'DevOps',metric:'dokploy_done'}
 ] as const;
 const metricStatus:Record<SummaryMetric['status'],string>={measured:'Medida',no_sample:'Sin muestra',pending_instrumentation:'Instrumentación pendiente',target_only:'Solo meta',unavailable:'Fuente no disponible'};
 function GroupSummary({filters,reload}:{filters:DashboardFilters;reload:number}){
  const [results,setResults]=useState<Record<string,{metric?:SummaryMetric;error?:boolean}>>({});
  const [loading,setLoading]=useState(true);
- useEffect(()=>{let current=true;setLoading(true);setResults({});const params=new URLSearchParams({days:filters.days});if(filters.channel!=='all')params.set('channel',filters.channel);void Promise.all(summaryGroups.map(async group=>{try{const response=await fetch(`/api/v1/admin/metrics/${group.id}?${params}`,{credentials:'same-origin'});if(!response.ok)throw new Error('unavailable');const data=await response.json() as SummaryResult;return [group.id,{metric:data.metrics.find(metric=>metric.id===group.metric)}] as const}catch{return [group.id,{error:true}] as const}})).then(rows=>{if(current){setResults(Object.fromEntries(rows));setLoading(false)}});return()=>{current=false}},[filters.days,filters.channel,reload]);
+ useEffect(()=>{
+  const controller=new AbortController();
+  const params=new URLSearchParams({days:filters.days});
+  if(filters.channel!=='all')params.set('channel',filters.channel);
+  let pending=false;
+  setLoading(true);
+  setResults({});
+  async function refresh(){
+   if(pending||document.hidden)return;
+   pending=true;
+   const rows=await Promise.all(summaryGroups.map(async group=>{
+    try{
+     const response=await fetch(`/api/v1/admin/metrics/${group.id}?${params}`,{signal:controller.signal});
+     if(!response.ok)throw new Error('unavailable');
+     const data=await response.json() as SummaryResult;
+     return [group.id,{metric:data.metrics.find(metric=>metric.id===group.metric)}] as const;
+    }catch{return [group.id,{error:true}] as const;}
+   }));
+   pending=false;
+   if(!controller.signal.aborted){setResults(Object.fromEntries(rows));setLoading(false);}
+  }
+  void refresh();
+  const timer=window.setInterval(refresh,30_000);
+  document.addEventListener('visibilitychange',refresh);
+  return()=>{controller.abort();window.clearInterval(timer);document.removeEventListener('visibilitychange',refresh);};
+ },[filters.days,filters.channel,reload]);
  const link=(group:string)=>{const params=new URLSearchParams({view:'metrics',group,days:filters.days});if(filters.channel!=='all')params.set('channel',filters.channel);return `/?${params}`};
  return <section className="evo-overview"><div className="evo-overview-head"><div><h2>Resumen por categoría</h2><p>Señales del período seleccionado · hora de Bogotá</p></div></div><div className="evo-overview-grid">{summaryGroups.map(group=>{const result=results[group.id],metric=result?.metric;return <a className="evo-overview-card" key={group.id} href={link(group.id)}><div className="evo-row"><h3>{group.label}</h3><span aria-hidden="true">↗</span></div>{loading?<p role="status">Consultando…</p>:result?.error?<><strong>Fuente no disponible</strong><p>No se pudo consultar este tablero.</p></>:metric?<><span className="evo-overview-label">{metric.label}</span><strong>{metric.value===null?'—':number.format(metric.value)} <small>{metric.unit}</small></strong><span className={`evo-status ${metric.status}`}>{metricStatus[metric.status]}</span><p>{metric.denominator!==null?`Denominador ${number.format(metric.denominator)}`:metric.sample!==null?`Muestra ${number.format(metric.sample)}`:'Sin denominador'} · {metric.source}</p></>:<><strong>Sin indicador</strong><p>No hay señal disponible para esta categoría.</p></>}</a>})}</div>{!loading&&summaryGroups.some(group=>results[group.id]?.error||results[group.id]?.metric?.status==='unavailable')&&<p className="alert" role="status">Hay fuentes no disponibles. Abre la categoría afectada para revisar el detalle.</p>}</section>;
 }

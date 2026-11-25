@@ -4,6 +4,8 @@ import { Intent } from '@claro/contracts';
 import { modelObservationNames } from '@claro/agent';
 import { browserEndpoint, projectComparison } from './dashboard.js';
 import { readModelMetrics, traceIdentifier } from './telemetry.js';
+import { readLangfuseEvaluations } from './langfuse-evaluations.js';
+import { observationMetrics, publicHttpsMetric } from './deployment-observations.js';
 
 export const MetricGroup = z.enum(['negocio', 'calidad-llm', 'tecnica', 'agentes', 'machine-learning', 'devops']);
 type Group = z.infer<typeof MetricGroup>;
@@ -24,7 +26,8 @@ type Metric = {
   id: string; label: string; value: number | null; unit: string; sample: number | null; denominator: number | null;
   target: string | null; observed_at: string | null; source: string; status: Status; series?: Point[]; evidence?: Evidence;
 };
-type Input = Partial<Omit<Metric, 'id' | 'label' | 'unit' | 'source'>>;
+export type MetricValues = Partial<Omit<Metric, 'id' | 'label' | 'unit' | 'source'>>;
+type Input = MetricValues;
 function metric(id: string, label: string, unit: string, source: string, data: Input = {}): Metric {
   const value = data.value ?? null;
   return {
@@ -185,11 +188,12 @@ async function business(db: DataSource, filters: Filters) {
 }
 
 async function quality(db: DataSource, filters: Filters) {
-  const [reports, votes] = await Promise.all([
+  const [reports, votes, native] = await Promise.all([
     db.query(`SELECT candidate_revision,completed_at,report FROM prompt_evaluation
       WHERE ($1::text IS NULL OR candidate_revision=$1) AND completed_at >= now()-$2::int*interval '1 day'
       ORDER BY completed_at DESC LIMIT 30`, [filters.revision ?? null, filters.days]),
-    events(db, filters, ['reply_feedback_positive','reply_feedback_negative'])
+    events(db, filters, ['reply_feedback_positive','reply_feedback_negative']),
+    readLangfuseEvaluations(undefined, new Date(Date.now() - filters.days * 86_400_000)).catch(() => null)
   ]);
   type ComparisonRow = { candidate_revision:string; completed_at:Date; report:Parameters<typeof projectComparison>[0] & {
     review?:{metrics?:{adjudicated_hallucinations?:number;hallucination_sample?:number}};
@@ -214,8 +218,24 @@ async function quality(db: DataSource, filters: Filters) {
   const coverage = recent?.report.proposed?.questions?.filter((q:{required_fact_count:number;citations:string[];score:string}) =>
     q.required_fact_count>0 && q.score!=='platform_replay_required') ?? [];
   const emptyCitations = coverage.filter((q:{citations:string[]})=>!q.citations.length).length;
+  const nativeRun = native?.runs.find(run => run.id === native.selected_id);
+  const reviewed = native?.cases.filter(test => test.verdict !== 'pending') ?? [];
+  const passed = reviewed.filter(test => test.verdict === 'passed').length;
+  const needsReview = reviewed.filter(test => test.verdict === 'review').length;
+  const failed = reviewed.filter(test => test.verdict === 'failed').length;
+  const infractions = reviewed.filter(test => test.forbidden === 'infraccion').length;
+  const jevEvidence = native?.dataset_url ? {label:'Abrir experimento en Langfuse', url:native.dataset_url} : undefined;
+  const jevSource = 'Langfuse · Jev nativo';
+  const nativeResult = (sample: number, denominator: number) => ({
+    value: rate(sample, denominator), sample: denominator ? sample : null, denominator: denominator || null,
+    observed_at: nativeRun?.started_at, evidence: jevEvidence,
+    ...(native === null ? {status:'unavailable' as const} : {})
+  });
   return {
     metrics:[
+      metric('jev_pass_rate','Aprobación Jev','%',jevSource,nativeResult(passed, reviewed.length)),
+      metric('jev_coverage','Cobertura de evaluación','%',jevSource,nativeResult(reviewed.length, nativeRun?.cases ?? 0)),
+      metric('jev_infractions','Infracciones detectadas','%',jevSource,nativeResult(infractions, reviewed.length)),
       metric('accuracy','Exactitud','proporción',evalSource,{value:evaluation?.candidate.accuracy, target:'≥ 0,80', denominator:n, observed_at:recent?.completed_at.toISOString(),series:points('accuracy'),evidence}),
       metric('groundedness','Fidelidad a las fuentes','proporción',evalSource,{value:evaluation?.candidate.groundedness,target:'≥ 0,85',
         sample:recent?.report.proposed?.metrics?.grounded_evidence_count, observed_at:recent?.completed_at.toISOString(),series:points('groundedness'),evidence}),
@@ -227,7 +247,13 @@ async function quality(db: DataSource, filters: Filters) {
         value:rate(hallucinations,auditedCount),sample:hallucinations,denominator:auditedCount,target:'≤ 5 %',evidence}),
       metric('advisor_feedback','Feedback positivo del asesor','%',platform,{value:rate(yes,yes+no),sample:yes,denominator:yes+no,target:'≥ 80 %'})
     ],
-    supporting:{ comparison:evaluation }
+    supporting:{
+      jev: nativeRun ? {
+        id:nativeRun.id, started_at:nativeRun.started_at, total:nativeRun.cases, evaluated:reviewed.length,
+        passed, review:needsReview, failed, pending:Math.max(nativeRun.cases-reviewed.length, 0), url:native?.dataset_url ?? null
+      } : null,
+      comparison:evaluation
+    }
   };
 }
 
@@ -266,7 +292,7 @@ async function apiHealth(days: number): Promise<Partial<Health>> {
 type Timing = {date:string|null;kind:string;p95:number;sample:number};
 type ModelCosts = {date:string|null;usd:number|null;conversations:number;requests:number;measured:number};
 async function technical(db: DataSource, filters: Filters) {
-  const [timing, costs, probes, freshness] = await Promise.all([
+  const [timing, costs, probes, freshness, publicProbe] = await Promise.all([
     db.query(`
       WITH bounds AS (${timeline}),cases AS (${scopedCases}), eligible AS (
         SELECT (e.created_at AT TIME ZONE $4)::date::text AS date,e.kind,(e.metadata->>'ms')::float AS ms
@@ -291,7 +317,8 @@ async function technical(db: DataSource, filters: Filters) {
         FROM grouped GROUP BY GROUPING SETS ((date),()) ORDER BY date`,[...windowParams(filters),[...modelObservationNames,'decision.jev']]) as Promise<ModelCosts[]>,
     apiHealth(filters.days),
     db.query(`SELECT published_at,manifest->>'detected_at' AS detected_at FROM knowledge_publication
-      WHERE published_at>=now()-$1::int*interval '1 day' AND manifest ? 'detected_at' ORDER BY published_at DESC LIMIT 30`,[filters.days])
+      WHERE published_at>=now()-$1::int*interval '1 day' AND manifest ? 'detected_at' ORDER BY published_at DESC LIMIT 30`,[filters.days]),
+    publicHttpsMetric(db, filters.days)
   ]);
   const latency = (kind:string):Input => {
     const total = timing.find(row=>row.kind===kind && row.date===null);
@@ -311,6 +338,7 @@ async function technical(db: DataSource, filters: Filters) {
     metric('first_token_p95','Primer token p95','ms',platform,{status:'pending_instrumentation'}),
     metric('worker_p95','Latencia del worker p95','ms',platform,latency('agent_latency')),
     metric('availability','Disponibilidad de API','%','Prometheus · up',{...probes,target:'≥ 99 %'}),
+    metric('public_https','Éxito de la sonda HTTPS','%','Sonda desde la VPS · ruta pública',publicProbe),
     metric('cost_per_conversation','Costo observado de modelos por conversación instrumentada','USD',platform,{
       value:cost?.conversations && cost.usd!==null ? cost.usd/cost.conversations : null,
       sample:cost?.conversations,denominator:cost?.conversations,
@@ -524,6 +552,7 @@ export const ReleaseEvidence = z.object({
   {message:'Fecha de smoke incompatible con el commit'});
 
 async function devops(db: DataSource, filters:Filters) {
+  const [live, publicProbe] = await Promise.all([observationMetrics(db, filters.days),publicHttpsMetric(db, filters.days)]);
   const rows = await db.query(`SELECT evidence,observed_at FROM release_metric
     WHERE ($1::text IS NULL OR digest=$1) AND observed_at>=now()-$2::int*interval '1 day'
     ORDER BY observed_at DESC LIMIT 30`,[filters.digest ?? null,filters.days]) as {
@@ -549,10 +578,18 @@ async function devops(db: DataSource, filters:Filters) {
   const coverage = rowsOf('claro-copiloto')[0];
   return {
     metrics:[
+      metric('dokploy_done','Despliegues completados','despliegues','Dokploy',live.done),
+      metric('dokploy_https_verified','Despliegues verificados por HTTPS','%','Dokploy · sonda HTTPS',live.verified),
+      metric('deploy_lead_time','Mediana del commit a HTTPS','min','GitHub Actions · Dokploy · sonda HTTPS',live.lead),
+      metric('public_https','Éxito de la sonda HTTPS','%','Sonda desde la VPS · ruta pública',publicProbe),
       metric('coverage','Cobertura de pruebas','%',source,{value:coverage?.evidence.coverage_pct, target:'≥ 70 %',observed_at:coverage?.observed_at.toISOString()}),
       ...perComponent
     ],
-    supporting:{releases:rows.map(({evidence,observed_at})=>({...evidence, observed_at}))}
+    supporting:{
+      deployments:live.deployments, deployment_sources:live.sources,
+      production_probe:live.current,
+      releases:rows.map(({evidence,observed_at})=>({...evidence, observed_at}))
+    }
   };
 }
 

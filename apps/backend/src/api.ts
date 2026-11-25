@@ -7,6 +7,7 @@ import { z } from 'zod';
 import type { Request, Response } from 'express';
 import { type DataSource } from 'typeorm';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { CloseCase, DecideProposal, OpenCase, SendMessage, Text, VerifyHolder, WebVerificationStart, WebVerificationConfirm, Id, ConfirmIntegration, InvoiceId, OperationKey, DashboardFilters, type CaseEvent, type WebChatEvent, type Dashboard, type EvalJob, type EvalStatus, type Viewer } from '@claro/contracts';
 import { AUTH, canManageAdministration, canReadMockBilling, getViewer, type createAuth } from './auth.js';
 import { RetentionDiscountController } from './retention-discount.js';
@@ -204,6 +205,19 @@ class HealthController {
     } catch {
       throw new ServiceUnavailableException();
     }
+  }
+
+  @Get('api/v1/health/deployment')
+  async deployment() {
+    const ready = await this.ready();
+    let sha: string | null = null;
+    try {
+      const built = readFileSync('.deployment-revision', 'utf8').trim();
+      if (/^[a-f0-9]{40}$/.test(built)) sha = built;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    return {...ready, sha};
   }
 }
 

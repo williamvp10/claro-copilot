@@ -104,9 +104,9 @@ services:
           echo 'Fresh platform database. No previous schema to back up.'
           exit 0
         fi
-        applied=$$(psql -XAt -v ON_ERROR_STOP=1 "$$DATABASE_URL" -c 'SELECT count(*) FROM public.claro_migrations WHERE "timestamp" = 1795260000028')
+        applied=$$(psql -XAt -v ON_ERROR_STOP=1 "$$DATABASE_URL" -c 'SELECT count(*) FROM public.claro_migrations WHERE "timestamp" = 1795260000030')
         if [ "$$applied" = 1 ]; then
-          echo 'Assisted attention migrations already applied.'
+          echo 'Deployment observation migration already applied.'
           exit 0
         fi
         chmod 700 /backups
@@ -114,7 +114,7 @@ services:
         trap 'rm -f "$$snapshot"' EXIT
         pg_dump --format=custom --file="$$snapshot" "$$DATABASE_URL"
         pg_restore --list "$$snapshot" >/dev/null
-        mv "$$snapshot" "/backups/platform-before-assisted-attention-$$(date -u +%Y%m%dT%H%M%SZ)-$${snapshot##*.}.dump"
+        mv "$$snapshot" "/backups/platform-before-deployment-observations-$$(date -u +%Y%m%dT%H%M%SZ)-$${snapshot##*.}.dump"
         echo 'Platform database backup verified.'
   migrate:
     depends_on:
@@ -168,6 +168,21 @@ services:
     environment:
       LANGFUSE_CAPTURE_CHAT_IO: *demo-chat-io
     depends_on: *ready
+  release-observer:
+    image: ${CLARO_IMAGE:-claro-copiloto:local}
+    restart: unless-stopped
+    mem_limit: 192m
+    command: [node, apps/backend/dist/release-observer.js]
+    environment:
+      DATABASE_URL: ${PLATFORM_DATABASE_URL}
+      PUBLIC_APP_URL: ${BETTER_AUTH_URL}
+      DOKPLOY_METRICS_API_KEY: ${DOKPLOY_METRICS_API_KEY:-}
+      DOKPLOY_METRICS_URL: ${DOKPLOY_METRICS_URL:-https://dokploywill.dpdns.org}
+      DOKPLOY_METRICS_COMPOSE_ID: ${DOKPLOY_METRICS_COMPOSE_ID:-hCEFjqeFkCPAO1ws20eBa}
+      GITHUB_METRICS_REPO: ${GITHUB_METRICS_REPO:-williamvp10/claro-copilot}
+      GITHUB_METRICS_API_TOKEN: ${GITHUB_METRICS_API_TOKEN:-}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
   prometheus:
     profiles: !reset []
     ports: !reset []

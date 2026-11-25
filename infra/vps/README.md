@@ -28,3 +28,11 @@ Después del despliegue, comprueba que las tareas de migración, usuarios, publi
 Prueba un chat sintético con una cita, un traspaso y un cierre asistido. Comprueba en Langfuse la sesión de ese chat, la entrada y salida publicables, y la revisión de los prompts o del modelo cuando intervengan. Compose activa la captura de texto solo para los turnos públicos elegibles del demo web. El exportador enmascara contactos y referencias antes de enviarlos. `LANGFUSE_CAPTURE_CHAT_IO=false` deshabilita la captura de texto. Verifica los experimentos de intención y de riesgo de baja en MLflow. Registra el commit desplegado y los resultados fuera de las credenciales del entorno.
 
 El servicio `langfuse-calls-init` importa los datasets sintéticos y el evaluador nativo de Jev al desplegar. El perfil `call-evals` publica un replay manual de las llamadas desde Compose. En el experimento de Langfuse, aplica **Jev · Llamadas v1** a sus 15 ítems y comprueba los dos criterios en **Prompts y evaluaciones**. [Ejecutar el juez](../../docs/08-demo-local.md#ejecutar-el-juez-desde-langfuse)
+
+## Datos del tablero
+
+**Calidad del LLM** consulta el último experimento Jev nativo del período. Un caso cuenta como evaluado al recibir los dos criterios. Si ejecutas otro experimento, el tablero muestra la cobertura y los veredictos a medida que Langfuse guarda los resultados. La vista de **Tableros** consulta las fuentes cada 30 segundos mientras esté visible.
+
+Para habilitar el historial de **DevOps**, guarda `DOKPLOY_METRICS_API_KEY` en **Environment** del Compose con permiso de lectura de despliegues del servicio. Puedes ajustar `DOKPLOY_METRICS_URL`, `DOKPLOY_METRICS_COMPOSE_ID` y `GITHUB_METRICS_REPO` si cambias de instalación. Para un repositorio privado, configura también `GITHUB_METRICS_API_TOKEN` con permiso de lectura de Actions. [API de despliegues de Dokploy](https://docs.dokploy.com/docs/api/deployment)
+
+El recolector lee el historial de Dokploy cada minuto y GitHub Actions cada dos minutos. Comprueba por HTTPS `/chat` y el estado de la API. Vincula la primera comprobación correcta a un despliegue completado cuando el SHA coincide con el de la imagen en ejecución. Los despliegues anteriores pueden quedar sin observación HTTPS. La sonda se ejecuta desde la VPS y conserva 32 días de muestras.

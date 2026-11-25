@@ -11,6 +11,7 @@ COPY packages/agent/package.json packages/agent/
 COPY packages/contracts/package.json packages/contracts/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile
 COPY . .
+RUN node infra/stamp-revision.mjs && rm -rf .git
 RUN pnpm build && rm -rf apps/web/.next/cache
 
 # Keep workspace symlinks and Next runtime dependencies intact.

@@ -626,27 +626,291 @@ function CustomerForm({customer,identity,register,close,done}:{customer?:Custome
   </Dialog>;
 }
 
-type Metric={id:string;label:string;value:number|null;unit:string;sample:number|null;denominator:number|null;target:string|null;observed_at:string|null;source:string;status:'measured'|'no_sample'|'pending_instrumentation'|'target_only'|'unavailable';series?:{date:string;value:number;sample?:number}[];evidence?:{label:string;url:string}};
-type MetricsResponse={group:string;filters:{days:string;channel?:string;category?:string;revision?:string;digest?:string;timezone:string};metrics:Metric[];supporting?:Record<string,unknown>};
+type Metric={
+  id:string;label:string;value:number|null;unit:string;sample:number|null;denominator:number|null;
+  target:string|null;observed_at:string|null;source:string;
+  status:'measured'|'no_sample'|'pending_instrumentation'|'target_only'|'unavailable';
+  series?:{date:string;value:number;sample?:number}[];evidence?:{label:string;url:string};
+};
+type Deployment={
+  id:string;sha:string|null;status:string;created_at:string;verified_at:string|null;
+  ci_status:string|null;ci_conclusion:string|null;ci_url:string|null;lead_minutes:number|null;
+};
+type DeploymentSource={name:string;status:string;checked_at:string;last_success_at:string|null};
+type ProductionProbe={
+  checked_at:string;passed:boolean;sha:string|null;chat_status:number|null;api_status:number|null;
+  ci_status:string|null;ci_conclusion:string|null;ci_url:string|null;
+};
+type JevSummary={started_at:string;passed:number;review:number;failed:number;pending:number;url:string|null};
+type MetricSupportingData=Record<string,unknown>&{
+  jev?:JevSummary|null;deployments?:Deployment[];deployment_sources?:DeploymentSource[];production_probe?:ProductionProbe|null;
+};
+type MetricsResponse={
+  group:string;filters:{days:number;channel?:string;category?:string;revision?:string;digest?:string;timezone:string};
+  metrics:Metric[];supporting?:MetricSupportingData;
+};
 const groups=[['negocio','Negocio'],['calidad-llm','Calidad del LLM'],['tecnica','Técnica'],['agentes','Agentes'],['machine-learning','Machine learning'],['devops','DevOps']] as const;
-const statuses:Record<Metric['status'],string>={measured:'Medida',no_sample:'Sin muestra',pending_instrumentation:'Instrumentación pendiente',target_only:'Solo meta',unavailable:'Fuente no disponible'};
+const defaultCards:Record<string,readonly string[]>={
+  negocio:['cases','resolution','n2','aht'],
+  'calidad-llm':['jev_pass_rate','jev_coverage','jev_infractions'],
+  tecnica:['reply_p95','worker_p95','public_https','cost_per_conversation','model_cost_coverage'],
+  agentes:['agent_success','agent_pending','escalations','tool_error'],
+  'machine-learning':['intent_predictions','intent_f1','label_coverage','churn_auc'],
+  devops:['dokploy_done','dokploy_https_verified','deploy_lead_time','public_https']
+};
+const statuses:Record<Metric['status'],string>={
+  measured:'Medida',no_sample:'Sin muestra',pending_instrumentation:'Instrumentación pendiente',
+  target_only:'Solo meta',unavailable:'Fuente no disponible'
+};
 const formatNumber=new Intl.NumberFormat('es-CO',{maximumFractionDigits:2});
 const formatModelScore=new Intl.NumberFormat('es-CO',{maximumFractionDigits:3});
+const formatCurrency=new Intl.NumberFormat('es-CO',{maximumFractionDigits:5});
+const metricDate=new Intl.DateTimeFormat('es-CO',{timeZone:'America/Bogota',dateStyle:'medium',timeStyle:'medium'});
+const dateLabel=(value:string)=>metricDate.format(new Date(value));
 type MetricPreferences=Record<string,{cards:Record<string,boolean>;series:Record<string,boolean>}>;
+
 export function MetricsBoard({operatorId}:{operatorId:string}){
- const [group,setGroup]=useState('negocio'),[days,setDays]=useState('7'),[channel,setChannel]=useState(''),[category,setCategory]=useState(''),[revision,setRevision]=useState(''),[digest,setDigest]=useState(''),[data,setData]=useState<MetricsResponse>(),[error,setError]=useState(''),[loading,setLoading]=useState(true),[preferences,setPreferences]=useState<MetricPreferences>({}),[initialized,setInitialized]=useState(false),[reload,setReload]=useState(0);
- const [pickerOpen,setPickerOpen]=useState(false);
- const preferenceKey=`claro:metrics:${operatorId}`;
- useEffect(()=>{try{const parsed=JSON.parse(localStorage.getItem(preferenceKey)??'{}');setPreferences(parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{})}catch{setPreferences({})}},[preferenceKey]);
- const groupPreferences=preferences[group];
- const isVisible=(kind:'cards'|'series',id:string)=>groupPreferences?.[kind]?.[id]!==false;
- function setVisible(kind:'cards'|'series',id:string,show:boolean){setPreferences(current=>{const existing=current[group]??{cards:{},series:{}};const next={...current,[group]:{cards:existing.cards??{},series:existing.series??{},[kind]:{...existing[kind],[id]:show}}};try{localStorage.setItem(preferenceKey,JSON.stringify(next))}catch{}return next})}
- function resetVisible(){setPreferences(current=>{const next={...current};delete next[group];try{localStorage.setItem(preferenceKey,JSON.stringify(next))}catch{}return next})}
- useEffect(()=>{const params=new URLSearchParams(window.location.search);const next=params.get('group');if(groups.some(([id])=>id===next))setGroup(next!);setDays(params.get('days')==='30'?'30':'7');setChannel(params.get('channel')??'');setCategory(params.get('category')??'');setRevision(params.get('revision')??'');setDigest(params.get('digest')??'');setInitialized(true)},[]);
- useEffect(()=>{if(!initialized)return;const params=new URLSearchParams({view:'metrics',group,days});if(channel)params.set('channel',channel);if(category)params.set('category',category);if(revision&&group==='calidad-llm')params.set('revision',revision);if(digest&&group==='devops')params.set('digest',digest);window.history.replaceState(null,'',`?${params.toString()}`);let live=true;setLoading(true);setError('');request<MetricsResponse>(`/admin/metrics/${group}?${params}`).then(value=>{if(live){setData(value)}}).catch(e=>{if(live){setData(undefined);setError(errorText(e))}}).finally(()=>{if(live)setLoading(false)});return()=>{live=false}},[group,days,channel,category,revision,digest,reload,initialized]);
- return <div className="admin-page evo-page"><header className="ops-header"><div><span className="eyebrow">MEDICIÓN DEL MVP</span><h1>Tableros</h1><p>Indicadores, fuentes y estado de medición · hora de Bogotá</p></div></header><nav className="evo-tabs" aria-label="Categorías de tableros">{groups.map(([id,label])=><button key={id} aria-current={group===id?'page':undefined} onClick={()=>setGroup(id)}>{label}</button>)}</nav><div className="evo-filters"><label>Período<select value={days} onChange={e=>setDays(e.target.value)}><option value="7">Últimos 7 días</option><option value="30">Últimos 30 días</option></select></label><label>Canal<select value={channel} onChange={e=>setChannel(e.target.value)}><option value="">Todos</option><option value="web">Web</option><option value="telegram">Telegram</option></select></label><label>Categoría<select value={category} onChange={e=>setCategory(e.target.value)}><option value="">Todas</option>{['soporte_tecnico','facturacion','consulta_planes','cancelacion','portabilidad'].map(x=><option key={x} value={x}>{x.replaceAll('_',' ')}</option>)}</select></label>{group==='calidad-llm'&&<label>Revisión<input value={revision} onChange={e=>setRevision(e.target.value)} placeholder="Todas"/></label>}{group==='devops'&&<label>Digest<input value={digest} onChange={e=>setDigest(e.target.value)} placeholder="Último corte"/></label>}</div>{error&&<p className="alert error" role="alert">{error}</p>}{loading?<p role="status">Actualizando métricas…</p>:data&&<><p className="evo-applied">Filtros aplicados: {data.filters.days} días · {data.filters.channel||'todos los canales'} · {data.filters.category||'todas las categorías'} · {data.filters.timezone}</p>{data.metrics.length?<><details className="evo-picker" open={pickerOpen} onToggle={event=>setPickerOpen(event.currentTarget.open)}><summary>Elegir indicadores</summary><p>Preferencias guardadas para esta categoría y operador.</p><div className="evo-picker-grid">{data.metrics.map(metric=><div className="evo-picker-row" key={metric.id}><span>{metric.label}</span><label><input type="checkbox" aria-label={`Mostrar tarjeta ${metric.label}`} checked={isVisible('cards',metric.id)} onChange={e=>setVisible('cards',metric.id,e.target.checked)}/> Tarjeta</label><label><input type="checkbox" aria-label={`Mostrar serie ${metric.label}`} checked={isVisible('series',metric.id)} disabled={!metric.series?.length} onChange={e=>setVisible('series',metric.id,e.target.checked)}/> Serie{!metric.series?.length&&' · sin datos'}</label></div>)}</div><Button type="button" variant="outline" onClick={resetVisible}>Restaurar predeterminadas</Button></details><div className="evo-metrics">{data.metrics.filter(metric=>isVisible('cards',metric.id)).map(metric=><article className="ops-plot evo-metric" key={metric.id}><div className="evo-row"><h3>{metric.label}</h3><span className={`evo-status ${metric.status}`}>{statuses[metric.status]}</span></div><div className="evo-value">{metric.value===null?'—':(metric.unit==='F1'||metric.unit==='AUC'?formatModelScore:formatNumber).format(metric.value)} <small>{metric.unit}</small></div><p>{metric.denominator!==null?`Denominador: ${formatNumber.format(metric.denominator)}`:'Sin denominador'}{metric.sample!==null?` · Muestra: ${formatNumber.format(metric.sample)}`:''}</p><p>Meta: {metric.target??'No definida'} · Fuente: {metric.source}</p>{metric.observed_at&&<p>Observado: {new Date(metric.observed_at).toLocaleString('es-CO',{timeZone:'America/Bogota'})}</p>}{metric.evidence&&<a href={metric.evidence.url} target="_blank" rel="noreferrer">{metric.evidence.label} ↗</a>}{!!metric.series?.length&&<><label className="evo-toggle"><input type="checkbox" aria-label={`Mostrar serie ${metric.label}`} checked={isVisible('series',metric.id)} onChange={e=>setVisible('series',metric.id,e.target.checked)}/> Mostrar serie</label>{isVisible('series',metric.id)&&<MetricSeries metric={metric}/>}</>}</article>)}{data.metrics.every(metric=>!isVisible('cards',metric.id))&&<div className="ops-empty">Todas las tarjetas están ocultas. Usa «Elegir indicadores» para mostrarlas.</div>}</div></>:<div className="ops-empty">No hay indicadores para estos filtros.</div>}{data.supporting&&<MetricSupporting data={data.supporting}/>}</>}{group==='devops'&&<ReleaseImport done={()=>setReload(x=>x+1)}/>}</div>;
+  const [group,setGroup]=useState('negocio');
+  const [days,setDays]=useState('7');
+  const [channel,setChannel]=useState('');
+  const [category,setCategory]=useState('');
+  const [revision,setRevision]=useState('');
+  const [digest,setDigest]=useState('');
+  const [data,setData]=useState<MetricsResponse>();
+  const [error,setError]=useState('');
+  const [loading,setLoading]=useState(true);
+  const [updatedAt,setUpdatedAt]=useState<Date>();
+  const [preferences,setPreferences]=useState<MetricPreferences>({});
+  const [initialized,setInitialized]=useState(false);
+  const [reload,setReload]=useState(0);
+  const preferenceKey=`claro:metrics:${operatorId}`;
+  const appliesToConversations=group!=='devops';
+  const activeRevision=group==='calidad-llm'?revision:'';
+  const activeDigest=group==='devops'?digest:'';
+  const activeChannel=appliesToConversations?channel:'';
+  const activeCategory=appliesToConversations?category:'';
+
+  useEffect(()=>{
+    try {
+      const saved=JSON.parse(localStorage.getItem(preferenceKey)??'{}');
+      setPreferences(saved&&typeof saved==='object'&&!Array.isArray(saved)?saved:{});
+    } catch { setPreferences({}); }
+  },[preferenceKey]);
+
+  const isVisible=(kind:'cards'|'series',id:string)=>preferences[group]?.[kind]?.[id]
+    ?? (kind==='cards' && defaultCards[group]?.includes(id));
+
+  function setVisible(kind:'cards'|'series',id:string,show:boolean){
+    setPreferences(current=>{
+      const existing=current[group]??{cards:{},series:{}};
+      const next={...current,[group]:{...existing,[kind]:{...existing[kind],[id]:show}}};
+      try { localStorage.setItem(preferenceKey,JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }
+
+  function resetVisible(){
+    setPreferences(current=>{
+      const next={...current};
+      delete next[group];
+      try { localStorage.setItem(preferenceKey,JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }
+
+  useEffect(()=>{
+    const params=new URLSearchParams(window.location.search);
+    const next=params.get('group');
+    if(groups.some(([id])=>id===next)) setGroup(next!);
+    setDays(params.get('days')==='30'?'30':'7');
+    setChannel(params.get('channel')??'');
+    setCategory(params.get('category')??'');
+    setRevision(params.get('revision')??'');
+    setDigest(params.get('digest')??'');
+    setInitialized(true);
+  },[]);
+
+  useEffect(()=>{
+    if(!initialized) return;
+    const params=new URLSearchParams({view:'metrics',group,days});
+    if(activeChannel) params.set('channel',activeChannel);
+    if(activeCategory) params.set('category',activeCategory);
+    if(activeRevision) params.set('revision',activeRevision);
+    if(activeDigest) params.set('digest',activeDigest);
+    window.history.replaceState(null,'',`?${params}`);
+    const controller=new AbortController();
+    let pending=false;
+    setLoading(true);
+    setData(undefined);
+    setUpdatedAt(undefined);
+    setError('');
+    async function refresh(){
+      if(pending||document.hidden) return;
+      pending=true;
+      try {
+        const value=await request<MetricsResponse>(`/admin/metrics/${group}?${params}`,{signal:controller.signal});
+        if(!controller.signal.aborted){setData(value);setUpdatedAt(new Date());setError('');}
+      } catch (error){
+        if(!controller.signal.aborted) setError(errorText(error));
+      } finally {
+        pending=false;
+        if(!controller.signal.aborted) setLoading(false);
+      }
+    }
+    void refresh();
+    const timer=window.setInterval(refresh,30_000);
+    document.addEventListener('visibilitychange',refresh);
+    return ()=>{
+      controller.abort();
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange',refresh);
+    };
+  },[group,days,activeChannel,activeCategory,activeRevision,activeDigest,reload,initialized]);
+
+  const visible=data?.metrics.filter(metric=>isVisible('cards',metric.id));
+  const supporting=data?.supporting;
+  return <div className="admin-page evo-page">
+    <header className="ops-header"><div><h1>Tableros</h1>
+      <p>Actualización automática cada 30 s · hora de Bogotá</p></div>
+      <Button type="button" variant="outline" onClick={()=>setReload(x=>x+1)}>Actualizar</Button>
+    </header>
+    <nav className="evo-tabs" aria-label="Categorías de tableros">
+      {groups.map(([id,label])=><button key={id} aria-current={group===id?'page':undefined} onClick={()=>setGroup(id)}>{label}</button>)}
+    </nav>
+    <div className="evo-filters">
+      <label>Período<select value={days} onChange={e=>setDays(e.target.value)}>
+        <option value="7">Últimos 7 días</option><option value="30">Últimos 30 días</option>
+      </select></label>
+      {appliesToConversations&&<>
+        <label>Canal<select value={channel} onChange={e=>setChannel(e.target.value)}>
+          <option value="">Todos</option><option value="web">Web</option><option value="telegram">Telegram</option>
+        </select></label>
+        <label>Categoría<select value={category} onChange={e=>setCategory(e.target.value)}>
+          <option value="">Todas</option>{['soporte_tecnico','facturacion','consulta_planes','cancelacion','portabilidad'].map(
+            id=><option key={id} value={id}>{id.replaceAll('_',' ')}</option>)}
+        </select></label>
+      </>}
+    </div>
+    {updatedAt&&<p className="evo-applied">Actualizado {metricDate.format(updatedAt)}</p>}
+    {error&&<p className="alert error" role="alert">{error}</p>}
+    {loading&&<p role="status">Consultando métricas…</p>}
+    {data&&<>
+      {group==='calidad-llm'&&<p className="evo-applied">Jev usa el último experimento del conjunto de llamadas en el período. Los filtros de canal y categoría aplican a los datos de conversación.</p>}
+      <div className="evo-metrics">
+        {visible?.map(metric=><MetricCard key={metric.id} metric={metric}
+          showSeries={!!isVisible('series',metric.id)} onToggle={show=>setVisible('series',metric.id,show)}/>)}
+        {visible?.length===0&&<div className="ops-empty">Selecciona las tarjetas que quieras ver en «Indicadores y filtros adicionales».</div>}
+      </div>
+      {group==='calidad-llm'&&supporting?.jev&&<JevRun run={supporting.jev}/>}
+      {group==='devops'&&<DeploymentHistory
+        rows={supporting?.deployments??[]} sources={supporting?.deployment_sources??[]} probe={supporting?.production_probe}/>}
+      <details className="evo-picker evo-catalog">
+        <summary>Indicadores y filtros adicionales</summary>
+        <div className="evo-filters">
+          {group==='calidad-llm'&&<label>Revisión A/B<input defaultValue={revision} key={revision}
+            onBlur={e=>setRevision(e.target.value.trim())} placeholder="Todas"/></label>}
+          {group==='devops'&&<label>Digest de imagen de CI<input defaultValue={digest} key={digest}
+            onBlur={e=>setDigest(e.target.value.trim())} placeholder="Todos"/></label>}
+        </div>
+        <div className="evo-picker-grid">{data.metrics.map(metric=><div className="evo-picker-row" key={metric.id}>
+          <span>{metric.label}</span>
+          <label><input type="checkbox" aria-label={`Mostrar tarjeta ${metric.label}`}
+            checked={!!isVisible('cards',metric.id)} onChange={e=>setVisible('cards',metric.id,e.target.checked)}/> Tarjeta</label>
+          <label><input type="checkbox" aria-label={`Mostrar serie de ${metric.label}`}
+            checked={!!isVisible('series',metric.id)} disabled={!metric.series?.length}
+            onChange={e=>setVisible('series',metric.id,e.target.checked)}/> Serie</label>
+        </div>)}</div>
+        <Button type="button" variant="outline" onClick={resetVisible}>Restaurar predeterminadas</Button>
+        {supporting&&<MetricSupporting data={supporting}/>}
+        {group==='devops'&&<ReleaseImport done={()=>setReload(x=>x+1)}/>}
+      </details>
+    </>}
+  </div>;
 }
-function MetricSupporting({data}:{data:Record<string,unknown>}){const titles:Record<string,string>={comparison:'Comparación A/B',traces:'Trazas autorizadas',categories:'Resultados por categoría',integrations:'Dependencias',deployment:'Despliegue de intención',churn:'Cohorte y evaluación de churn',drift:'Monitoreo de drift',classes:'Clases de intención',releases:'Cortes de CI y smoke'};return <section className="ops-plot evo-catalog"><h3>Detalle y evidencia</h3>{Object.entries(data).map(([name,value])=><details key={name} className="evo-support"><summary>{titles[name]??name.replaceAll('_',' ')}</summary><SupportValue value={value}/></details>)}</section>}
+
+function MetricCard({metric,showSeries,onToggle}:{metric:Metric;showSeries:boolean;onToggle:(show:boolean)=>void}){
+  const format=metric.unit==='USD'?formatCurrency:metric.unit==='F1'||metric.unit==='AUC'?formatModelScore:formatNumber;
+  const sample=metric.sample;
+  const denominator=metric.denominator;
+  return <article className="ops-plot evo-metric">
+    <div className="evo-row"><h3>{metric.label}</h3>{metric.status!=='measured'&&
+      <span className={`evo-status ${metric.status}`}>{statuses[metric.status]}</span>}</div>
+    <div className="evo-value">{metric.value===null?'—':<>
+      {format.format(metric.value)} <small>{metric.unit}</small>
+    </>}</div>
+    {denominator!==null||sample!==null?<p>{sample!==null&&denominator!==null&&sample!==denominator
+      ?`${formatNumber.format(sample)} de ${formatNumber.format(denominator)}`
+      :`${formatNumber.format(denominator??sample!)} en la muestra`}</p>:null}
+    <p>{metric.source}{metric.target&&` · Meta ${metric.target}`}</p>
+    {metric.observed_at&&<p>Observado {dateLabel(metric.observed_at)}</p>}
+    {metric.evidence&&<a href={metric.evidence.url} target="_blank" rel="noreferrer">{metric.evidence.label} ↗</a>}
+    {!!metric.series?.length&&<>
+      <label className="evo-toggle"><input type="checkbox" checked={showSeries}
+        onChange={event=>onToggle(event.target.checked)}/> Mostrar tendencia</label>
+      {showSeries&&<MetricSeries metric={metric}/>}
+    </>}
+  </article>;
+}
+
+function JevRun({run}:{run:JevSummary}){
+  return <section className="ops-plot evo-catalog">
+    <h3>Último experimento Jev</h3>
+    <p>{run.passed} aprobados · {run.review} para revisión · {run.failed} fallidos · {run.pending} pendientes</p>
+    <p>{dateLabel(run.started_at)}</p>
+    {run.url&&<a href={run.url} target="_blank" rel="noreferrer">Ver casos en Langfuse ↗</a>}
+  </section>;
+}
+
+const dokployLabels:Record<string,string>={done:'Completado',running:'En curso',error:'Fallido',cancelled:'Cancelado'};
+const ciLabels:Record<string,string>={
+  success:'Aprobado',failure:'Fallido',cancelled:'Cancelado',skipped:'Omitido',timed_out:'Agotó el tiempo',
+  in_progress:'En curso',queued:'En cola',pending:'Pendiente',completed:'Completado'
+};
+const sourceLabels:Record<string,string>={ok:'Sincronizado',not_configured:'Pendiente de configuración',unavailable:'Sin conexión'};
+function DeploymentHistory({rows,sources,probe}:{rows:Deployment[];sources:DeploymentSource[];probe?:ProductionProbe|null}){
+  const currentCi=probe?.ci_conclusion??probe?.ci_status;
+  return <section className="ops-plot evo-catalog">
+    <h3>Producción</h3>
+    {probe&&<p className="evo-applied">
+      {probe.passed?'HTTPS correcto':'HTTPS falló'} · {dateLabel(probe.checked_at)}
+      {probe.sha&&<> · <code title={probe.sha}>{probe.sha.slice(0,7)}</code></>}
+      {probe.ci_url&&currentCi&&<> · <a href={probe.ci_url} target="_blank" rel="noreferrer">
+        GitHub Actions · {ciLabels[currentCi]??currentCi} ↗</a></>}
+    </p>}
+    <p className="evo-applied">HTTPS se confirma cuando el chat público responde y la API devuelve el mismo SHA de un despliegue completado.</p>
+    {sources.length>0&&<ul className="evo-source-list">
+      {sources.map(source=><li key={source.name}>{source.name==='dokploy'?'Dokploy':'GitHub Actions'} ·
+        {' '}{sourceLabels[source.status]??source.status}{source.last_success_at&&` · ${dateLabel(source.last_success_at)}`}
+      </li>)}
+    </ul>}
+    {rows.length>0?<div className="evo-deployments" tabIndex={0} role="region" aria-label="Historial de producción">
+      <table><thead><tr><th scope="col">Inicio</th><th scope="col">Commit</th><th scope="col">Dokploy</th>
+        <th scope="col">GitHub Actions</th><th scope="col">HTTPS</th><th scope="col">Commit a HTTPS</th></tr></thead>
+      <tbody>{rows.map(row=>{
+        const ci=row.ci_conclusion??row.ci_status;
+        const label=ci?ciLabels[ci]??ci:'Sin ejecución asociada';
+        return <tr key={row.id}>
+          <td>{dateLabel(row.created_at)}</td><td>{row.sha?<code title={row.sha}>{row.sha.slice(0,7)}</code>:'—'}</td>
+          <td>{dokployLabels[row.status]??row.status}</td>
+          <td>{row.ci_url?<a href={row.ci_url} target="_blank" rel="noreferrer">{label} ↗</a>:label}</td>
+          <td>{row.verified_at?dateLabel(row.verified_at):row.status==='done'?'Sin observación':'—'}</td>
+          <td>{row.lead_minutes===null?'—':`${formatNumber.format(row.lead_minutes)} min`}</td>
+        </tr>;
+      })}</tbody></table>
+    </div>:<p>Sin despliegues observados en este período.</p>}
+  </section>;
+}
+
+function MetricSupporting({data}:{data:MetricSupportingData}){
+  const {jev,deployments,deployment_sources,production_probe,...details}=data;
+  const titles:Record<string,string>={comparison:'Comparación A/B',traces:'Trazas autorizadas',categories:'Resultados por categoría',integrations:'Dependencias',deployment:'Despliegue de intención',churn:'Cohorte y evaluación de churn',drift:'Monitoreo de drift',classes:'Clases de intención',releases:'Evidencia de CI por digest'};
+  const entries=Object.entries(details).filter(([,value])=>value!==null&&(!Array.isArray(value)||value.length>0));
+  return entries.length>0&&<section className="evo-catalog"><h3>Detalle y evidencia</h3>
+    {entries.map(([name,value])=><details key={name} className="evo-support">
+      <summary>{titles[name]??name.replaceAll('_',' ')}</summary><SupportValue value={value}/>
+    </details>)}
+  </section>;
+}
 function SupportValue({value}:{value:unknown}):React.ReactNode{if(value===null||value===undefined)return <p>Sin evidencia disponible.</p>;if(Array.isArray(value))return value.length?<div className="evo-support-list">{value.map((item,index)=><div key={index}><SupportValue value={item}/></div>)}</div>:<p>Sin registros en este período.</p>;if(typeof value==='object')return <dl className="evo-support-data">{Object.entries(value as Record<string,unknown>).map(([key,item])=><div key={key}><dt>{key.replaceAll('_',' ')}</dt><dd>{key==='url'&&typeof item==='string'&&/^(https?:|\/)/.test(item)?<a href={item}>{item}</a>:<SupportValue value={item}/>}</dd></div>)}</dl>;return <span>{String(value)}</span>}
 function ReleaseImport({done}:{done:()=>void}){const [json,setJson]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);async function submit(e:React.FormEvent){e.preventDefault();setBusy(true);setError('');setNotice('');try{let body:unknown;try{body=JSON.parse(json)}catch{throw new Error('El archivo no contiene JSON válido.')}await post('/admin/releases/evidence',body);setNotice('Evidencia registrada y tablero actualizado.');done()}catch(e){setError(errorText(e))}finally{setBusy(false)}}return <form className="ops-plot evo-form evo-catalog" onSubmit={submit}><h3>Importar evidencia de CI y smoke</h3><p>Adjunta el JSON del corte, con SHA, digest, ejecución de GitHub Actions y resultados de escaneo y smoke.</p><label>Archivo JSON<input type="file" accept="application/json,.json" onChange={e=>{const file=e.target.files?.[0];if(file)void file.text().then(setJson)}}/></label><label>Contenido JSON<textarea rows={5} value={json} onChange={e=>setJson(e.target.value)} placeholder="Pega aquí la evidencia del corte"/></label>{error&&<p className="alert error" role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}<div><Button disabled={busy||!json}>{busy?'Registrando…':'Registrar evidencia'}</Button></div></form>}
 function MetricSeries({metric}:{metric:Metric}){const points=metric.series??[];const max=Math.max(...points.map(p=>p.value),1);return <><div className="evo-chart" aria-hidden="true">{points.map((point,i)=><div key={i} title={`${point.date}: ${point.value} ${metric.unit}`} style={{height:`${Math.max(point.value/max*100,2)}%`}}/>)}</div><details className="ops-data"><summary>Datos de la serie</summary><table><thead><tr><th>Fecha</th><th>Valor ({metric.unit})</th><th>Muestra</th></tr></thead><tbody>{points.map((point,i)=><tr key={i}><td>{point.date}</td><td>{formatNumber.format(point.value)}</td><td>{point.sample??'—'}</td></tr>)}</tbody></table></details></>}

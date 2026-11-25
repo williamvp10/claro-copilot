@@ -40,7 +40,7 @@ function resultFor(row: z.infer<typeof item>, projectUrl: string | null): JevCas
   };
 }
 
-export async function readLangfuseEvaluations(experimentId?: string): Promise<LangfuseEvaluations> {
+export async function readLangfuseEvaluations(experimentId?: string, since?: Date): Promise<LangfuseEvaluations> {
   const env = process.env;
   const ui = browserEndpoint(env.LANGFUSE_UI_URL);
   const projectUrl = ui && `${ui}/project/${encodeURIComponent(env.LANGFUSE_PROJECT_ID || 'claro-copiloto')}`;
@@ -75,7 +75,7 @@ export async function readLangfuseEvaluations(experimentId?: string): Promise<La
   if (response.status === 404) return empty;
   if (!response.ok) throw new Error('langfuse_request_failed');
   const { id: datasetId } = dataset.parse(await response.json());
-  const fromStartTime = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+  const fromStartTime = (since ?? new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)).toISOString();
   const experiments = await list('experiments', experiment, { datasetId, fromStartTime, fields: 'core', limit: '100' });
   const runs = experiments.filter(row => row.name.startsWith(nativeRunPrefix))
     .map(row => ({ id: row.id, name: row.name, started_at: row.startTime, cases: row.itemCount }))
