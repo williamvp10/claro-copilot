@@ -1,10 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { escalationDestinations, type CaseSnapshot, type CaseSummary, type Contact, type Viewer } from '@claro/contracts';
+import { escalationDestinations, Text, type CaseSnapshot, type CaseSummary, type Contact, type Viewer } from '@claro/contracts';
 import { Sparkles } from 'lucide-react';
 import { AdvisorSuggestion, CasesWorkspace } from '@/components/assisted-workspace';
+import { MessageText } from '@/components/message-text';
 import { api } from '../lib/api';
+import { advisorCitationHref, publicCitationHref } from '@/lib/citations';
 import { CaseIntegrationTabs } from '@/components/integrations';
 import { CaseCloseForm, FollowUpsAgenda } from '@/components/follow-ups';
 import { RetentionStateDetails } from '@/components/retention';
@@ -40,10 +42,39 @@ export default function Home(){
  useEffect(()=>{if(!mobileMenu)return;const close=(event:KeyboardEvent)=>{if(event.key==='Escape'){setMobileMenu(false);menuButton.current?.focus()}};window.addEventListener('keydown',close);return()=>window.removeEventListener('keydown',close)},[mobileMenu]);
  const [superMenuOpen,setSuperMenuOpen]=useState(true);
  const [suggestionChoice,setSuggestionChoice]=useState(false);
+ const [includeLinksForCase,setIncludeLinksForCase]=useState<string|null>(null);
  useEffect(()=>{if(showCard)mobileFichaClose.current?.focus();},[showCard]);
  const [usedSuggestion,setUsedSuggestion]=useState<{caseId:string;runId:string;revision:number;text:string}|null>(null);
  function trackDraft(kind:'used'|'edited'|'feedback_positive'|'feedback_negative',snapshot:CaseSnapshot){const runId=(snapshot.card as (typeof snapshot.card & {advisor_draft_run_id?:string}))?.advisor_draft_run_id;if(!runId||api.fixtures)return Promise.resolve();return api.draftEvent(snapshot.id,runId,snapshot.revision,kind).then(()=>{}).catch(()=>{setNotice('No se pudo registrar la señal del borrador.')});}
- function useSuggestion(snapshot:CaseSnapshot,mode:'insert'|'replace'){const text=snapshot.card?.advisor_draft;if(!text)return;setDraft(current=>mode==='insert'&&current?`${current}\n\n${text}`:text);const runId=(snapshot.card as (typeof snapshot.card & {advisor_draft_run_id?:string}))?.advisor_draft_run_id;if(runId)setUsedSuggestion({caseId:snapshot.id,runId,revision:snapshot.revision,text});void trackDraft('used',snapshot);setSuggestionChoice(false);requestAnimationFrame(()=>document.getElementById('message')?.focus());}
+ function useSuggestion(snapshot:CaseSnapshot,mode:'insert'|'replace'){
+   const card=snapshot.card;
+   if(!card?.advisor_draft)return;
+   const existing=mode==='insert' ? draft : '';
+   const links=new Map<string,string>();
+   if(includeLinksForCase===snapshot.id){
+     const usedLines=new Set([existing,card.advisor_draft].join('\n').split(/\r?\n/).map(line=>line.trim()));
+     for(const citation of card.citations){
+       const href=publicCitationHref(citation);
+       if(!href)continue;
+       const url=new URL(href,window.location.origin).href;
+       if(!links.has(url)&&!usedLines.has(url))links.set(url,citation.title);
+     }
+   }
+   const suggestion=[card.advisor_draft,...Array.from(links,([url,title])=>`Fuente · ${title}\n${url}`)].join('\n\n');
+   const nextDraft=[existing,suggestion].filter(Boolean).join('\n\n');
+   if(links.size&&!Text.safeParse(nextDraft).success){
+     setError('El mensaje con los enlaces supera el máximo de 4096 caracteres. Acorta el texto o desmarca la opción de incluir enlaces.');
+     return;
+   }
+   setError('');
+   setDraft(nextDraft);
+   setUsedSuggestion(card.advisor_draft_run_id
+     ? {caseId:snapshot.id,runId:card.advisor_draft_run_id,revision:snapshot.revision,text:suggestion}
+     : null);
+   void trackDraft('used',snapshot);
+   setSuggestionChoice(false);
+   requestAnimationFrame(()=>document.getElementById('message')?.focus());
+ }
  const [retentionOutcome,setRetentionOutcome]=useState<'permanencia'|'baja'|'pendiente'>('pendiente');
  const [email,setEmail]=useState(''),[password,setPassword]=useState('');
  const selectionRequest=useRef(0), inboxVersion=useRef(0);
@@ -70,6 +101,23 @@ export default function Home(){
  });},[selected?.id]);
  async function run<T>(fn:()=>Promise<T>,success?:(result:T)=>void){setBusy(true);setError('');setNotice('');try{const value=await fn();success?.(value)}catch(e){setError(e instanceof Error?e.message:'Ocurrió un error. Intenta de nuevo.')}finally{setBusy(false)}}
  function apply(c:CaseSnapshot){inboxVersion.current++;setSelected(current=>current?.id===c.id&&current.cursor>c.cursor?current:c);setCases(old=>{const previous=old.find(item=>item.id===c.id);return [previous&&previous.revision>c.revision?previous:c,...old.filter(item=>item.id!==c.id)]});setModal(null)}
+ function submitReply(event:FormEvent<HTMLFormElement>){
+   event.preventDefault();
+   const text=draft.trim();
+   if(!selected||!text)return;
+   void run(async()=>{
+     const used=usedSuggestion?.caseId===selected.id ? usedSuggestion : null;
+     const current=used?.revision===selected.revision&&used.runId===selected.card?.advisor_draft_run_id ? used : null;
+     if(current&&text!==current.text.trim())await trackDraft('edited',selected);
+     if(used&&!current)setNotice('La ficha cambió: el mensaje se envió sin asociarlo al borrador anterior.');
+     return api.send(selected.id,text,current ? {run_id:current.runId,case_revision:current.revision} : undefined);
+   },snapshot=>{
+     apply(snapshot);
+     setDraft('');
+     setUsedSuggestion(null);
+     setIncludeLinksForCase(value=>value===snapshot.id ? null : value);
+   });
+ }
  const selectCase=(id:string)=>{const request=++selectionRequest.current;void run(()=>api.case(id),c=>{if(request!==selectionRequest.current)return;setSelected(current=>current?.id===c.id&&current.cursor>c.cursor?current:c);setDraft('');setUsedSuggestion(null);setShowCard(false)})};
  async function login(e:FormEvent){e.preventDefault();await run(async()=>{await api.login(email,password);await enter(await api.me())})}
  if(loading)return <div className="center-screen"><div className="loader"/> Cargando consola…</div>;
@@ -117,11 +165,16 @@ export default function Home(){
         </div>
       </div>}</nav><div className="sidebar-bottom"><div className="online"><span/> Sistema disponible</div><div className="profile"><div className="avatar dark-avatar">{viewer.name.split(' ').map(x=>x[0]).slice(0,2).join('')}</div><div><strong>{viewer.name}</strong><small>{capabilities.includes('superadmin')?'Superadministrador':viewer.role==='admin'?'Administrador':'Asesor'}</small></div><button className="icon-button" aria-label="Cerrar sesión" title="Cerrar sesión" onClick={()=>run(()=>api.logout(),()=>{setViewer(null);setSelected(null)})}><Icon name="logout"/></button></div></div></aside>{mobileMenu&&<button className="menu-scrim" aria-label="Cerrar menú" onClick={()=>{setMobileMenu(false);menuButton.current?.focus()}}/>}<main className="main-area"><header className="topbar"><button ref={menuButton} className="menu-toggle icon-button" aria-controls="workspace-navigation" aria-expanded={isMobile ? mobileMenu : menuOpen} aria-label={mobileMenu?"Cerrar menú":"Alternar menú"} onClick={()=>{if(isMobile)setMobileMenu(v=>!v);else setMenuOpen(v=>{localStorage.setItem(`claro-menu:${viewer.id}`,v?"collapsed":"expanded");return !v})}}>☰</button><div className="breadcrumb">Espacio de trabajo <Icon name="arrow" size={14}/> <strong>{{inbox:'Bandeja',cases:'Casos',dashboard:'Panel general',prompts:'Prompts y evals',metrics:'Tableros',crm:'Directorio CRM',queue:'Escalamientos',operators:'Operadores',knowledge:'Conocimiento RAG',models:'Modelos del agente','follow-ups':'Seguimientos programados'}[view]}</strong></div><div className="top-right"><span className="live-dot"/> {api.fixtures?'Datos de demostración':'Consola en línea'} <div className="avatar small-avatar">{viewer.name[0]}</div></div></header>{error&&<div className="global-alert alert error" role="alert">{error}<button onClick={()=>setError('')} aria-label="Cerrar error">×</button></div>}{notice&&<div className="global-alert alert" role="status">{notice}</div>}
  {view==='inbox'?<div className="workspace"><section className={`inbox-panel ${selected?'has-selection':''}`}><div className="inbox-head"><div><span className="eyebrow">TU ESPACIO DE ATENCIÓN</span><h1>Bandeja <span>{cases.filter(c=>c.status==='open').length}</span></h1><p>Gestiona tus conversaciones en un solo lugar.</p></div><Button className="new-button" onClick={()=>setModal('new')}><Icon name="plus"/> Nuevo caso</Button></div><div className="search"><Icon name="search"/><input aria-label="Buscar conversación" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar por nombre o caso"/></div><div className="filter-row"><button className={filter==='open'?'selected':''} onClick={()=>setFilter('open')}>Abiertos <span>{cases.filter(c=>c.status==='open').length}</span></button><button className={filter==='closed'?'selected':''} onClick={()=>setFilter('closed')}>Cerrados</button><button className={filter==='all'?'selected':''} onClick={()=>setFilter('all')}>Todos</button></div><div className="list-caption">CONVERSACIONES <span>{filtered.length}</span></div><div className="case-list">{filtered.map(c=><button key={c.id} className={`case-row ${selected?.id===c.id?'selected':''}`} onClick={()=>selectCase(c.id)}><div className="avatar">{c.display_name.split(' ').map(x=>x[0]).slice(0,2).join('')}</div><div className="case-copy"><div className="case-line"><strong>{c.display_name}</strong><time>{fmt(c.updated_at)}</time></div><div className="case-line"><span className="case-id">{c.id} · {labels[c.channel]}</span>{c.attention_mode==='autoservicio'&&<span className="unread-dot"/>}</div><p>{c.last_message||'Sin mensajes todavía'}</p><Badge tone={c.status==='closed'?'neutral':c.attention_mode==='autoservicio'?'amber':'green'}>{c.status==='closed'?'Cerrado':labels[c.attention_mode]}</Badge></div></button>)}{!filtered.length&&<div className="empty-list">No hay conversaciones para mostrar.</div>}</div></section>
- {selected?<><section className="conversation"><div className="conversation-head"><button className="mobile-back icon-button" onClick={()=>setSelected(null)} aria-label="Volver a la bandeja">‹</button><div className="avatar">{selected.display_name.split(' ').map(x=>x[0]).slice(0,2).join('')}</div><div className="conversation-title"><h2>{selected.display_name}</h2><p>{selected.id} <span>•</span> {labels[selected.channel]} <span>•</span> {selected.status==='open'?'Caso abierto':'Caso cerrado'}</p></div><ShadButton variant="outline" className="button outline mobile-card-button" ref={mobileFicha} onClick={()=>setShowCard(true)}><Icon name="spark"/> Ficha</ShadButton>{selected.status==='open'&&owner&&!composerLocked&&<Button variant="outline" onClick={()=>{setRetentionOutcome('pendiente');setModal('close')}}>Cerrar caso</Button>}</div><div className="thread"><div className="day-marker"><span/> Conversación <span/></div>{selected.messages.map(m=><div className={`message-row ${m.actor==='asesor'?'outgoing':''}`} key={m.id}><div className={`message-avatar ${m.actor}`}>{m.attention_notice?<Icon name="check" size={14}/>:m.actor==='cliente'?selected.display_name[0]:m.actor==='agente'?<Icon name="spark" size={14}/>:<Icon name="users" size={14}/>}</div><div className="message-content"><div className="message-meta"><strong>{m.attention_notice?'Estado del caso':m.actor==='cliente'?selected.display_name:m.actor==='agente'?'Copiloto':'Asesor'}</strong><time>{fmt(m.created_at)}</time></div><div className="bubble">{m.text}{m.citations?.map(c=><div className="message-citation" key={c.id}><Icon name="file" size={14}/> {c.title} · {c.version}</div>)}</div></div></div>)}<div aria-live="polite" className="sr-only">{notice}</div></div>{selected.status==='open'?(selected.attention_mode==='autoservicio'?<div className="takeover"><div><strong>Esta conversación está en autoservicio</strong><p>Toma el caso para responder directamente al cliente.</p></div><Button disabled={busy} onClick={()=>run(()=>api.take(selected.id),snapshot=>{apply(snapshot);setNotice('Caso tomado.');})}>Tomar caso <Icon name="arrow"/></Button></div>:composerLocked?<div className="assisted-composer-lock" role="status">
+ {selected?<><section className="conversation"><div className="conversation-head"><button className="mobile-back icon-button" onClick={()=>setSelected(null)} aria-label="Volver a la bandeja">‹</button><div className="avatar">{selected.display_name.split(' ').map(x=>x[0]).slice(0,2).join('')}</div><div className="conversation-title"><h2>{selected.display_name}</h2><p>{selected.id} <span>•</span> {labels[selected.channel]} <span>•</span> {selected.status==='open'?'Caso abierto':'Caso cerrado'}</p></div><ShadButton variant="outline" className="button outline mobile-card-button" ref={mobileFicha} onClick={()=>setShowCard(true)}><Icon name="spark"/> Ficha</ShadButton>{selected.status==='open'&&owner&&!composerLocked&&<Button variant="outline" onClick={()=>{setRetentionOutcome('pendiente');setModal('close')}}>Cerrar caso</Button>}</div><div className="thread"><div className="day-marker"><span/> Conversación <span/></div>{selected.messages.map(m=><div className={`message-row ${m.actor==='asesor'?'outgoing':''}`} key={m.id}><div className={`message-avatar ${m.actor}`}>{m.attention_notice?<Icon name="check" size={14}/>:m.actor==='cliente'?selected.display_name[0]:m.actor==='agente'?<Icon name="spark" size={14}/>:<Icon name="users" size={14}/>}</div><div className="message-content"><div className="message-meta"><strong>{m.attention_notice?'Estado del caso':m.actor==='cliente'?selected.display_name:m.actor==='agente'?'Copiloto':'Asesor'}</strong><time>{fmt(m.created_at)}</time></div><div className="bubble"><span className="message-text"><MessageText text={m.text}/></span>{m.citations?.map(c=><div className="message-citation" key={c.id}><Icon name="file" size={14}/> {c.title} · {c.version}</div>)}</div></div></div>)}<div aria-live="polite" className="sr-only">{notice}</div></div>{selected.status==='open'?(selected.attention_mode==='autoservicio'?<div className="takeover"><div><strong>Esta conversación está en autoservicio</strong><p>Toma el caso para responder directamente al cliente.</p></div><Button disabled={busy} onClick={()=>run(()=>api.take(selected.id),snapshot=>{apply(snapshot);setNotice('Caso tomado.');})}>Tomar caso <Icon name="arrow"/></Button></div>:composerLocked?<div className="assisted-composer-lock" role="status">
   <strong>Caso escalado · En espera de {escalationDestinations[escalation.destination]}</strong>
   <p>El cliente puede seguir escribiendo. El envío se reanuda para el asesor asignado si cancelas la solicitud.</p>
   <Button variant="outline" onClick={()=>go('queue')}>Ver escalamiento</Button>
- </div>:<form className="composer" onSubmit={e=>{e.preventDefault();if(draft.trim())run(async()=>{const current=usedSuggestion?.caseId===selected.id&&usedSuggestion.revision===selected.revision&&usedSuggestion.runId===selected.card?.advisor_draft_run_id?usedSuggestion:null;if(current&&draft.trim()!==current.text.trim())await trackDraft('edited',selected);if(usedSuggestion?.caseId===selected.id&&!current)setNotice('La ficha cambió: el mensaje se envió sin asociarlo al borrador anterior.');return api.send(selected.id,draft.trim(),current?{run_id:current.runId,case_revision:current.revision}:undefined)},c=>{apply(c);setDraft('');setUsedSuggestion(null)})}}><AdvisorSuggestion card={selected.card}>
+ </div>:<form className="composer" onSubmit={submitReply}><AdvisorSuggestion card={selected.card}>
+   {selected.card?.citations.some(publicCitationHref)&&<label className="assisted-draft-links">
+     <input type="checkbox" checked={includeLinksForCase===selected.id}
+       onChange={event=>setIncludeLinksForCase(event.currentTarget.checked ? selected.id : null)}/>
+     Incluir enlaces públicos en el mensaje
+   </label>}
    <div className="assisted-draft-actions">
      {suggestionChoice ? <>
        <Button type="button" variant="outline" onClick={()=>useSuggestion(selected,'insert')}>Insertar</Button>
@@ -178,9 +231,6 @@ export default function Home(){
          <ul className="retention-options">{selected.card.retention_options.map(option=><li key={option.id}>
            <strong>{option.title}</strong><span>{option.detail}</span>
          </li>)}</ul>
-         <dl className="assisted-facts">{selected.card.facts.map(fact=><div key={fact.id}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl>
-         {selected.card.citations.map(source=><details className="source" key={source.id}><summary>{source.title} · {source.version}</summary><p>{source.excerpt}</p>
-           {source.url&&<a href={source.url} target="_blank" rel="noreferrer">Abrir fuente</a>}</details>)}
        </>}
        {selected.card.pending.length>0&&<ul>{selected.card.pending.map(item=><li key={item}>{item}</li>)}</ul>}
        {selected.card.context_question&&<div className="assisted-question">
@@ -199,13 +249,16 @@ export default function Home(){
       <section aria-label="Hechos y fuentes"><h3>Hechos y fuentes</h3>
        {selected.intake&&Object.keys(selected.intake.facts).length>0&&<><strong>Declarado por el cliente</strong>
         <ul>{Object.entries(selected.intake.facts).map(([field,value])=><li key={field}>{value}</li>)}</ul></>}
-       {!selected.card.retention_options&&selected.card.facts.length>0&&<><strong>Evidencia del caso</strong><dl className="assisted-facts">
+       {selected.card.facts.length>0&&<><strong>Evidencia del caso</strong><dl className="assisted-facts">
         {selected.card.facts.map(fact=><div key={fact.id}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}
        </dl></>}
-       {!selected.card.retention_options&&selected.card.citations.map(source=><details className="source" key={source.id}>
-         <summary><Icon name="file" size={16}/><span>{source.title}<small>Versión {source.version}</small></span></summary>
-         <p>{source.excerpt}</p>{source.url&&<a href={source.url} target="_blank" rel="noreferrer">Abrir fuente</a>}
-       </details>)}
+       {selected.card.citations.map(source=>{
+         const href=advisorCitationHref(source);
+         return <details className="source" key={source.id}>
+           <summary><Icon name="file" size={16}/><span>{source.title}<small>Versión {source.version}</small></span></summary>
+           <p>{source.excerpt}</p>{href&&<a href={href} target="_blank" rel="noreferrer">Abrir fuente</a>}
+         </details>;
+       })}
        {!selected.card.citations.length&&!selected.card.facts.length&&!Object.keys(selected.intake?.facts??{}).length&&<p>Aún no hay evidencia en la ficha.</p>}
       </section>
       {selected.card.proposal&&<section className="proposal">
