@@ -77,6 +77,7 @@ assert.equal((await get(first.cookie,'/web-chat/history')).messages.at(-1).actor
 
 const alternate=ordered[1];
 const registrationPath=`/cases/${alternate.id}/customer-registration`;
+await message(second.cookie,'El módem tiene la luz LOS roja y ya revisé el cable.');
 const alternateTaken=await post(n1,`/cases/${alternate.id}/take`,{});
 const identity={tipo_documento:'CC',numero_documento:`demo-${randomUUID()}`,case_revision:alternateTaken.revision};
 await post(admin,registrationPath,{...identity,action:'lookup'},404);
@@ -89,6 +90,10 @@ const alternateCase=await get(n1,`/cases/${alternate.id}`);
 assert.equal(alternateCase.id,alternate.id);
 assert.equal(alternateCase.customer_registration.customer_ref,registration.cliente_id);
 assert.equal(alternateCase.verified,false);
+await until(async()=>{
+  const current=await get(n1,`/cases/${alternate.id}`);
+  return current.card?.summary_update?.revision===alternateCase.revision && current.card.advisor_draft;
+});
 await get(n1,`/cases/${alternate.id}/integrations/billing`,403);
 assert.equal((await get(second.cookie,'/web-chat/history')).verification.stage,'required');
 const challenge=await post(second.cookie,'/web-chat/verification/start',{identifier:registration.email});

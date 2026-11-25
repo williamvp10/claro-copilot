@@ -105,6 +105,7 @@ export class PlatformEvolutionController {
       await tx.query('INSERT INTO idempotency VALUES ($1,$2,$3,$4)',[scope,input.idempotency_key,fingerprint,caseId]);
       await audit(tx,caseId,input.action==='create' ? 'customer_created' : 'customer_linked',
         {operator_id:v.id,customer_ref:registration.customer_ref,verification:'pending'});
+      if (!await isEscalationWaiting(tx,caseId)) await queueRun(tx,row);
       await saveCase(tx,row);
       return {status:'registered',registration};
     });
