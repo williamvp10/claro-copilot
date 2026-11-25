@@ -53,6 +53,8 @@ services:
   mlflow:
     profiles: !reset []
     ports: !reset []
+    environment:
+      MLFLOW_SERVER_ALLOWED_HOSTS: 'mlflow:5000,localhost:5000,127.0.0.1:5000,${MLFLOW_UI_HOST:-localhost}'
   ml:
     profiles: !reset []
     depends_on:

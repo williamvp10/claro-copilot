@@ -1,0 +1,38 @@
+services:
+  observability-ui:
+    profiles: [observability-ui]
+    image: nginx:1.28-alpine
+    restart: unless-stopped
+    mem_limit: 96m
+    environment:
+      OBSERVABILITY_HTTP_AUTH: ${OBSERVABILITY_HTTP_AUTH:-}
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        test -n "$$OBSERVABILITY_HTTP_AUTH"
+        umask 027
+        printf '%s\n' "$$OBSERVABILITY_HTTP_AUTH" > /tmp/claro-observability.htpasswd
+        chown root:nginx /tmp/claro-observability.htpasswd
+        exec nginx -g 'daemon off;'
+    configs:
+      - source: observability-ui-proxy
+        target: /etc/nginx/conf.d/default.conf
+    networks:
+      default: {}
+      ingress: {}
+    labels:
+      traefik.enable: 'true'
+      traefik.docker.network: ${CLARO_TRAEFIK_NETWORK:-dokploy-network}
+      traefik.http.routers.claro-observability-langfuse.rule: Host(`${LANGFUSE_UI_HOST:-langfuse-claro-copilot.invalid}`)
+      traefik.http.routers.claro-observability-langfuse.entrypoints: ${CLARO_TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.claro-observability-langfuse.tls.certresolver: ${CLARO_TRAEFIK_CERTRESOLVER:-letsencrypt}
+      traefik.http.routers.claro-observability-langfuse.service: claro-observability-langfuse
+      traefik.http.services.claro-observability-langfuse.loadbalancer.server.port: '8081'
+      traefik.http.routers.claro-observability-mlflow.rule: Host(`${MLFLOW_UI_HOST:-mlflow-claro-copilot.invalid}`)
+      traefik.http.routers.claro-observability-mlflow.entrypoints: ${CLARO_TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.claro-observability-mlflow.tls.certresolver: ${CLARO_TRAEFIK_CERTRESOLVER:-letsencrypt}
+      traefik.http.routers.claro-observability-mlflow.service: claro-observability-mlflow
+      traefik.http.services.claro-observability-mlflow.loadbalancer.server.port: '8082'
+configs:
+  observability-ui-proxy:
+    file: ./observability/ui-proxy.conf
