@@ -114,18 +114,18 @@ jobs:
       BILLING_API_KEY: ci-only-billing-key
       CRM_API_URL: http://127.0.0.1:8081/v1
       BILLING_API_URL: http://127.0.0.1:8082/v1
-      CRM_MCP_URL: http://127.0.0.1:39181/mcp
-      BILLING_MCP_URL: http://127.0.0.1:39182/mcp
+      CRM_MCP_URL: http://127.0.0.1:19381/mcp
+      BILLING_MCP_URL: http://127.0.0.1:19382/mcp
       INTEGRATION_MCP_TOKEN: ci-only-private-mcp-service-token
       INTEGRATION_MCP_SIGNING_KEY: ci-only-private-mcp-signing-key-fixture
       SIMULATOR_CONTRACT_TEST: '1'
-      BETTER_AUTH_URL: http://127.0.0.1:39081
+      BETTER_AUTH_URL: http://127.0.0.1:19380
       BETTER_AUTH_SECRET: ci-only-randomish-32-character-secret-123456
       HOST: 127.0.0.1
-      PORT: '39081'
+      PORT: '19380'
       DEMO_MODE: 'true'
       DEMO_INGRESS_TOKEN: ci-only-demo-ingress-token
-      ML_API_URL: http://127.0.0.1:39199
+      ML_API_URL: http://127.0.0.1:19399
       ML_SERVICE_TOKEN: ci-only-shadow-service-token
       DEMO_HOLDER_CODE: '927186'
       TELEGRAM_WEBHOOK_SECRET: ci-only-hook-secret
@@ -167,13 +167,13 @@ jobs:
           pnpm --filter @claro/backend seed
           node apps/simulators/test/platform-servers.mjs > simulators-e2e.log 2>&1 &
           simulators_pid=$!
-          MCP_DOMAIN=crm MCP_PORT=39181 node apps/backend/dist/integration-mcp.js > crm-mcp-e2e.log 2>&1 &
+          MCP_DOMAIN=crm MCP_PORT=19381 node apps/backend/dist/integration-mcp.js > crm-mcp-e2e.log 2>&1 &
           crm_mcp_pid=$!
-          MCP_DOMAIN=billing MCP_PORT=39182 node apps/backend/dist/integration-mcp.js > billing-mcp-e2e.log 2>&1 &
+          MCP_DOMAIN=billing MCP_PORT=19382 node apps/backend/dist/integration-mcp.js > billing-mcp-e2e.log 2>&1 &
           billing_mcp_pid=$!
           node apps/backend/dist/main.js > api-e2e.log 2>&1 &
           api_pid=$!
-          DEMO_MODE=false PORT=39183 node apps/backend/dist/main.js > api-non-demo-e2e.log 2>&1 &
+          DEMO_MODE=false PORT=19383 node apps/backend/dist/main.js > api-non-demo-e2e.log 2>&1 &
           non_demo_api_pid=$!
           node apps/backend/dist/worker.js > worker-e2e.log 2>&1 &
           worker_pid=$!
@@ -181,7 +181,7 @@ jobs:
           node --input-type=module -e 'for(let i=0;i<60;i++){try{if((await fetch(process.env.BETTER_AUTH_URL+"/readyz")).ok)process.exit(0)}catch{} await new Promise(r=>setTimeout(r,500))}process.exit(1)'
           pnpm --filter @claro/backend test:integration
           pnpm --filter @claro/backend test:mcp
-          export PLATFORM_NON_DEMO_E2E_TARGET=http://127.0.0.1:39183
+          export PLATFORM_NON_DEMO_E2E_TARGET=http://127.0.0.1:19383
           node --input-type=module -e 'for(let i=0;i<60;i++){try{if((await fetch(process.env.PLATFORM_NON_DEMO_E2E_TARGET+"/readyz")).ok)process.exit(0)}catch{} await new Promise(r=>setTimeout(r,500))}process.exit(1)'
           pnpm --filter @claro/backend test:evolution
   ml-checks:
