@@ -3,7 +3,8 @@ import { acceptsAdvisorOffer, recordPublishedReply, requestedAdvisor, asksToChan
 import { ConflictException, ForbiddenException, ServiceUnavailableException, Inject, Injectable, NotFoundException, UnauthorizedException, HttpException, UnprocessableEntityException } from '@nestjs/common';
 import { type z } from 'zod';
 import {
-  AgentTurn, CaseSnapshot, WebChatSnapshot, demoWelcome, demoVerifyInvitation, type Actor, type Contact, type DecideProposal, type Intent,
+  AgentTurn, CaseSummary, CaseSnapshot, WebChatSnapshot, demoWelcome, demoVerifyInvitation, escalationDestinations,
+  type Actor, type AttentionNotice, type Contact, type DecideProposal, type EscalationDestination, type Intent,
   type CloseCase, type ConfirmedReceipt, type Message, type OpenCase, type Proposal, type SendMessage, type Viewer
 } from '@claro/contracts';
 import { DataSource, type EntityManager } from 'typeorm';
@@ -49,7 +50,7 @@ export function clearPersonalData(text: string) {
 export function publicDemoChatPair(row: CaseRow, input: Message | undefined, output: Message) {
   if (process.env.DEMO_MODE !== 'true' || process.env.LANGFUSE_CAPTURE_CHAT_IO !== 'true' ||
       row.snapshot.channel !== 'web' || row.snapshot.verified || row.account_ref || row.account_inquiry ||
-      input?.actor !== 'cliente' || input.verification_input || output.actor !== 'agente') return;
+      input?.actor !== 'cliente' || input.verification_input || output.actor !== 'agente' || output.attention_notice) return;
   return {input:input.text,output:output.text};
 }
 
@@ -124,9 +125,9 @@ export function checkCase(viewer: Viewer, row: CaseRow, mustOwn = false) {
 
 export function customerReference(row: CaseRow) {
   if (!row.snapshot.verified) return null;
-  const ref = row.snapshot.channel === 'web'
-    ? row.account_ref ?? (row.contact_ref.startsWith('web-c1001:') ? 'C-1001' : null)
-    : row.contact_ref;
+  const ref = row.account_ref ?? (row.snapshot.channel === 'web'
+    ? (row.contact_ref.startsWith('web-c1001:') ? 'C-1001' : null)
+    : row.contact_ref);
   return ref && /^C-\d{4}$/.test(ref) ? ref : null;
 }
 
@@ -137,6 +138,44 @@ export function addMessage(row: CaseRow, actor: z.infer<typeof Actor>, text: str
   messages.push(message);
   row.snapshot.last_message = text;
   return message;
+}
+
+function canIntake(viewer: Viewer) {
+  return viewer.capabilities?.includes('n1') ?? viewer.role === 'asesor';
+}
+
+function availableForIntake(row: CaseRow) {
+  return row.snapshot.status==='open' && !row.snapshot.owner_id && !!row.handoff_pending &&
+    (!row.account_inquiry || row.handoff_pending==='Atención humana');
+}
+
+export async function attentionNotice(tx: EntityManager, row: CaseRow, notice: AttentionNotice,
+  sourceId: string, options: {advisor?: string; destination?: EscalationDestination} = {}) {
+  const id = `${notice}:${sourceId}`;
+  if (row.snapshot.messages.some(message => message.id===id)) return;
+  const safeName = options.advisor && /^[\p{L}\p{M} .'-]{1,100}$/u.test(options.advisor.trim())
+    ? options.advisor.trim() : undefined;
+  const advisor = safeName ?? 'Un asesor de Claro';
+  let text: string;
+  if (notice==='escalated' && options.destination) {
+    row.snapshot.attention={stage:'escalated',destination:options.destination};
+    text=`Escalamos tu caso a ${escalationDestinations[options.destination]}. Puedes seguir escribiendo aquí mientras el equipo lo toma.`;
+  } else {
+    row.snapshot.attention={stage:'assigned',advisor_name:safeName};
+    text=notice==='escalation_cancelled' ? 'Tu asesor continuará atendiendo este caso.' :
+      `${advisor} tomó tu caso y recibió el historial. Puedes seguir escribiendo aquí.`;
+  }
+  const message=addMessage(row,'agente',text);
+  message.id=id;
+  message.attention_notice=notice;
+  if (row.snapshot.channel==='telegram') await enqueue(tx,`deliver:${id}`,row.id,'deliver',{
+    text,sender:'sistema',revision:row.snapshot.revision,turn_seq:message.turn_seq,attention_notice:true
+  });
+}
+
+export async function isEscalationWaiting(tx: EntityManager, caseId: string) {
+  const [active]=await tx.query("SELECT id FROM escalation WHERE case_id=$1 AND status='en_cola'",[caseId]);
+  return !!active;
 }
 
 const replayScenarios:Record<string,{fixture:string;channel:'telegram'|'whatsapp'}> = {
@@ -180,7 +219,8 @@ export async function queueRun(tx: EntityManager, row: CaseRow, message = latest
   observedContext?:AgentTurn['observed_context']) {
   if (!message || message.actor === 'agente') return;
   const {revision,scenario} = await revisionForTurn(tx, row);
-  const [model,prompts]=await Promise.all([activeAgentModels(tx),readRunPromptConfig(tx,revision,true)]);
+  const assisted=row.snapshot.attention_mode==='asistido';
+  const [model,prompts]=await Promise.all([activeAgentModels(tx),readRunPromptConfig(tx,revision,true,assisted)]);
   const scope = row.snapshot.verified ? 'verified' : 'unverified';
   const turn = AgentTurn.parse({
     run_id: randomUUID(), case_id: row.id, conversation_id: row.snapshot.conversation_id, turn_id: message.id,
@@ -188,7 +228,7 @@ export async function queueRun(tx: EntityManager, row: CaseRow, message = latest
     attention_mode: row.snapshot.attention_mode, audience: row.snapshot.attention_mode === 'asistido' ? 'asesor' : 'cliente',
     scope_ref: scope, config_revision: revision, business_date: businessDate(),
     prompt_manifest_digest:runPromptDigest(prompts),model_config_revision:model.revision,model_config_digest:model.digest,knowledge_revision:activeKnowledgeRevision(),
-    text: clearPersonalData(message.text), observed_context:observedContext
+    text: clearPersonalData(message.text), observed_context:observedContext, ...(assisted ? {assisted_summary:true} : {})
   });
   await tx.query('INSERT INTO agent_run VALUES ($1,$2,$3)', [turn.run_id, row.id, turn]);
   if (scenario && !observedContext) await audit(tx,row.id,'candidate_replay_queued',{
@@ -219,12 +259,29 @@ export class Cases {
 
   async list(viewer: Viewer) {
     assessor(viewer);
-    const canIntake = viewer.capabilities?.includes('n1') ?? viewer.role === 'asesor';
+    const intake = canIntake(viewer);
     const rows: CaseRow[] = await this.db.query(`SELECT * FROM attention_case WHERE snapshot->>'owner_id'=$1 OR
       ($2 AND snapshot->>'owner_id' IS NULL AND (handoff_pending IS NOT NULL OR snapshot->>'attention_mode'='asistido'))
-      ORDER BY snapshot->>'updated_at' DESC LIMIT 100`, [viewer.id, canIntake]);
-    return rows.map(({snapshot:{messages:_messages,card:_card,intake:_intake,cursor:_cursor,
-      conversation_context:_context,conversation_memory:_memory,customer_resolution:_resolution,...summary}})=>summary);
+      ORDER BY snapshot->>'updated_at' DESC LIMIT 100`, [viewer.id, intake]);
+    return rows.map(row=>CaseSummary.parse(row.snapshot.owner_id===viewer.id ? row.snapshot : {...row.snapshot,last_message:null}));
+  }
+
+  async inbox(viewer: Viewer) {
+    assessor(viewer);
+    const intake=canIntake(viewer);
+    const [assigned,available]=await Promise.all([
+      this.db.query(`SELECT snapshot FROM attention_case WHERE snapshot->>'owner_id'=$1
+        ORDER BY snapshot->>'updated_at' DESC,id LIMIT 100`,[viewer.id]),
+      intake ? this.db.query(`SELECT c.snapshot,COALESCE((SELECT min(e.created_at) FROM attention_event e
+        WHERE e.case_id=c.id AND e.kind IN ('handoff_requested','handoff') AND e.id>COALESCE((SELECT max(r.id)
+          FROM attention_event r WHERE r.case_id=c.id AND r.kind='case_autoservice_resumed'),0)),c.created_at) AS queued_at
+        FROM attention_case c WHERE c.snapshot->>'owner_id' IS NULL AND c.snapshot->>'status'='open'
+        AND c.handoff_pending IS NOT NULL AND (c.account_inquiry IS NULL OR c.handoff_pending='Atención humana')
+        ORDER BY queued_at,c.id LIMIT 100`) : []
+    ]);
+    return {assigned:assigned.map((row:CaseRow)=>CaseSummary.parse(row.snapshot)),
+      available:available.map((row:CaseRow & {queued_at:Date})=>({...CaseSummary.parse({...row.snapshot,last_message:null}),queued_at:row.queued_at.toISOString()})),
+      can_take:intake && viewer.available!==false};
   }
 
   async contacts(viewer: Viewer): Promise<Contact[]> {
@@ -236,12 +293,9 @@ export class Cases {
   async get(viewer: Viewer, id: string) {
     const row = await loadCase(this.db.manager, id);
     const reason=handoffReason(row);
-    if (!row.snapshot.owner_id && row.handoff_pending && row.snapshot.status==='open' &&
-        (viewer.capabilities?.includes('n1') ?? viewer.role==='asesor')) {
-      // A queue preview exposes the reason. Account facts and conversation history require assignment.
-      const {tracking:_tracking,ml:_ml,intake:_intake,conversation_context:_context,
-        conversation_memory:_memory,customer_resolution:_resolution,...snapshot}=row.snapshot;
-      return {...snapshot,handoff_reason:reason,messages:[],card:null,last_message:null};
+    if (availableForIntake(row) && canIntake(viewer)) {
+      return {...CaseSummary.parse({...row.snapshot,last_message:null}),handoff_reason:reason,
+        cursor:row.snapshot.cursor,messages:[],card:null};
     }
     checkCase(viewer, row, true);
     const [ml, tracking] = await Promise.all([privateSignals(this.db,row),this.caseTracking(row)]);
@@ -252,7 +306,7 @@ export class Cases {
     const [[owner],[escalation],events,receipts] = await Promise.all([
       this.db.query(`SELECT u.name, r.capabilities FROM "user" u JOIN operator_role r ON u.id=r.user_id WHERE u.id=$1`,
         [row.snapshot.owner_id]),
-      this.db.query(`SELECT e.id,e.destination,e.reason_code,e.status,e.updated_at,
+      this.db.query(`SELECT e.id,e.destination,e.reason_code,e.reason_text,e.status,e.updated_at,
         GREATEST(0,EXTRACT(EPOCH FROM (COALESCE(t.first_action,now())-e.created_at)))::int AS queued_seconds
         FROM escalation e LEFT JOIN LATERAL (
           SELECT MIN(created_at) AS first_action FROM attention_event
@@ -266,7 +320,8 @@ export class Cases {
     ]);
     const preferred = escalation?.status==='tomado' || escalation?.status==='resuelto'
       ? escalation.destination==='supervision' ? 'supervisor' : 'n2' : 'n1';
-    const level = owner?.capabilities?.includes(preferred) ? preferred :
+    const level = owner?.capabilities?.includes(preferred) || preferred==='n2' && process.env.DEMO_MODE==='true' &&
+      owner?.capabilities?.includes('admin') && owner?.capabilities?.includes('supervisor') ? preferred :
       (['n1','n2','supervisor'] as const).find(cap => owner?.capabilities?.includes(cap)) ?? null;
     return {owner_name:owner?.name ?? null,level,
       escalation:escalation ? {...escalation,updated_at:escalation.updated_at.toISOString()} : null,
@@ -276,10 +331,11 @@ export class Cases {
   async take(viewer: Viewer, id: string) {
     return this.change(viewer, id, false, async (tx, row) => {
       if (row.snapshot.owner_id === viewer.id) return;
-      if (!(viewer.capabilities?.includes('n1') ?? viewer.role === 'asesor') || viewer.available === false) {
+      const [operator]=await tx.query('SELECT enabled,available,capabilities FROM operator_role WHERE user_id=$1 FOR SHARE',[viewer.id]);
+      if (!operator?.enabled || !operator.available || !canIntake({...viewer,capabilities:operator.capabilities})) {
         throw new ForbiddenException('Se requiere un asesor de primer nivel disponible');
       }
-      if (!row.handoff_pending) throw new ConflictException('El caso todavía está en autoservicio');
+      if (!availableForIntake(row)) throw new ConflictException('El caso no está en espera de asesor');
       row.snapshot.handoff_reason = handoffReason(row);
       row.snapshot.owner_id = viewer.id;
       row.snapshot.attention_mode = 'asistido';
@@ -287,12 +343,15 @@ export class Cases {
       row.snapshot.revision += 1;
       row.snapshot.card = null;
       await audit(tx, id, 'handoff_taken');
+      await attentionNotice(tx,row,'assigned',row.id,{advisor:viewer.name});
       await queueChurn(tx,row);
       const memory=row.snapshot.conversation_context?.frames.consulta_planes?.catalogue ?? row.snapshot.conversation_memory;
       const commercial=memory?.selected_plan && (row.handoff_pending===commercialHandoff ||
         row.handoff_pending==='Atención humana' && (!row.snapshot.conversation_context || row.snapshot.conversation_context.active==='consulta_planes'));
-      await queueRun(tx,row,undefined,false,commercial ? {decision:'prepare_commercial_handoff'}
-        : row.handoff_pending==='Atención humana' ? {decision:'prepare_handoff'} : undefined);
+      const latest=latestAnalyzable(row.snapshot);
+      const continuesInquiry=latest?.actor==='cliente' && !!contextIntent(latest.text) && !requestedAdvisor(latest.text);
+      await queueRun(tx,row,latest,false,commercial ? {decision:'prepare_commercial_handoff'}
+        : row.handoff_pending==='Atención humana' && !continuesInquiry ? {decision:'prepare_handoff'} : undefined);
     });
   }
 
@@ -312,6 +371,7 @@ export class Cases {
         return;
       }
       if (!row.snapshot.verified) {
+        if (row.snapshot.customer_registration) row.account_ref=row.snapshot.customer_registration.customer_ref;
         row.snapshot.verified = true;
         row.snapshot.revision += 1;
         row.snapshot.card = null;
@@ -347,6 +407,9 @@ export class Cases {
     return this.change(viewer, id, true, async (tx, row) => {
       const scope = `message:${viewer.id}:${id}`;
       if (await this.replay(tx, scope, input.idempotency_key, input)) return;
+      if (process.env.DEMO_MODE==='true' && await isEscalationWaiting(tx,id)) {
+        throw new ConflictException('El caso está escalado. Podrás responder si se cancela la solicitud.');
+      }
       let publication: DraftPublication | undefined;
       if (input.draft) {
         this.assertCurrentDraft(row,input.draft);
@@ -403,6 +466,7 @@ export class Cases {
 
   async close(viewer: Viewer, id: string, input:z.infer<typeof CloseCase>) {
     return this.change(viewer, id, true, async (tx, row) => {
+      if (process.env.DEMO_MODE==='true' && await isEscalationWaiting(tx,id)) throw new ConflictException('El caso está en espera de otro equipo.');
       const {resolved,retention_outcome} = input;
       if (resolved && row.snapshot.channel==='web' && row.contact_ref.startsWith('web:') && !row.snapshot.customer_resolution?.close_message_id) {
         throw new ConflictException('El cliente debe confirmar que quedó resuelto y que desea cerrar');
@@ -576,6 +640,9 @@ export class Cases {
       const row = await this.lockWebCase(tx,token);
       const inquiry = this.pendingInquiry(row);
       if (row.id !== caseId || row.account_ref || !inquiry) throw new ConflictException('La consulta cambió. Intenta de nuevo.');
+      if (row.snapshot.customer_registration && row.snapshot.customer_registration.customer_ref!==ref) {
+        throw new NotFoundException('Usa el alias de prueba del cliente vinculado a este caso.');
+      }
       row.account_inquiry = inquiry;
       row.account_challenge_ref = ref;
       row.account_challenge_id = randomUUID();
@@ -847,6 +914,9 @@ export class Cases {
     const ref = row.account_challenge_ref;
     const inquiry = row.account_inquiry;
     if (!ref || !inquiry) throw new ConflictException('Solicita un código nuevo.');
+    if (row.snapshot.customer_registration && row.snapshot.customer_registration.customer_ref!==ref) {
+      throw new ConflictException('La cuenta cambió. Solicita un código nuevo.');
+    }
     row.account_ref = ref;
     this.clearChallenge(row);
     row.account_inquiry = null;
@@ -955,19 +1025,20 @@ export class Cases {
 
   private publicWeb(row: CaseRow): WebChatSnapshot {
     let verification: WebChatSnapshot['verification'] = {stage:'idle'};
-    if (row.account_ref) verification = {stage:'verified'};
+    if (row.account_ref && row.snapshot.verified) verification = {stage:'verified'};
     else if (row.account_challenge_id && row.account_challenge_expires_at && Number(row.account_challenge_expires_at) > Date.now()) {
       verification = {stage:'code_sent', challenge_id:row.account_challenge_id};
     } else if (this.pendingInquiry(row)) verification = {stage:'required'};
-    return WebChatSnapshot.parse({ ...row.snapshot,
-      awaiting_advisor: !!row.handoff_pending && row.snapshot.attention_mode === 'autoservicio' &&
-        (row.handoff_pending === 'Atención humana' || verification.stage === 'idle' || verification.stage === 'verified'),
-      verification
-    });
+    const awaiting_advisor=!!row.handoff_pending && row.snapshot.attention_mode==='autoservicio' &&
+      (row.handoff_pending==='Atención humana' || verification.stage==='idle' || verification.stage==='verified');
+    return WebChatSnapshot.parse({...row.snapshot,awaiting_advisor,verification,
+      attention:awaiting_advisor ? {stage:'waiting'} : row.snapshot.attention ??
+        (row.snapshot.attention_mode==='asistido' ? {stage:'assigned'} : undefined)});
   }
 
   private pendingInquiry(row: CaseRow) {
     if (row.account_inquiry) return row.account_inquiry;
+    if (row.snapshot.customer_registration && !row.snapshot.verified) return 'identify';
     if (!row.contact_ref.startsWith('web-c1001:') || !row.handoff_pending || row.handoff_pending === 'Atención humana') return null;
     return accountInquiry(row.snapshot.messages.findLast(message => message.actor === 'cliente')?.text ?? '');
   }

@@ -124,6 +124,57 @@
 .superadmin-toggle[aria-expanded=true] svg:last-child { transform: rotate(90deg); }
 .superadmin-links:not([hidden]) { display: grid; gap: 2px; margin-inline-start: 10px; }
 .superadmin-links .nav-item { min-height: 40px; }
+
+.assisted-insight .insight-icon { background:#eef2ff;color:#3730a3; }
+.assisted-insight .private-note { color:#43416a; }
+.assisted-escalation { margin:0 0 12px; }
+.assisted-escalation-button { min-height:44px; width:100%; justify-content:flex-start; }
+.assisted-escalation-status, .assisted-composer-lock {
+  background:#fffbeb; color:#92400e; border:1px solid #f3dfac; border-radius:9px; padding:12px; font-size:13px;
+}
+.assisted-escalation-status { display:flex; align-items:center; gap:8px; margin:0 0 12px; }
+.assisted-escalation-status[data-stage='taken'] { background:#f0fdf4; color:#166534; border-color:#bbefca; }
+.assisted-escalation-status small { display:block; }
+.assisted-composer-lock { margin:10px; }
+.assisted-composer-lock p { margin:5px 0 10px; }
+.assisted-reason-preview, .assisted-question, .assisted-recommendation {
+  color:#3730a3; background:#eef2ff; border-radius:8px; padding:10px;
+}
+.assisted-reason-preview strong, .assisted-recommendation { display:flex; align-items:flex-start; gap:7px; }
+.assisted-reason-preview p { margin:5px 0; overflow-wrap:anywhere; }
+.assisted-primary-tabs { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
+.assisted-primary-tabs button, .assisted-secondary-tabs button { min-height:44px; font-size:13px; }
+.assisted-primary-tabs button[data-state='active'], .assisted-secondary-tabs button[data-state='active'] {
+  color:#3730a3; border-color:#3730a3;
+}
+.assisted-insight .integration-tabs button:focus-visible { outline-color:#3730a3; }
+.assisted-summary { display:grid; gap:16px; min-width:0; }
+.assisted-summary section { border-bottom:1px solid var(--border); padding-bottom:14px; overflow-wrap:anywhere; }
+.assisted-summary h3, .assisted-registration h3 { color:#222326; font-size:14px; font-weight:700; margin:0 0 5px; }
+.assisted-summary p { color:#41424b; font-size:13px; line-height:1.55; white-space:pre-wrap; }
+.assisted-summary small { color:#565769; font-size:12px; }
+.assisted-summary .assisted-summary-lead { padding:13px; background:#f3f4fb; border:1px solid #dfe0ee; border-radius:10px; }
+.assisted-summary-lead p { margin:7px 0; font-size:14px; }
+.assisted-summary-heading { display:flex; align-items:center; flex-wrap:wrap; justify-content:space-between; gap:4px 7px; }
+.assisted-summary-heading span { color:#3730a3; font-size:12px; font-weight:650; display:flex; gap:4px; align-items:center; }
+.assisted-summary .assisted-recommendation { color:#3730a3; margin:6px 0; }
+.assisted-recommendation svg { flex:none; margin-top:2px; }
+.assisted-summary .suggestion { background:#eef2ff; border-color:#d8dcfd; color:#3730a3; }
+.assisted-summary li, .assisted-intent, .assisted-facts { font-size:13px; }
+.assisted-summary ul { list-style:disc; padding-inline-start:18px; margin:5px 0; }
+.assisted-summary .assisted-intent { text-transform:capitalize; }
+.assisted-facts div { display:flex; gap:8px; flex-wrap:wrap; padding:4px 0; }
+.assisted-facts dd { font-weight:650; }
+.assisted-draft-actions { display:flex; flex-wrap:wrap; gap:6px; justify-content:space-between; }
+.assisted-draft-actions button { min-height:44px; }
+.assisted-registration { font-size:13px; color:#41424b; }
+.assisted-registration form { margin:9px 0; }
+.assisted-registration p { margin:5px 0; }
+.integration-invoice-state { display:inline-flex; border-radius:6px; padding:3px 7px; font-weight:650; }
+.integration-invoice-state[data-state='pendiente'] { color:#92400e; background:#fffbeb; }
+.integration-invoice-state[data-state='vencida'] { color:#991b1b; background:#fef2f2; }
+.integration-invoice-state[data-state='pagada'] { color:#166534; background:#f0fdf4; }
+.integration-invoice-state[data-state='ajuste'] { color:#1e40af; background:#eff6ff; }
 .menu-collapsed .superadmin-links:not([hidden]) { margin-inline-start: 0; }
 .menu-collapsed .superadmin-toggle svg:last-child { display: none; }
 @media(max-width:700px) {

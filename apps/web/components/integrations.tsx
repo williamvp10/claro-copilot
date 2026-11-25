@@ -16,6 +16,7 @@ const categories = {
   soporte_tecnico:'Soporte técnico',facturacion:'Facturación',consulta_planes:'Consulta de planes',
   cancelacion:'Cancelación',portabilidad:'Portabilidad'
 };
+const invoiceStates={pendiente:'Pendiente',vencida:'Vencida',pagada:'Pagada'};
 const operationStatus = {
   queued:'En cola',pending_supervisor:'Pendiente de aprobación',pending_verification:'Pendiente de verificación',
   confirmed:'Confirmada',rejected:'Rechazada',expired:'Vencida'
@@ -169,8 +170,8 @@ function BillingPanel({read, readInvoice, revision = 0, prepare, directory = fal
         <div><strong>{invoice.periodo}</strong><span className="integration-ref">{invoice.factura_id}</span></div>
         <strong className="integration-invoice-total">{money(invoice.valor_total)}</strong>
       </> : <strong>{invoice.periodo} · {money(invoice.valor_total)}</strong>}
-      <span className="integration-invoice-state" data-state={invoice.estado}>
-        {invoice.estado !== 'pagada' && invoice.saldo_abierto === 0 ? 'Saldada por ajuste' : invoice.estado}
+      <span className="integration-invoice-state" data-state={invoice.estado !== 'pagada' && invoice.saldo_abierto===0 ? 'ajuste' : invoice.estado}>
+        {invoice.estado !== 'pagada' && invoice.saldo_abierto === 0 ? 'Saldada por ajuste' : invoiceStates[invoice.estado]}
       </span>
       <Button size="sm" variant="outline" aria-expanded={selected===invoice.factura_id} onClick={()=>setSelected(current=>current===invoice.factura_id?null:invoice.factura_id)}>
         Ver factura {invoice.factura_id}
@@ -186,7 +187,8 @@ export function DirectoryBillingPanel({customerId}: {customerId: string}) {
   return <BillingPanel key={customerId} read={read} readInvoice={readInvoice} directory/>;
 }
 
-export function CaseIntegrationTabs({caseId,enabled,open,children}:{caseId:string;enabled:boolean;open:boolean;children:ReactNode}) {
+export function CaseIntegrationTabs({caseId,enabled,open,customerRegistration,children}:{caseId:string;enabled:boolean;open:boolean;
+  customerRegistration?:ReactNode;children:ReactNode}) {
   const [draft,setDraft] = useState<Draft|null>(null);
   const readBilling = useCallback(() => integrations.billing(caseId), [caseId]);
   const readInvoice = useCallback((ref: string) => integrations.invoice(caseId, ref), [caseId]);
@@ -216,7 +218,6 @@ export function CaseIntegrationTabs({caseId,enabled,open,children}:{caseId:strin
     const timer = window.setInterval(()=>{if (document.visibilityState==='visible') void refresh();},3000);
     return ()=>window.clearInterval(timer);
   },[enabled,tab,refresh]);
-  if (!enabled) return <>{children}</>;
   async function confirm(action:ManualAction) {
     const fingerprint = JSON.stringify(action);
     if (submission.current?.fingerprint !== fingerprint) submission.current = {fingerprint,key:key()};
@@ -238,19 +239,26 @@ export function CaseIntegrationTabs({caseId,enabled,open,children}:{caseId:strin
     </>;
   };
   return <Tabs.Root value={tab} onValueChange={setTab}>
-    <Tabs.List className="integration-tabs" aria-label="Ficha del caso">
-      <Tabs.Trigger value="summary">Resumen</Tabs.Trigger><Tabs.Trigger value="crm">CRM</Tabs.Trigger><Tabs.Trigger value="billing">Facturación</Tabs.Trigger>
+    <Tabs.List className="integration-tabs assisted-primary-tabs" aria-label="Ficha del caso">
+      <Tabs.Trigger value="summary">Resumen</Tabs.Trigger><Tabs.Trigger value="customer">Datos del cliente</Tabs.Trigger>
     </Tabs.List>
     <Tabs.Content value="summary">{children}</Tabs.Content>
-    <Tabs.Content value="crm" className="integration-panel">
-      <Badge variant="secondary">CRM · API mock</Badge>
-      <CrmPanel caseId={caseId} open={open} revision={revision} prepare={setDraft}/>
-      {history('crm')}
-    </Tabs.Content>
-    <Tabs.Content value="billing" className="integration-panel">
-      <Badge variant="secondary">Facturación · API mock</Badge>
-      <BillingPanel key={caseId} read={readBilling} readInvoice={readInvoice} revision={revision} prepare={open ? setDraft : undefined}/>
-      {history('billing')}
+    <Tabs.Content value="customer">
+      <Tabs.Root defaultValue="crm">
+        <Tabs.List className="integration-tabs assisted-secondary-tabs" aria-label="Datos del cliente">
+          <Tabs.Trigger value="crm">CRM</Tabs.Trigger><Tabs.Trigger value="billing">Facturación</Tabs.Trigger>
+        </Tabs.List>
+        <Tabs.Content value="crm" className="integration-panel">
+          {enabled ? <><Badge variant="secondary">CRM · API mock</Badge>
+            <CrmPanel caseId={caseId} open={open} revision={revision} prepare={setDraft}/>{history('crm')}</>
+            : customerRegistration ?? <p>El cliente debe verificar su titularidad para consultar CRM.</p>}
+        </Tabs.Content>
+        <Tabs.Content value="billing" className="integration-panel">
+          {enabled ? <><Badge variant="secondary">Facturación · API mock</Badge>
+            <BillingPanel key={caseId} read={readBilling} readInvoice={readInvoice} revision={revision} prepare={open ? setDraft : undefined}/>
+            {history('billing')}</> : <p>El cliente debe verificar su titularidad para consultar Facturación.</p>}
+        </Tabs.Content>
+      </Tabs.Root>
     </Tabs.Content>
     {draft && <ActionDialog draft={draft} confirm={confirm} close={()=>setDraft(null)}/>}
   </Tabs.Root>;

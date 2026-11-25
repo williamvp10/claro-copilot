@@ -10,7 +10,7 @@ Como administrador de la demo quiero buscar clientes del mock y consultar su fic
 
 1. Dada una sesión de administración en modo demo, al abrir el directorio el filtro superior permite ver la primera página del catálogo y buscar por nombre o identificador. Al elegir un resultado, la lista se cierra y la ficha usa el ancho disponible.
 2. Al seleccionar C-1001 se muestran su ficha, servicios, tickets e historial según el alcance del operador. Cada servicio destaca el plan, la mensualidad y el estado; cada ticket muestra categoría, referencia, fecha y estado. Las ofertas aparecen cuando existen registros. La API mantiene enmascarados el correo y el teléfono.
-3. Un asesor sigue viendo sus cuentas verificadas y asignadas. Las altas y ediciones siguen reservadas a superadministración. La consulta administrativa de una cuenta conserva el control de acceso a sus conversaciones e historial.
+3. Un asesor sigue viendo sus cuentas verificadas y asignadas. El alta y la edición desde el Directorio CRM requieren superadministración. La consulta administrativa de una cuenta conserva el control de acceso a sus conversaciones e historial. [Alta propuesta desde un caso de atención](../002-atencion-asistida/spec.md#datos-del-cliente)
 
 ### US2 · Consultar Facturación por cuenta (P1)
 

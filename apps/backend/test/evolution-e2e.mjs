@@ -9,11 +9,16 @@ if (!origin || process.env.DEMO_MODE!=='true') throw new Error('Run on a seeded 
 const db = new Client({connectionString:process.env.DATABASE_URL});
 await db.connect();
 
-async function http(path, {cookie,data,method='GET',status=200,token,endpoint=target}={}) {
+async function http(path, {cookie,data,method='GET',status=200,token,endpoint=target}={},attempt=0) {
   const response = await fetch(endpoint+path,{
     method,headers:{Origin:origin,...cookie&&{Cookie:cookie},...token&&{Authorization:'Bearer '+token},
       ...data&&{'Content-Type':'application/json'}},body:data&&JSON.stringify(data),signal:AbortSignal.timeout(7000)
   });
+  if (path==='/api/auth/sign-in/email' && response.status===429 && attempt<3) {
+    await response.body?.cancel();
+    await wait(11000);
+    return http(path,{cookie,data,method,status,token,endpoint},attempt+1);
+  }
   const body = await response.json();
   assert.equal(response.status,status,`${method} ${path}: ${JSON.stringify(body)}`);
   return {body, cookie:response.headers.getSetCookie().map(item=>item.split(';')[0]).join('; ')};
@@ -162,21 +167,27 @@ async function main() {
   },'policy suggestion and private card');
   assert.ok(suggested.verified);
   await get(n2,`/cases/${scenario.id}`,404);
-  const escalated=(await write(n1,`/cases/${scenario.id}/escalations`,{
+  const escalationRequest={
     destination:'soporte_tecnico',reason_code:suggested.card.suggested_escalation.reason_code,
+    reason_text:'La luz LOS sigue roja y requiere una revisión técnica.',
     case_revision:suggested.revision,idempotency_key:randomUUID()
-  })).body;
+  };
+  const escalated=(await write(n1,`/cases/${scenario.id}/escalations`,escalationRequest)).body;
+  assert.equal((await write(n1,`/cases/${scenario.id}/escalations`,escalationRequest)).body.id,escalated.id);
+  assert.equal((await get(admin,'/escalations')).body.find(row=>row.id===escalated.id)?.can_claim,true);
+  assert.equal((await get(admin,'/escalations')).body.find(row=>row.id===escalated.id)?.reason_text,undefined);
+  await write(n1,`/cases/${scenario.id}/messages`,{text:'No se debe enviar durante la espera.',idempotency_key:randomUUID()},409);
   const claim = (cookie) => fetch(target+`${api}/escalations/${escalated.id}/claim`,{
-    method:'POST',headers:{Origin:origin,Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({case_revision:suggested.revision})
+    method:'POST',headers:{Origin:origin,Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({case_revision:escalated.case_revision})
   }).then(response=>({cookie,status:response.status}));
   const results=await Promise.all([claim(n2),claim(otherN2)]);
   assert.deepEqual(results.map(entry=>entry.status).sort(),[201,409]);
   const winner=results.find(entry=>entry.status===201).cookie;
   const handoff=(await get(winner,`/cases/${scenario.id}`)).body;
-  assert.equal(handoff.revision,suggested.revision+1);
-  assert.equal(handoff.messages.length,suggested.messages.length);
-  assert.equal(handoff.card.advisor_draft_status,'stale');
-  assert.equal(handoff.card.advisor_draft,undefined);
+  assert.equal(handoff.revision,escalated.case_revision+1);
+  assert.deepEqual(handoff.messages.filter(item=>!item.attention_notice),suggested.messages.filter(item=>!item.attention_notice));
+  assert.deepEqual(handoff.messages.slice(-2).map(item=>item.attention_notice),['escalated','escalation_taken']);
+  assert.equal(handoff.tracking.escalation.reason_text,escalationRequest.reason_text);
   await get(n1,`/cases/${scenario.id}`,404);
   await get(supervisor,`/cases/${scenario.id}`,404);
 
@@ -226,12 +237,12 @@ async function main() {
     const specialistQueue=(await get(specialist,'/escalations')).body;
     const queued=specialistQueue.find(item=>item.id===transfer.id);
     assert.equal(queued.destination,specialty);
-    assert.equal(queued.case_revision,current.revision);
+    assert.equal(queued.case_revision,transfer.case_revision);
     assert.equal(queued.messages,undefined);
     assert.ok(!(await get(otherN2,'/escalations')).body.some(item=>item.id===transfer.id));
     await get(specialist,`/cases/${scenario.id}`,404);
-    await write(otherN2,`/escalations/${transfer.id}/claim`,{case_revision:current.revision},409);
-    await write(specialist,`/escalations/${transfer.id}/claim`,{case_revision:current.revision});
+    await write(otherN2,`/escalations/${transfer.id}/claim`,{case_revision:transfer.case_revision},409);
+    await write(specialist,`/escalations/${transfer.id}/claim`,{case_revision:transfer.case_revision});
     await get(n1,`/cases/${scenario.id}`,404);
     const assigned=(await get(specialist,`/cases/${scenario.id}`)).body;
     assert.equal(assigned.owner_id,created.id);
@@ -248,7 +259,7 @@ async function main() {
     assert.equal(review.messages,undefined);
     const supervisorQueue=(await get(supervisor,'/escalations')).body.find(item=>item.id===forwarded.id);
     assert.equal(supervisorQueue.destination,'supervision');
-    await write(supervisor,`/escalations/${forwarded.id}/claim`,{case_revision:assigned.revision});
+    await write(supervisor,`/escalations/${forwarded.id}/claim`,{case_revision:forwarded.case_revision});
     const supervised=(await get(supervisor,`/cases/${scenario.id}`)).body;
     assert.equal(supervised.conversation_id,suggested.conversation_id);
     await reassign(forwarded.id,supervised.revision);
@@ -260,8 +271,8 @@ async function main() {
     destination:'soporte_tecnico',reason_code:'cancelacion_prueba',case_revision:current.revision,idempotency_key:randomUUID()
   })).body;
   assert.ok((await get(superAdmin,'/escalations')).body.some(item=>item.id===cancelled.id));
-  await write(n1,`/escalations/${cancelled.id}/cancel`,{case_revision:current.revision});
-  await write(otherN2,`/escalations/${cancelled.id}/claim`,{case_revision:current.revision},409);
+  const restored=(await write(n1,`/escalations/${cancelled.id}/cancel`,{case_revision:cancelled.case_revision})).body;
+  await write(otherN2,`/escalations/${cancelled.id}/claim`,{case_revision:restored.case_revision},409);
 
   // A dedicated mock customer exercises directory permissions, revision fencing and idempotency.
   let customerRef;
@@ -317,7 +328,7 @@ async function main() {
     })).body;
     assert.ok((await get(supervisor,'/escalations')).body.some(item=>item.id===waiting.id));
     assert.equal((await get(n1,`/cases/${scenario.id}`)).body.owner_id,n1Id);
-    await write(n1,`/escalations/${waiting.id}/cancel`,{case_revision:current.revision});
+    await write(n1,`/escalations/${waiting.id}/cancel`,{case_revision:waiting.case_revision});
   } finally {
     await write(superAdmin,`/admin/operators/${seededN2.id}`,fields(seededN2),200,'PATCH');
   }

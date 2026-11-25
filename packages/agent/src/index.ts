@@ -1,11 +1,13 @@
 export { requestedAdvisor, acceptsAdvisorOffer } from './human-attention.js';
 export { requestModel, objectSchema, TurnModels } from './model-runtime.js';
+export { assistedHistory, assistedWriting } from './assisted-writing.js';
 export type { ModelCredentials } from './model-runtime.js';
 export { extractorInstructions, orchestratedPublicInstructions } from './turn-brief.js';
 export { createOpenAIPublicWriter, isModelObservation, modelObservationNames, validateDraft } from './generation.js';
 export type { AgentObservation, PublicWriter } from './generation.js';
 import { requestedAdvisor } from './human-attention.js';
 import { TurnModels, type ModelCredentials } from './model-runtime.js';
+import { assistedHistory, assistedWriting } from './assisted-writing.js';
 import { createBrief, extractBrief, extractorVersion, orchestratedPublicInstructions, modelDraft, modelEvidenceOrder, modelObjectiveOrder, type Brief, type Extracted } from './turn-brief.js';
 import type { AgentObservation, Profile, PublicWriter } from './generation.js';
 import { safeKnowledgeQuery } from './mcp.js';
@@ -674,9 +676,9 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     if (intent === 'cancelacion' && reportsCancellationFaults(turn,state)) {
       const history = supportingCards.find(result => result.route === 'soporte_tecnico');
       const contextRead = reads ? undefined : customerContext();
-      const support = history ?? (reads ? undefined : (await supportGraph.invoke({
+      const support = history ?? (await supportGraph.invoke({
         turn,caseState:state,intent:'soporte_tecnico',profile,publicPrompt,prompts,historyOnly:true,deadline,supportingCards
-      })).result);
+      })).result;
       const tickets = support?.type === 'card' ? support.card.facts : [];
       if (!tickets.length || sourceUnavailable(tickets)) return card(intent,'Falta confirmar las fallas reportadas.',[...(await contextRead ?? []),...tickets],[],['Consultar antecedentes técnicos en CRM · API mock'],'Revisar los tickets antes de evaluar una oferta.',['source_unavailable']);
       const recurrence = tickets.find(fact => fact.id === 'technical-tickets-90d');
@@ -784,7 +786,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     .addNode('load_case', async ({ turn, deadline }) => {
       const started = Date.now();
       const caseState = await ports.readCaseForRun(turn.run_id);
-      const config = await ports.getAgentConfig(turn.config_revision,turn.model_config_revision,turn.model_config_digest);
+      const config = await ports.getAgentConfig(turn.config_revision,turn.model_config_revision,turn.model_config_digest,turn.assisted_summary);
       if (config.revision !== turn.config_revision ||
           turn.prompt_manifest_digest && config.promptManifestDigest!==turn.prompt_manifest_digest) throw new Error('configuration revision mismatch');
       if (config.prompts.agent_objectives || turn.model_config_revision) {
@@ -1035,6 +1037,11 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const evidence=prompts.agent_objectives ? advisorEscalationReply(policy.reason_code,documents) : null;
       const citations = (evidence?.docs ?? documents).map(citation);
       const reason=evidence?.text ?? policyReasons[policy.reason_code] ?? `Se recomienda revisión por ${destination}.`;
+      if (caseState.assigned_destination===policy.destination) {
+        return {result:card(policy.destination==='soporte_tecnico' ? 'soporte_tecnico' : intent,
+          [reason,reported].filter(Boolean).join(' '),[],citations,['Revisar lo reportado y confirmar el siguiente paso'],
+          'Continúa la revisión desde este equipo y comunica al cliente el siguiente paso confirmado.',['escalation_assigned',policy.reason_code])};
+      }
       const out=card(policy.destination === 'soporte_tecnico' ? 'soporte_tecnico' : intent,
         [reason,reported].filter(Boolean).join(' '),[],citations,[`Revisar solicitud a ${destination}`],
         `Revisar y confirmar la solicitud de escalamiento a ${destination}.`,['human_requested',policy.reason_code]);
@@ -1114,13 +1121,42 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     .addNode('render_private_draft', async ({result,prompts,turn,caseState,objectives,profile}) => {
       const prepared=advisorDraft(result,prompts,turn,caseState,prompts.agent_objectives ? objectives : []);
       const current=runtime.get(turn.run_id);
-      if (prepared.type!=='card' || !current?.models || prepared.card.facts.length || prepared.card.pending.length ||
-          prepared.card.proposal || prepared.card.suggested_escalation || !prepared.card.reason_codes.includes('knowledge')) return {result:prepared};
-      const sources=prepared.card.citations.filter(({id,version})=>current.publicEvidence.has(JSON.stringify([id,version])));
-      if (!sources.length) return {result:prepared};
-      const draft=await modelDraft(current.models,'write_advisor',current.brief,turn.text,sources,
-        profile ?? 'economico',prompts.orchestrated_public_answer ?? orchestratedPublicInstructions);
-      return {result:draft ? {...prepared,card:{...prepared.card,advisor_draft:draft.answer}} : prepared};
+      if (prepared.type!=='card') return {result:prepared};
+      const card=prepared.card;
+      if (!turn.assisted_summary && current?.models && !card.facts.length && !card.pending.length && !card.proposal && !card.suggested_escalation &&
+          card.reason_codes.includes('knowledge')) {
+        const sources=card.citations.filter(({id,version})=>current.publicEvidence.has(JSON.stringify([id,version])));
+        if (sources.length) {
+          const instructions=prompts.orchestrated_public_answer ?? orchestratedPublicInstructions;
+          const draft=await modelDraft(current.models,'write_advisor',current.brief,turn.text,sources,
+            profile ?? 'economico',`${instructions}\nRedacta el mensaje que el asesor humano podría enviar al cliente, listo para revisar.`);
+          if (draft) card.advisor_draft=draft.answer;
+        }
+      }
+      if (turn.assisted_summary) {
+        const history=assistedHistory(caseState.messages,turn.turn_seq);
+        const summary=current?.models && prompts.assisted_case_summary ? await assistedWriting(current.models,'assisted_case_summary',
+          prompts.assisted_case_summary,profile ?? 'economico',history,{observed:card.summary,previous:caseState.previous_summary,
+            pending:card.pending,intake:caseState.intake?.facts,receipts:caseState.confirmed_receipts}) : null;
+        const previous=caseState.previous_summary;
+        const stale=!!current?.models && !summary && !!previous;
+        if (summary) card.summary=summary.text;
+        else if (stale && previous) card.summary=previous.text;
+        else {
+          const reported=[...history].reverse().find(message=>message.actor==='cliente' && !requestedAdvisor(message.text));
+          if (reported && !card.summary.includes(reported.text)) card.summary=`El cliente dice «${reported.text.slice(0,260)}». ${card.summary}`;
+        }
+        card.summary_update={at:new Date().toISOString(),turn_id:turn.turn_id,revision:turn.case_revision,
+          origin:summary ? 'ia' : 'evidencia',...(stale ? {stale:true} : {})};
+        if (current?.models && prompts.assisted_reply && !card.proposal && !card.suggested_escalation) {
+          const reply=await assistedWriting(current.models,'assisted_reply',prompts.assisted_reply,profile ?? 'economico',history,{
+            facts:card.facts,citations:card.citations.map(source=>source.excerpt.slice(0,400)),
+            next_action:card.next_action,pending:card.pending,receipts:caseState.confirmed_receipts
+          });
+          if (reply) card.advisor_draft=reply.text;
+        }
+      }
+      return {result:prepared};
     })
     .addEdge('priority_handoff', 'render_private_draft')
     .addEdge('resolution_ready', 'render_private_draft')

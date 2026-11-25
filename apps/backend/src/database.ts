@@ -285,11 +285,22 @@ export class WebChatVisitor1795260000025 implements MigrationInterface {
   }
 }
 
+export class AssistedAttention1795260000027 implements MigrationInterface {
+  async up(db: QueryRunner) {
+    await db.query(`ALTER TABLE escalation ADD COLUMN reason_text text;
+      UPDATE attention_case c SET snapshot=jsonb_set(snapshot,'{attention}',jsonb_build_object('stage','escalated','destination',e.destination))
+      FROM escalation e WHERE e.case_id=c.id AND e.status='en_cola' AND c.snapshot->>'status'='open';`);
+  }
+  async down(db: QueryRunner) {
+    await db.query('ALTER TABLE escalation DROP COLUMN reason_text');
+  }
+}
+
 export function createDatabase() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is required');
   return new DataSource({
-    type: 'postgres', url, migrations: [InitialSchema1795260000000, Knowledge1795260000001, Feedback1795260000002, BoundBootstrapCatalog1795260000003, SupportPriority1795260000004, WebChat1795260000005, WebDemoAccount1795260000006, SimulatorIntegration1795260000007, ConversationalVerification1795260000008, ReleaseEvidence1795260000009, PlatformEvolution1795260000010, PromptManifest1795260000011, MlAdvisory1795260000012, PromptReplayEvidence1795260000013, PromptZeroEffectEvidence1795260000014, PromptGoldenEvidence1795260000015, MlAdvisoryTracking1795260000016, ContextualKnowledge1795260000017, OptionalChatIdentity1795260000018, PromptBillingOutageEvidence1795260000019, PromptHandoffContextEvidence1795260000020, PromptPendingProposalEvidence1795260000021, PromptAdjustmentReviewEvidence1795260000022, PromptPrivacyReplayEvidence1795260000023, PromptAuthenticatedHandoffEvidence1795260000024, WebChatVisitor1795260000025, AgentModelPolicy1795260000026],
+    type: 'postgres', url, migrations: [InitialSchema1795260000000, Knowledge1795260000001, Feedback1795260000002, BoundBootstrapCatalog1795260000003, SupportPriority1795260000004, WebChat1795260000005, WebDemoAccount1795260000006, SimulatorIntegration1795260000007, ConversationalVerification1795260000008, ReleaseEvidence1795260000009, PlatformEvolution1795260000010, PromptManifest1795260000011, MlAdvisory1795260000012, PromptReplayEvidence1795260000013, PromptZeroEffectEvidence1795260000014, PromptGoldenEvidence1795260000015, MlAdvisoryTracking1795260000016, ContextualKnowledge1795260000017, OptionalChatIdentity1795260000018, PromptBillingOutageEvidence1795260000019, PromptHandoffContextEvidence1795260000020, PromptPendingProposalEvidence1795260000021, PromptAdjustmentReviewEvidence1795260000022, PromptPrivacyReplayEvidence1795260000023, PromptAuthenticatedHandoffEvidence1795260000024, WebChatVisitor1795260000025, AgentModelPolicy1795260000026, AssistedAttention1795260000027],
     migrationsTableName: 'claro_migrations', synchronize: false
   });
 }
@@ -311,7 +322,7 @@ export type JobPayloads = {
   run: AgentTurn;
   chat_trace: { input_id: string; output_id: string; context?: { before: string; after: string } };
   resume: RunResume;
-  deliver: { text: string; sender: 'agente' | 'asesor' | 'sistema'; revision: number; turn_seq?: number; feedback_case_id?: string; draft_publication?: DraftPublication };
+  deliver: { text: string; sender: 'agente' | 'asesor' | 'sistema'; revision: number; turn_seq?: number; feedback_case_id?: string; draft_publication?: DraftPublication; attention_notice?: true };
   effect: { proposal_id: string };
   integration: { operation_id: string };
   ml: AgentTurn;

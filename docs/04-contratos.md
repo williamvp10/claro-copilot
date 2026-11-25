@@ -149,3 +149,5 @@ El ejemplo fija los valores iniciales para evaluación. El modo de ML se lee del
 | GET /api/v1/web-chat/events | Envía conversation.updated con la proyección pública. Reanuda con cursor o Last-Event-ID. |
 
 El navegador consulta periódicamente el historial para recuperar mensajes persistidos si se interrumpe SSE. El asesor responde al canal de origen y el modo asistido mantiene el mismo expediente. Los alias y códigos se capturan en formularios del chat y quedan fuera del historial y de los proveedores de IA. El vínculo entre cuentas de distintos canales requiere una operación independiente de verificación.
+
+El [corte propuesto de atención asistida](../specs/002-atencion-asistida/plan.md#2-continuidad-pública-en-web-y-telegram) agrega la etapa pública de atención y avisos persistidos de toma, escalamiento y cancelación. La proyección del cliente incluye el nombre visible autorizado del asesor y el destino público cuando corresponda. El motivo confirmado y la ficha siguen en la interfaz privada del caso.

@@ -73,6 +73,8 @@ const invoicePath = (ref: string) => '/facturas/' + encodeURIComponent(ref);
 
 export const simulators = {
   alias: (alias: string) => request('crm','/identidades/resolver',z.object({ cliente_id:CustomerId }),{body:{alias}}),
+  identity: (tipo_documento: string, numero_documento: string) => request('crm','/clientes?'+
+    new URLSearchParams({tipo_documento,numero_documento}),z.object({cliente_id:CustomerId})),
   customer: (ref: string) => request('crm',customerPath(ref),Customer),
   services: (ref: string) => request('crm',customerPath(ref) + '/servicios',z.array(Service)),
   directory: (offset:number, limit:number, q:string, refs?:string[]) => {

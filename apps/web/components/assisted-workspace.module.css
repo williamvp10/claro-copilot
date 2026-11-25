@@ -1,0 +1,31 @@
+.cases { width: min(100%, 1060px); margin: 0 auto; padding: clamp(16px, 4vw, 42px); }
+.casesHead, .queueHead { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.casesHead { margin-block-end: 26px; }
+.casesHead h1 { font-size: 30px; font-weight: 680; letter-spacing: -.03em; }
+.cases section + section { margin-block-start: 28px; }
+.queueHead { margin-block-end: 10px; }
+.queueHead h2 { font-size: 18px; font-weight: 650; }
+.queueHead h2 span { margin-inline-start: 5px; color: #52525b; font-size: 13px; }
+.queueHead p, .queue small { color: #5c5d66; font-size: 13px; }
+.queue { margin: 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: 12px; background: white; }
+.queue li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(110px, .75fr) auto; align-items: center; gap: 14px; padding: 12px 16px; }
+.queue li + li { border-top: 1px solid var(--border); }
+.queue strong, .queue small { display:block; overflow-wrap: anywhere; }
+.queue button, .casesHead button { min-height:44px; }
+.wait { display:flex; gap:8px; align-items:center; color:#78350f; }
+.wait svg { flex:none; }
+.wait time { font-variant-numeric: tabular-nums; }
+.empty, .caseError { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: white; color: #52525b; }
+.caseError { display:flex; gap:12px; align-items:center; margin-bottom:14px; color:#991b1b; }
+.suggestion { --suggestion-color:#3730a3; min-width:0; padding:10px 12px; border:1px solid #c7d2fe; border-radius:10px;
+  color:var(--suggestion-color); background:#eef2ff; margin:0 0 10px; animation:suggestion-arrived .45s ease-out; }
+.suggestion summary { cursor:pointer; padding:6px 0; font-weight:650; }
+.suggestion summary svg { display:inline-block; vertical-align:text-bottom; margin-inline:2px 4px; }
+.suggestion p { margin:5px 0 9px; color:#312e81; font-size:13px; white-space:pre-wrap; max-height:9rem; overflow:auto; overflow-wrap:anywhere; }
+.suggestion ul { margin:0 0 8px; color:#3730a3; font-size:12px; }
+.suggestion a { text-decoration:underline; }
+.suggestionWait { margin-block-end:8px; color:#52525b; font-size:13px; }
+@keyframes suggestion-arrived { from { background:#dbe4ff; } to { background:#eef2ff; } }
+@media (prefers-reduced-motion:reduce) { .suggestion { animation:none; } }
+@media (max-width:540px) { .queue li { grid-template-columns:minmax(0,1fr) auto; gap:8px; }
+  .queue li button { grid-column:1/-1; justify-self:start; } }

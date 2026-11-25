@@ -1,25 +1,39 @@
 import { Body, ConflictException, Controller, ForbiddenException, Get, Header, Inject, NotFoundException, Param, Patch, Post, Query, Req, Res, UnauthorizedException, BadRequestException, ServiceUnavailableException } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { hashPassword } from 'better-auth/crypto';
 import { z } from 'zod';
-import type { DataSource } from 'typeorm';
-import { CustomerId, InvoiceId, type Viewer } from '@claro/contracts';
+import type { DataSource, EntityManager } from 'typeorm';
+import { assistedHistory, assistedWriting, TurnModels, type AgentObservation } from '@claro/agent';
+import { CustomerId, EscalationDestination, escalationDestinations, InvoiceId, type Viewer } from '@claro/contracts';
 import { AUTH, canReadMockBilling, getViewer, type createAuth } from './auth.js';
 import { audit, DATABASE, enqueue, type CaseRow } from './database.js';
-import { checkCase, clearPersonalData, customerReference, loadCase, saveCase } from './cases.js';
+import { attentionNotice, checkCase, clearPersonalData, customerReference, isEscalationWaiting, loadCase, queueRun, saveCase } from './cases.js';
 import { readBilling, readInvoice } from './integration-operations.js';
 import { privateSignals, queueChurn } from './ml-advisory.js';
 import { SimulatorFailure, simulators } from './simulator-client.js';
+import { activeAgentModels, loadAgentModelPolicy } from './agent-model-storage.js';
+import { agentProviders } from './agent-providers.js';
+import { readRunPromptConfig, runPromptDigest } from './prompt-catalog.js';
+import { exportAgentSpan } from './telemetry.js';
 
 type Auth = ReturnType<typeof createAuth>['auth'];
 const id = z.string().trim().min(1).max(128);
 const operationKey = z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/);
 const reason = z.string().trim().min(3).max(120).regex(/^[\p{L}\p{N}_ .-]+$/u);
-const destination = z.enum(['soporte_tecnico','facturacion','comercial_portabilidad','supervision']);
-const requestEscalation = z.object({destination,reason_code:reason,case_revision:z.number().int().positive(),idempotency_key:id});
+const destination = EscalationDestination;
+const requestEscalation = z.object({destination,reason_code:reason.optional(),reason_text:z.string().trim().min(3).max(500).optional(),
+  case_revision:z.number().int().positive(),idempotency_key:id}).refine(input=>!!(input.reason_text || input.reason_code));
 const transition = z.object({case_revision:z.number().int().positive()});
 const reassignment = transition.extend({operator_id:id,reason});
+const customerIdentity=z.object({tipo_documento:z.enum(['CC','CE','NIT','PAS']),numero_documento:z.string().trim().min(1).max(64)});
+const customerDetails=customerIdentity.extend({cliente_id:CustomerId,nombre:z.string().trim().min(1).max(100),
+  celular:z.string().trim().min(3).max(32),email:z.email().max(254),motivo:reason,idempotency_key:operationKey});
+const caseRegistration=z.discriminatedUnion('action',[
+  transition.extend({action:z.literal('lookup'),...customerIdentity.shape}),
+  transition.extend({action:z.literal('link'),...customerIdentity.shape,idempotency_key:operationKey}),
+  transition.extend({action:z.literal('create'),...customerDetails.shape})
+]);
 const capabilities = z.array(z.enum(['n1','n2','supervisor','admin','superadmin'])).max(5);
 const specialties = z.array(destination.exclude(['supervision'])).max(3);
 const operatorFields = z.object({capabilities,specialties,enabled:z.boolean(),available:z.boolean()});
@@ -27,7 +41,9 @@ const operatorCreate = operatorFields.extend({name:z.string().trim().min(1).max(
 async function provider<T>(operation:()=>Promise<T>):Promise<T> { try { return await operation(); } catch (error) { if (!(error instanceof SimulatorFailure)) throw error; if (error.status===404) throw new NotFoundException(); if (error.status===409) throw new ConflictException('El registro cambió o la clave ya se utilizó'); throw new ServiceUnavailableException('CRM mock no disponible'); } }
 const parse = <T>(schema:z.ZodType<T>, input:unknown):T => { const value=schema.safeParse(input); if (!value.success) throw new BadRequestException('Solicitud inválida'); return value.data; };
 const has = (viewer:Viewer, capability:string) => viewer.capabilities?.includes(capability) ?? false;
-export const queueAllowed = (viewer:Viewer, dest:string) => dest === 'supervision' ? has(viewer,'supervisor') : has(viewer,'n2') && !!viewer.specialties?.includes(dest);
+const demoReceiver = (viewer:Viewer) => process.env.DEMO_MODE==='true' && has(viewer,'admin') && has(viewer,'supervisor');
+export const queueAllowed = (viewer:Viewer, dest:string) => demoReceiver(viewer) ||
+  (dest==='supervision' ? has(viewer,'supervisor') : has(viewer,'n2') && !!viewer.specialties?.includes(dest));
 
 @Controller('api/v1')
 export class PlatformEvolutionController {
@@ -38,32 +54,136 @@ export class PlatformEvolutionController {
   }
   private async superadmin(req:Request) { const v=await this.viewer(req); if (!has(v,'superadmin')) throw new ForbiddenException(); return v; }
 
+  private async confirmCaseOperator(tx:EntityManager,v:Viewer,caseId:string) {
+    const row=await loadCase(tx,caseId,true);
+    checkCase(v,row,true);
+    const [operator]=await tx.query('SELECT enabled,capabilities FROM operator_role WHERE user_id=$1 FOR SHARE',[v.id]);
+    if (!operator?.enabled || !(operator.capabilities as string[]).some(value=>['n1','n2','supervisor'].includes(value))) {
+      throw new ForbiddenException('Se requiere una asignación de atención vigente');
+    }
+    return row;
+  }
+
+  @Post('cases/:caseId/customer-registration')
+  async caseCustomer(@Req() req:Request,@Param('caseId') caseId:string,@Body() raw:unknown) {
+    const v=await this.viewer(req), input=parse(caseRegistration,raw);
+    if (process.env.DEMO_MODE!=='true') throw new ForbiddenException();
+    return this.db.transaction(async tx=>{
+      const row=await this.confirmCaseOperator(tx,v,parse(id,caseId));
+      const scope=`case-customer:${caseId}:${v.id}`;
+      const fingerprint=createHash('sha256').update(JSON.stringify(input)).digest('hex');
+      if (input.action!=='lookup') {
+        const [prior]=await tx.query('SELECT fingerprint FROM idempotency WHERE scope=$1 AND key=$2',[scope,input.idempotency_key]);
+        if (prior) {
+          if (prior.fingerprint!==fingerprint) throw new ConflictException('Clave reutilizada');
+          return {status:'registered',registration:row.snapshot.customer_registration};
+        }
+      }
+      if (row.snapshot.status!=='open' || row.snapshot.revision!==input.case_revision || row.snapshot.verified ||
+          row.snapshot.customer_registration || row.account_ref) throw new ConflictException('El caso cambió o ya tiene un cliente vinculado');
+      const match=await provider(async()=>{
+        try { return await simulators.identity(input.tipo_documento,input.numero_documento); }
+        catch (error) { if (error instanceof SimulatorFailure && error.status===404) return null; throw error; }
+      });
+      if (input.action==='lookup') return {status:match ? 'existing' : 'missing'};
+      if (input.action==='link' && !match) throw new NotFoundException('El registro ya no está disponible');
+      if (input.action==='create' && match && match.cliente_id!==input.cliente_id) {
+        throw new ConflictException('El cliente ya existe. Busca su documento para vincularlo.');
+      }
+      let registration;
+      if (input.action==='create') {
+        const {action:_action,case_revision:_revision,idempotency_key,...body}=input;
+        const key=`case-customer:${createHash('sha256').update(`${scope}:${idempotency_key}`).digest('hex')}`;
+        const result=await provider(()=>simulators.customerCommand(null,body,key));
+        registration={customer_ref:result.cliente_id,revision:result.revision};
+      } else {
+        const result=await provider(()=>simulators.directoryCustomer(match!.cliente_id));
+        registration={customer_ref:match!.cliente_id,revision:result.revision};
+      }
+      row.snapshot.customer_registration=registration;
+      row.snapshot.revision++;
+      await tx.query('INSERT INTO idempotency VALUES ($1,$2,$3,$4)',[scope,input.idempotency_key,fingerprint,caseId]);
+      await audit(tx,caseId,input.action==='create' ? 'customer_created' : 'customer_linked',
+        {operator_id:v.id,customer_ref:registration.customer_ref,verification:'pending'});
+      await saveCase(tx,row);
+      return {status:'registered',registration};
+    });
+  }
+
   @Get('escalations')
   async escalations(@Req() req:Request) {
     const v=await this.viewer(req);
-    return this.db.query(`SELECT e.id,e.case_id,e.destination,e.reason_code,e.status,e.requested_by,e.owner_id,e.created_at,e.updated_at,(c.snapshot->>'revision')::int AS case_revision FROM escalation e JOIN attention_case c ON c.id=e.case_id
-      WHERE e.requested_by=$1 OR e.owner_id=$1 OR (e.status='en_cola' AND (($2 AND e.destination='supervision') OR ($3 AND e.destination=ANY($4))))
-      OR ($5 AND e.status='en_cola')
+    const destinations=destination.options.filter(dest=>queueAllowed(v,dest));
+    const rows:({case_open:boolean;status:string;destination:string}&Record<string,unknown>)[]=await this.db.query(`SELECT e.id,e.case_id,e.destination,e.reason_code,e.status,e.requested_by,e.owner_id,e.created_at,e.updated_at,
+      (c.snapshot->>'revision')::int AS case_revision, c.snapshot->>'status'='open' AS case_open FROM escalation e JOIN attention_case c ON c.id=e.case_id
+      WHERE e.requested_by=$1 OR e.owner_id=$1 OR (e.status='en_cola' AND e.destination=ANY($3))
+      OR ($4 AND e.status='en_cola')
       OR ($2 AND e.status='en_cola' AND NOT EXISTS (SELECT 1 FROM operator_role o WHERE o.enabled AND o.available AND 'n2'=ANY(o.capabilities) AND e.destination=ANY(o.specialties)))
-      ORDER BY e.created_at DESC LIMIT 100`,[v.id,has(v,'supervisor'),has(v,'n2'),v.specialties ?? [],has(v,'superadmin')]);
+      ORDER BY CASE WHEN e.status='en_cola' THEN 0 WHEN e.status='tomado' THEN 1 ELSE 2 END,e.created_at,e.id LIMIT 100`,
+      [v.id,has(v,'supervisor'),destinations,has(v,'superadmin')]);
+    return rows.map(({case_open,...row})=>({...row,can_claim:case_open && row.status==='en_cola' && !!v.available && queueAllowed(v,row.destination)}));
+  }
+  @Post('cases/:caseId/escalations/suggestion')
+  async suggestEscalation(@Req() req:Request,@Param('caseId') caseId:string,@Body() raw:unknown) {
+    const viewer=await this.viewer(req), input=parse(transition.extend({destination}),raw);
+    const read=async()=>this.db.transaction(async tx=>{
+      const row=await this.confirmCaseOperator(tx,viewer,parse(id,caseId));
+      if (row.snapshot.status!=='open' || row.snapshot.revision!==input.case_revision || await isEscalationWaiting(tx,caseId)) {
+        throw new ConflictException('El caso cambió. Revisa su estado.');
+      }
+      return row;
+    });
+    const row=await read();
+    const history=assistedHistory(row.snapshot.messages).map(message=>({...message,text:clearPersonalData(message.text)}));
+    const [revision]=await this.db.query('SELECT revision FROM prompt_revision WHERE activated');
+    const [model,prompts]=await Promise.all([activeAgentModels(this.db),readRunPromptConfig(this.db,revision.revision,false,true)]);
+    const policy=await loadAgentModelPolicy(this.db,model.revision,model.digest);
+    const observations:AgentObservation[]=[];
+    const started=Date.now(),run_id=randomUUID();
+    const models=new TurnModels(policy,agentProviders().modelCredentials ?? {},model.revision,started+4500,span=>observations.push(span));
+    const suggested=await assistedWriting(models,'escalation_reason',prompts.prompts.escalation_reason ?? '',
+      row.snapshot.verified ? 'intermedio' : 'economico',history,{
+        destination:escalationDestinations[input.destination],
+        summary:clearPersonalData(row.snapshot.card?.summary ?? ''),pending:row.snapshot.card?.pending.map(clearPersonalData)
+      });
+    const latest=await read();
+    const stale=latest.snapshot.messages.at(-1)?.id!==row.snapshot.messages.at(-1)?.id;
+    const status=stale ? 'stale' : suggested ? 'suggested' : 'unavailable';
+    observations.push({name:'advisor.escalation_reason',started,ended:Date.now(),metadata:{step_id:'draft_escalation_reason',
+      agent_id:'copiloto',prompt_ref:'escalation_reason',status}});
+    await exportAgentSpan({run_id,conversation_id:row.snapshot.conversation_id,channel:row.snapshot.channel,audience:'asesor',
+      config_revision:revision.revision, model_config_revision:model.revision,model_config_digest:model.digest,
+      prompt_manifest_digest:runPromptDigest(prompts)},started,'escalation_reason',status,observations,prompts.prompt_metadata,
+      row.web_visitor_ref ?? row.contact_ref);
+    if (stale) throw new ConflictException('Llegó un mensaje nuevo. Puedes volver a sugerir el motivo.');
+    return {status,suggestion:suggested,destination:input.destination,case_revision:input.case_revision};
   }
   @Post('cases/:caseId/escalations')
   async request(@Req() req:Request,@Param('caseId') caseId:string,@Body() raw:unknown) {
     const v=await this.viewer(req), input=parse(requestEscalation,raw); parse(id,caseId);
+    const reasonCode=input.reason_code ?? 'manual';
     return this.db.transaction(async tx=>{
       const row=await loadCase(tx,caseId,true); checkCase(v,row,true);
       const [prior]=await tx.query('SELECT * FROM escalation WHERE requested_by=$1 AND idempotency_key=$2',[v.id,input.idempotency_key]);
-      if (prior) { if (prior.case_id!==caseId || prior.destination!==input.destination || prior.reason_code!==input.reason_code || prior.request_revision!==input.case_revision) throw new ConflictException('Clave reutilizada'); return prior; }
+      if (prior) {
+        if (prior.case_id!==caseId || prior.destination!==input.destination || prior.reason_code!==reasonCode ||
+            prior.reason_text!==(input.reason_text ?? null) || prior.request_revision!==input.case_revision) throw new ConflictException('Clave reutilizada');
+        return {id:prior.id,destination:prior.destination,status:prior.status,case_revision:row.snapshot.revision};
+      }
       if (row.snapshot.status!=='open' || row.snapshot.revision!==input.case_revision) throw new ConflictException('El caso cambió');
       const [active]=await tx.query("SELECT id,status FROM escalation WHERE case_id=$1 AND status IN ('en_cola','tomado') FOR UPDATE",[caseId]);
       if (active && active.status==='tomado' && input.destination==='supervision') {
         await tx.query("UPDATE escalation SET status='resuelto',updated_at=now() WHERE id=$1",[active.id]);
         await audit(tx,caseId,'escalation_forwarded',{operator_id:v.id});
       } else if (active) throw new ConflictException('Ya hay un escalamiento activo');
-      const [created]=await tx.query(`INSERT INTO escalation(id,case_id,destination,reason_code,status,requested_by,idempotency_key,request_revision)
-        VALUES($1,$2,$3,$4,'en_cola',$5,$6,$7) RETURNING id,case_id,destination,reason_code,status,requested_by,owner_id,created_at,updated_at`,[randomUUID(),caseId,input.destination,input.reason_code,v.id,input.idempotency_key,input.case_revision]);
-      await audit(tx,caseId,'escalation_requested',{destination:input.destination,reason_code:clearPersonalData(input.reason_code),operator_id:v.id});
-      await saveCase(tx,row); return created;
+      const [created]=await tx.query(`INSERT INTO escalation(id,case_id,destination,reason_code,status,requested_by,idempotency_key,request_revision,reason_text)
+        VALUES($1,$2,$3,$4,'en_cola',$5,$6,$7,$8) RETURNING id,case_id,destination,reason_code,status,requested_by,owner_id,created_at,updated_at`,
+        [randomUUID(),caseId,input.destination,reasonCode,v.id,input.idempotency_key,input.case_revision,input.reason_text ?? null]);
+      row.snapshot.revision++;
+      await audit(tx,caseId,'escalation_requested',{escalation_id:created.id,destination:input.destination,reason_code:clearPersonalData(reasonCode),operator_id:v.id});
+      await attentionNotice(tx,row,'escalated',created.id,{destination:input.destination});
+      await saveCase(tx,row);
+      return {...created,case_revision:row.snapshot.revision};
     });
   }
   @Post('escalations/:id/claim')
@@ -86,7 +206,7 @@ export class PlatformEvolutionController {
       if (row.snapshot.status!=='open' || row.snapshot.revision!==input.case_revision) throw new ConflictException('El caso cambió');
       if (action==='claim') {
         if (esc.status!=='en_cola' || !v.available || !queueAllowed(v,esc.destination)) throw new ConflictException('Escalamiento no disponible');
-        row.snapshot.owner_id=v.id; row.snapshot.revision++;
+        row.snapshot.owner_id=v.id;
       } else if (action==='cancel') {
         if (esc.status!=='en_cola' || (esc.requested_by!==v.id && !has(v,'supervisor'))) throw new ForbiddenException();
       } else if (action==='resolve') {
@@ -96,14 +216,24 @@ export class PlatformEvolutionController {
         if (!['en_cola','tomado'].includes(esc.status)) throw new ConflictException();
         const [target]=await tx.query('SELECT * FROM operator_role WHERE user_id=$1',[input.operator_id]);
         if (!target?.enabled || !target.available || !target.capabilities.some((c:string)=>['n1','n2','supervisor'].includes(c))) throw new ConflictException('Operador no disponible');
-        row.snapshot.owner_id=input.operator_id!; row.snapshot.revision++;
+        row.snapshot.owner_id=input.operator_id!;
       }
       const status=action==='cancel'?'cancelado':action==='resolve'?'resuelto':'tomado';
       const [updated]=await tx.query(`UPDATE escalation SET status=$2,owner_id=$3,updated_at=now() WHERE id=$1
         RETURNING id,case_id,destination,reason_code,status,requested_by,owner_id,created_at,updated_at`,[escId,status,action==='claim'?v.id:action==='reassign'?input.operator_id:esc.owner_id]);
-      await audit(tx,row.id,`escalation_${action}`,{operator_id:v.id,destination:esc.destination,...(input.reason ? {reason:clearPersonalData(input.reason)}:{}),...(input.operator_id ? {target_id:input.operator_id}:{})});
-      if (action==='claim' || action==='reassign') await queueChurn(tx,row);
-      await saveCase(tx,row); return updated;
+      const [{id:eventId}]=await tx.query(`INSERT INTO attention_event(case_id,kind,metadata) VALUES ($1,$2,$3) RETURNING id`,
+        [row.id,`escalation_${action}`,{escalation_id:escId,operator_id:v.id,destination:esc.destination,
+          ...(input.reason ? {reason:clearPersonalData(input.reason)}:{}),...(input.operator_id ? {target_id:input.operator_id}:{})}]);
+      row.snapshot.revision++;
+      if (action==='cancel' || action==='claim' || action==='reassign') {
+        const [owner]=await tx.query('SELECT name FROM "user" WHERE id=$1',[row.snapshot.owner_id]);
+        const event=action==='cancel' ? 'escalation_cancelled' : 'escalation_taken';
+        await attentionNotice(tx,row,event,action==='reassign' ? `${escId}:${eventId}` : escId,{advisor:owner?.name});
+        if (action!=='cancel') await queueChurn(tx,row);
+        await queueRun(tx,row);
+      }
+      await saveCase(tx,row);
+      return {...updated,case_revision:row.snapshot.revision};
     });
   }
   @Post('cases/:id/ml/intent-label')
@@ -225,7 +355,7 @@ export class PlatformEvolutionController {
   @Post('admin/customers')
   async createCustomer(@Req() req:Request,@Body() raw:unknown) {
     const v=await this.superadmin(req);
-    const input=parse(z.object({cliente_id:z.string().regex(/^C-\d{4}$/),nombre:id,tipo_documento:z.enum(['CC','CE','NIT','PAS']),numero_documento:id,celular:id,email:z.email(),motivo:reason,idempotency_key:operationKey}),raw);
+    const input=parse(customerDetails,raw);
     const {idempotency_key,...body}=input;
     const receipt=await provider(()=>simulators.customerCommand(null,body,idempotency_key));
     await this.db.transaction(tx=>audit(tx,null,'customer_created',{operator_id:v.id,customer_ref:receipt.cliente_id,reason:clearPersonalData(input.motivo)}));

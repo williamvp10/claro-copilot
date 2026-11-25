@@ -47,7 +47,8 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 }
 
 async function streamSnapshots<T extends { cursor: number }>(
-  req: Request, res: Response, refresh: () => Promise<T>, payload: (snapshot: T) => CaseEvent | WebChatEvent
+  req: Request, res: Response, refresh: () => Promise<T>, payload: (snapshot: T) => CaseEvent | WebChatEvent,
+  onAccessLost?: () => void
 ) {
     const snapshot = await refresh();
     const rawCursor = req.get('Last-Event-ID') ?? String(req.query.cursor ?? 0);
@@ -77,7 +78,8 @@ async function streamSnapshots<T extends { cursor: number }>(
         write(await refresh());
         if (++beats % 15 === 0) res.write(': heartbeat\n\n');
         if (active && !res.writableEnded) timer = setTimeout(() => void poll(), 1000);
-      } catch {
+      } catch (error) {
+        if (error instanceof HttpException && [401,403,404].includes(error.getStatus())) onAccessLost?.();
         res.end();
       }
     };
@@ -224,14 +226,18 @@ class PlatformController {
   @Get('me')
   async me(@Req() req: Request): Promise<Viewer> {
     const viewer = await this.viewer(req);
-    return { ...viewer, can_read_mock_billing: canReadMockBilling(viewer) };
+    return { ...viewer, can_read_mock_billing: canReadMockBilling(viewer),
+      can_register_case_customer:process.env.DEMO_MODE==='true' && !!viewer.capabilities?.some(value=>['n1','n2','supervisor'].includes(value)) };
   }
 
   @Get('contacts')
   async contacts(@Req() req: Request) { return this.cases.contacts(await this.viewer(req)); }
 
   @Get('cases')
-  async list(@Req() req: Request) { return this.cases.list(await this.viewer(req)); }
+  async list(@Req() req: Request,@Query('view') view?:string) {
+    const viewer=await this.viewer(req);
+    return view==='inbox' ? this.cases.inbox(viewer) : this.cases.list(viewer);
+  }
 
   @Post('cases')
   async open(@Req() req: Request, @Body() data: unknown) {
@@ -313,7 +319,8 @@ class PlatformController {
   async events(@Req() req: Request, @Res() res: Response, @Param('id') rawId: string) {
     const id = parse(Id, rawId);
     return streamSnapshots(req, res, () => this.viewer(req).then(viewer => this.cases.get(viewer, id)),
-      next => ({ type: 'case.updated', cursor: next.cursor, snapshot: next }));
+      next => ({ type: 'case.updated', cursor: next.cursor, snapshot: next }),
+      () => res.write('event: case.access_lost\ndata: {}\n\n'));
   }
 
   @Post('webhooks/telegram')

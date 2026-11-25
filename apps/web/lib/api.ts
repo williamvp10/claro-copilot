@@ -52,6 +52,9 @@ export const integrations = {
  approve: (id: string, approved: boolean) => post<IntegrationOperation>(adminIntegration+'/approvals/'+encodeURIComponent(id),{approved})
 };
 export const api = {
+ inbox:()=>fixtures ? Promise.resolve({assigned:copy(cases.filter(item=>item.owner_id==='advisor-demo')),
+   available:copy(cases.filter(item=>!item.owner_id && item.status==='open').map(item=>({...item,queued_at:item.updated_at}))),can_take:true})
+   : request<import('@claro/contracts').CaseInbox>('/api/v1/cases?view=inbox'),
   agentModelCatalog:()=>request<AgentModelCatalog>('/api/v1/admin/agent-models/catalog'),
   agentModelExecutions:()=>request<AgentModelExecutions>('/api/v1/admin/agent-models/executions'),
   agentModelRevisions:()=>request<AgentModelRevisions>('/api/v1/admin/agent-models/revisions'),
@@ -97,5 +100,12 @@ export const api = {
  eval:(revision:string)=>post<EvalJob>(`/api/v1/admin/prompts/${encodeURIComponent(revision)}/eval`),
  evalStatus:(revision:string)=>fixtures?Promise.resolve<EvalStatus>({job:null,report:null}):request<EvalStatus>(`/api/v1/admin/prompts/${encodeURIComponent(revision)}/eval`),
  activate:(revision:string)=>{if(!fixtures)return post<PromptRevision>(`/api/v1/admin/prompts/${encodeURIComponent(revision)}/activate`);revisions.forEach(r=>{if(r.status==='active')r.status='passed';if(r.revision===revision)r.status='active';});return Promise.resolve(copy(revisions.find(x=>x.revision===revision)!));},
- subscribe:(id:string,cursor:number,onEvent:(event:CaseEvent)=>void,onError:()=>void)=>{if(fixtures)return ()=>{};const stream=new EventSource(`/api/v1/cases/${encodeURIComponent(id)}/events?cursor=${cursor}`);stream.addEventListener('case.updated',event=>{try{onEvent(JSON.parse((event as MessageEvent).data) as CaseEvent);}catch{onError();}});stream.onerror=onError;return ()=>stream.close();}
+ subscribe:(id:string,cursor:number,onEvent:(event:CaseEvent)=>void,onError:()=>void,onAccessLost:()=>void)=>{
+   if(fixtures)return ()=>{};
+   const stream=new EventSource(`/api/v1/cases/${encodeURIComponent(id)}/events?cursor=${cursor}`);
+   stream.addEventListener('case.updated',event=>{try{onEvent(JSON.parse((event as MessageEvent).data) as CaseEvent);}catch{onError();}});
+   stream.addEventListener('case.access_lost',()=>{stream.close();onAccessLost();});
+   stream.onerror=onError;
+   return ()=>stream.close();
+ }
 };

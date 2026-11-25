@@ -9,6 +9,7 @@ Especificación del siguiente corte para administración, atención, CRM y confi
 | Agente y LLMOps | Orquestador LangGraph.js, tres subgrafos especializados para cinco categorías, MCPs privados para Conocimiento, CRM y Facturación, y catálogo de prompts efectivos y versionados. |
 
 - [Consola, CRM, permisos y escalamiento](consola-crm.md)
+- [Atención asistida para cliente, asesor y administración](../../specs/002-atencion-asistida/spec.md) · [Plan de implementación y pruebas](../../specs/002-atencion-asistida/plan.md)
 - [Tableros y contrato de métricas](tableros.md)
 - [Traspaso de intención y churn a 90 días](ml-intencion-y-churn.md)
 - [Agente, decisiones, herramientas y prompts](agente-y-prompts.md)

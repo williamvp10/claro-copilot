@@ -111,9 +111,23 @@ export const ConversationContext = z.object({
     verified:z.boolean(),awaiting_advisor:z.boolean(),catalogue_version:z.string().max(128).optional()})
 });
 export type ConversationContext = z.infer<typeof ConversationContext>;
+export const EscalationDestination = z.enum(['soporte_tecnico','facturacion','comercial_portabilidad','supervision']);
+export type EscalationDestination = z.infer<typeof EscalationDestination>;
+export const escalationDestinations: Record<EscalationDestination, string> = {
+  soporte_tecnico:'Soporte técnico', facturacion:'Facturación', comercial_portabilidad:'Comercial y portabilidad', supervision:'Supervisión'
+};
+const AttentionNotice = z.enum(['assigned','escalated','escalation_taken','escalation_cancelled']);
+export type AttentionNotice = z.infer<typeof AttentionNotice>;
+const PublicAttention = z.discriminatedUnion('stage', [
+  z.object({stage:z.literal('waiting')}),
+  z.object({stage:z.literal('assigned'),advisor_name:z.string().max(100).optional()}),
+  z.object({stage:z.literal('escalated'),destination:EscalationDestination})
+]);
+export type PublicAttention = z.infer<typeof PublicAttention>;
 export const Message = z.object({
   id: Id, turn_seq: z.number().int().positive(), actor: Actor, text: Text,
-  created_at: z.iso.datetime(), citations: z.array(Citation).optional(), verification_input: z.literal(true).optional()
+  created_at: z.iso.datetime(), citations: z.array(Citation).optional(), verification_input: z.literal(true).optional(),
+  attention_notice: AttentionNotice.optional()
 });
 export type Message = z.infer<typeof Message>;
 export const Proposal = z.object({
@@ -128,7 +142,8 @@ export const AdvisorCard = z.object({
   advisor_draft_case_revision: z.number().int().positive().optional(), advisor_draft_turn_seq: z.number().int().positive().optional(),
   advisor_draft_status: z.enum(['current','stale']).optional(), handoff_summary: z.string().optional(), proposal: Proposal.optional(),
   context_question: ContextQuestion.optional(),
-  objectives: z.array(Intent).max(5).optional(), closure_summary: z.string().max(4000).optional()
+  objectives: z.array(Intent).max(5).optional(), closure_summary: z.string().max(4000).optional(),
+  summary_update: z.object({at:z.iso.datetime(),turn_id:Id,revision:z.number().int().positive(),origin:z.enum(['ia','evidencia']),stale:z.boolean().optional()}).optional()
 });
 export type AdvisorCard = z.infer<typeof AdvisorCard>;
 export const CaseSummary = z.object({
@@ -138,6 +153,9 @@ export const CaseSummary = z.object({
   updated_at: z.iso.datetime(), last_message: z.string().nullable()
 });
 export type CaseSummary = z.infer<typeof CaseSummary>;
+export type CaseInbox = {
+  assigned: CaseSummary[]; available: (CaseSummary & {queued_at:string})[]; can_take:boolean;
+};
 export const CaseMlSignals = z.object({
   intent: z.object({
     prediction_id:Id, turn_id:Id, case_revision:z.number().int().positive(), label:Intent, model_version:Id,
@@ -158,8 +176,8 @@ export const CaseSnapshot = CaseSummary.extend({
   tracking: z.object({
     owner_name:z.string().nullable(), level:z.enum(['n1','n2','supervisor']).nullable(),
     escalation:z.object({
-      id:Id, destination:z.enum(['soporte_tecnico','facturacion','comercial_portabilidad','supervision']),
-      reason_code:z.string(), status:z.enum(['en_cola','tomado','resuelto','cancelado']),
+      id:Id, destination:EscalationDestination, reason_code:z.string(), reason_text:z.string().max(500).nullable().optional(),
+      status:z.enum(['en_cola','tomado','resuelto','cancelado']),
       queued_seconds:z.number().int().nonnegative(), updated_at:z.iso.datetime()
     }).nullable(),
     events:z.array(z.object({kind:z.string(),at:z.iso.datetime()})),
@@ -167,6 +185,8 @@ export const CaseSnapshot = CaseSummary.extend({
   }).optional(),
   ml: CaseMlSignals.optional(),
   handoff_reason: z.string().max(300).optional(),
+  attention: PublicAttention.optional(),
+  customer_registration: z.object({customer_ref: Id, revision:z.number().int().positive()}).optional(),
   customer_resolution: z.object({satisfied_message_id:Id,close_message_id:Id.optional()}).optional(),
   intake: CaseIntake.optional(),
   conversation_memory: ConversationMemory.optional(),
@@ -178,7 +198,7 @@ export type CaseSnapshot = z.infer<typeof CaseSnapshot>;
 export const CaseEvent = z.object({ type: z.literal('case.updated'), cursor: z.number().int().positive(), snapshot: CaseSnapshot });
 export type CaseEvent = z.infer<typeof CaseEvent>;
 export const WebChatSnapshot = CaseSnapshot.pick({
-  conversation_id: true, attention_mode: true, status: true, messages: true, cursor: true
+  conversation_id: true, attention_mode: true, status: true, messages: true, cursor: true, attention:true
 }).extend({
   awaiting_advisor: z.boolean(),
   verification: z.discriminatedUnion('stage', [
@@ -203,7 +223,7 @@ export const AgentTurn = z.object({
   turn_seq: z.number().int().positive(), case_revision: z.number().int().positive(),
   attention_mode: AttentionMode, audience: Audience, scope_ref: Id, config_revision: Id,
   prompt_manifest_digest: KnowledgeDigest.optional(), model_config_revision: Id.optional(), model_config_digest: KnowledgeDigest.optional(), knowledge_revision: z.union([KnowledgeDigest,z.literal('legacy')]).optional(),
-  business_date: z.iso.date(), text: Text, traceparent: z.string().optional(),
+  business_date: z.iso.date(), text: Text, traceparent: z.string().optional(), assisted_summary:z.literal(true).optional(),
   observed_context: z.object({decision:z.enum(['ask','handoff','prepare_commercial_handoff','prepare_handoff','resolution_ready']),question_id:Id.optional()}).optional()
 });
 export type AgentTurn = z.infer<typeof AgentTurn>;
@@ -234,8 +254,8 @@ export class TransientReadError extends Error {
   constructor() { super('Read source temporarily unavailable'); }
 }
 export interface AgentPorts {
-  readCaseForRun(runId: string): Promise<{ messages: Message[]; verified: boolean; pending: string | null; handoff_reason?:string; intake?: CaseIntake; conversation_memory?: ConversationMemory; conversation_context?: ConversationContext; public_route?: Intent; confirmed_receipts?: ConfirmedReceipt[]; pending_support_handoff?: boolean }>;
-  getAgentConfig(revision: string, modelRevision?: string, modelDigest?: string): Promise<AgentConfig>;
+  readCaseForRun(runId: string): Promise<{ messages: Message[]; verified: boolean; pending: string | null; handoff_reason?:string; intake?: CaseIntake; conversation_memory?: ConversationMemory; conversation_context?: ConversationContext; public_route?: Intent; confirmed_receipts?: ConfirmedReceipt[]; pending_support_handoff?: boolean; assigned_destination?:EscalationDestination; previous_summary?:{text:string;pending:string[]} }>;
+  getAgentConfig(revision: string, modelRevision?: string, modelDigest?: string, assisted?:boolean): Promise<AgentConfig>;
   getCustomerContext(runId: string): Promise<Fact[]>;
   listServices?(runId: string): Promise<Fact[]>;
   getBilling(runId: string): Promise<Fact[]>;
@@ -316,6 +336,7 @@ export type Viewer = {
   id: string; name: string; role: z.infer<typeof Role>;
   capabilities?: string[]; specialties?: string[]; available?: boolean;
   can_read_mock_billing?: boolean;
+  can_register_case_customer?: boolean;
 };
 
 export * from './integrations.js';
