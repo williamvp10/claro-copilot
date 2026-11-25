@@ -281,7 +281,7 @@ async function main() {
   const key=randomUUID(),suffix=randomUUID().slice(0,8),name=`Cliente sintetico ${suffix}`;
   const createCustomer={cliente_id:customerRef,nombre:name,tipo_documento:'CC',numero_documento:`test-${suffix}`,
     celular:`9${Date.now()}${Math.floor(Math.random()*100)}`,email:`synthetic-${suffix}@example.test`,motivo:'Alta sintetica',idempotency_key:key};
-  await write(admin,'/admin/customers',createCustomer,403);
+  await write(n1,'/admin/customers',createCustomer,403);
   const receipt=(await write(admin,'/admin/customers',createCustomer)).body;
   assert.deepEqual((await write(admin,'/admin/customers',createCustomer)).body,receipt);
   assert.equal(receipt.revision,1);
