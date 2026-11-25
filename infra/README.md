@@ -1,5 +1,7 @@
 # Demo deployment
 
+Para la VPS con HTTPS, LM Studio y despliegue automático desde `main`, usa la [guía de VPS](vps/README.md).
+
 For the isolated Docker Desktop demo with both registered models, inference tracing, and the call-derived Langfuse experiment, follow the [local demo runbook](../docs/08-demo-local.md).
 
 This Compose definition is the deployment specification for the first Dokploy demo and also runs locally. It does not create a Dokploy instance, configure its proxy, provision TLS, or deploy automatically. Route the public HTTPS domain to `web:3000`. The browser reaches NestJS through Next.js. NestJS, Redis, PostgreSQL, CRM and billing stay on the private network. If Dokploy needs a host port, set `WEB_BIND` to the appropriate interface and restrict it with host firewall rules.

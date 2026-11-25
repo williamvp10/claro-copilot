@@ -188,7 +188,7 @@ jobs:
       - run: uv sync --frozen
       - run: uv run --frozen pytest -q
   candidate:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     needs: [checks, platform-integration, ml-checks]
     runs-on: ubuntu-latest
     strategy:
@@ -249,3 +249,32 @@ jobs:
           path: |
             candidate-image.txt
             release-evidence.json
+
+  deploy-vps:
+    if: vars.CLARO_VPS_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    needs: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: claro-vps
+    concurrency:
+      group: claro-vps
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: candidate-*
+          path: candidates
+      - name: Deploy verified main candidate over SSH
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VPS_HOST: ${{ vars.CLARO_VPS_HOST }}
+          VPS_USER: ${{ vars.CLARO_VPS_USER }}
+          VPS_PORT: ${{ vars.CLARO_VPS_PORT }}
+          VPS_ROOT: ${{ vars.CLARO_VPS_ROOT }}
+          VPS_KEY: ${{ secrets.CLARO_VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.CLARO_VPS_KNOWN_HOSTS }}
+        run: bash infra/vps/ci-deploy.sh

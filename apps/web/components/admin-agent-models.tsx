@@ -27,7 +27,7 @@ const stepLabels:Record<ModelStep,string> = {
   billing_evidence:'Sintetizar evidencia de facturación'
 };
 const profiles={economico:'Económico',intermedio:'Intermedio',complejo:'Complejo'};
-const providers={openai:'OpenAI directo',openrouter:'OpenRouter'};
+const providers={openai:'OpenAI directo',openrouter:'OpenRouter',lmstudio:'LM Studio'};
 const tabs=[['policy','Configuración'],['revisions','Revisiones'],['executions','Trazas']] as const;
 type Tab = typeof tabs[number][0];
 const dateFormat=new Intl.DateTimeFormat('es-CO',{dateStyle:'medium',timeStyle:'short',timeZone:'America/Bogota'});
@@ -368,7 +368,7 @@ export function AdminAgentModels() {
           </div>
         </section>
         <details className={`${styles.surface} ${styles.disclosure}`}><summary>Catálogo y tarifas</summary>
-          <p>OpenAI directo {catalog.providers.openai?'configurado':'sin credencial'} <span aria-hidden="true">·</span> OpenRouter {catalog.providers.openrouter?'configurado':'sin credencial'}</p>
+          <p>OpenAI directo {catalog.providers.openai?'configurado':'sin credencial'} <span aria-hidden="true">·</span> OpenRouter {catalog.providers.openrouter?'configurado':'sin credencial'} <span aria-hidden="true">·</span> LM Studio {catalog.providers.lmstudio?'configurado':'deshabilitado'}</p>
           <div className={styles.catalogFrame} role="region" tabIndex={0} aria-label="Catálogo de modelos con desplazamiento">
             <table className={styles.catalogTable}>
               <thead><tr><th scope="col">Modelo</th><th scope="col">API</th><th scope="col">Perfil</th>

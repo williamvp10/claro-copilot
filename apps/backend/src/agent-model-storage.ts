@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { AgentModelPolicy, initialAgentModelPolicy, type AgentModelRevision, type ModelValidation } from '@claro/contracts';
+import { AgentModelPolicy, initialAgentModelPolicy, localLlamaModel, ModelStep, type AgentModelRevision, type ModelValidation } from '@claro/contracts';
 import type { DataSource, MigrationInterface, QueryRunner } from 'typeorm';
+import { probeModel } from './agent-providers.js';
 
 export const initialModelRevision = 'agent-models-v1';
 
@@ -33,6 +34,35 @@ export async function loadAgentModelPolicy(db:Pick<DataSource,'query'>, revision
 type RevisionRow=Omit<AgentModelRevision,'created_at'|'validation'> & {created_at:Date;validation:ModelValidation|null};
 export function modelRevision(row:RevisionRow):AgentModelRevision {
   return {...row,policy:AgentModelPolicy.parse(row.policy),created_at:row.created_at.toISOString()};
+}
+
+export async function initializeLocalModelPolicy(db:DataSource, key:string) {
+  const revision = 'agent-models-lmstudio-llama-v1';
+  const [existing] = await db.query('SELECT revision FROM agent_model_config_revision WHERE revision=$1',[revision]);
+  const active = await activeAgentModels(db);
+  if (existing || active.revision !== initialModelRevision) return;
+  const failure = await probeModel(localLlamaModel,key,{max_output_tokens:128});
+  if (failure) throw new Error(`LM Studio structured output check failed (${failure})`);
+
+  const policy = AgentModelPolicy.parse({
+    ...initialAgentModelPolicy,
+    max_call_ms:10000,
+    steps:Object.fromEntries(ModelStep.options.map(step=>[step,{mode:'fixed',model:localLlamaModel.id}]))
+  });
+  const digest = agentModelDigest(policy);
+  await db.transaction(async tx=>{
+    const [current] = await tx.query('SELECT revision FROM agent_model_config_active WHERE singleton FOR UPDATE');
+    const [created] = await tx.query('SELECT revision FROM agent_model_config_revision WHERE revision=$1',[revision]);
+    if (created || current.revision !== initialModelRevision) return;
+    await tx.query(`INSERT INTO agent_model_config_revision(revision,base_revision,digest,policy,created_by,reason)
+      VALUES($1,$2,$3,$4,'bootstrap','Modelo local para el demo')`,[revision,initialModelRevision,digest,policy]);
+    await tx.query('INSERT INTO agent_model_config_validation(revision,report) VALUES($1,$2)',
+      [revision,{digest,checked_at:new Date().toISOString(),issues:[]}]);
+    await tx.query('UPDATE agent_model_config_active SET revision=$1 WHERE singleton',[revision]);
+    await tx.query(`INSERT INTO agent_model_config_event(kind,revision,previous_revision,operator_id,reason,evidence)
+      VALUES('activate',$1,$2,'bootstrap','Modelo local para el demo','Respuesta JSON de LM Studio validada')`,
+      [revision,initialModelRevision]);
+  });
 }
 
 export class AgentModelPolicy1795260000026 implements MigrationInterface {

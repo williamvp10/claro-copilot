@@ -1,11 +1,12 @@
 import { BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, Inject, NotFoundException, Param, Post, Req } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { objectSchema, requestModel, type ModelCredentials } from '@claro/agent';
+import type { ModelCredentials } from '@claro/agent';
 import { AgentModelPolicy, ModelProvider as ProviderSchema, ModelStep, agentModelCatalog, assignedModelIds, modelComponentByStep, modelProfileRank, modelTuningIssue,
   type AgentModelCatalog, type AgentModelExecutions, type AgentModelRevision, type ModelOption, type ModelProvider, type ModelTuning, type ModelValidation } from '@claro/contracts';
 import type { Request } from 'express';
 import type { DataSource } from 'typeorm';
 import { z } from 'zod';
+import { modelCredentials, probeModel } from './agent-providers.js';
 import { agentModelDigest, modelRevision } from './agent-model-storage.js';
 import { AUTH, getViewer, type createAuth } from './auth.js';
 import { DATABASE } from './database.js';
@@ -28,38 +29,27 @@ function parse<T>(schema:z.ZodType<T>, value:unknown):T {
   return parsed.data;
 }
 
-export function modelCredentials(env=process.env):ModelCredentials {
-  return {openai:env.OPENAI_API_KEY,openrouter:env.OPENROUTER_API_KEY};
-}
-
 type Inventory=Map<string,boolean|null>;
 
 async function inventory(provider:ModelProvider,key:string|undefined):Promise<Inventory> {
   if (!key) return new Map();
   try {
-    const url=provider==='openai' ? 'https://api.openai.com/v1/models' : 'https://openrouter.ai/api/v1/models/user';
-    const response=await fetch(url,{headers:{Authorization:`Bearer ${key}`},signal:AbortSignal.timeout(4000)});
+    const endpoints={openai:'https://api.openai.com/v1/models',openrouter:'https://openrouter.ai/api/v1/models/user',
+      lmstudio:'http://lm-studio:1234/v1/models'};
+    const response=await fetch(endpoints[provider],{redirect:'error',headers:{Authorization:`Bearer ${key}`},signal:AbortSignal.timeout(4000)});
     if (!response.ok) return new Map();
     const {data}=await response.json() as {data:{id:string;supported_parameters?:string[]}[]};
     return new Map(data.map((item:{id:string;supported_parameters?:string[]})=>[
-      item.id,provider==='openai'?null:item.supported_parameters?.includes('structured_outputs')===true
+      item.id,provider==='openrouter'?item.supported_parameters?.includes('structured_outputs')===true:null
     ]));
   } catch { return new Map(); }
 }
 
 async function capabilities(keys:ModelCredentials) {
-  const [openai,openrouter]=await Promise.all([inventory('openai',keys.openai),inventory('openrouter',keys.openrouter)]);
-  return {openai,openrouter};
-}
-
-async function probe(model:ModelOption,key:string,tuning?:ModelTuning) {
-  try {
-    const reply=await requestModel(model,key,'Devuelve exactamente el valor de entrada en el campo resultado.',
-      '{"resultado":"claro-validacion"}',objectSchema({resultado:{type:'string'}}),tuning?.max_output_tokens ?? 400,6500,fetch,tuning);
-    return (reply.value as {resultado?:unknown}|null)?.resultado==='claro-validacion' ? '' : 'salida_estructurada_incompatible';
-  } catch (error) {
-    return error instanceof Error && /^http_\d+$/.test(error.message) ? error.message : 'proveedor_no_disponible';
-  }
+  const [openai,openrouter,lmstudio]=await Promise.all([
+    inventory('openai',keys.openai),inventory('openrouter',keys.openrouter),inventory('lmstudio',keys.lmstudio)
+  ]);
+  return {openai,openrouter,lmstudio};
 }
 
 @Controller('api/v1/admin/agent-models')
@@ -87,7 +77,7 @@ export class AgentModelAdminController {
     await this.viewer(req);
     const keys=modelCredentials(), listed=await capabilities(keys);
     return {
-      providers:{openai:!!keys.openai,openrouter:!!keys.openrouter},
+      providers:{openai:!!keys.openai,openrouter:!!keys.openrouter,lmstudio:!!keys.lmstudio},
       models:agentModelCatalog.map(model=>({...model,available:listed[model.provider].has(model.id),
         structured_outputs:listed[model.provider].get(model.id) ?? null}))
     };
@@ -184,7 +174,7 @@ export class AgentModelAdminController {
       if (!key) return 'credencial_ausente';
       if (!listed[option.provider].has(model)) return 'modelo_no_disponible';
       if (listed[option.provider].get(model)===false) return 'salida_estructurada_incompatible';
-      return probe(option,key,tuning);
+      return probeModel(option,key,tuning);
     };
     for(let index=0;index<pending.length;index+=2) {
       await Promise.all(pending.slice(index,index+2).map(async item=>checks.set(item.probeKey,await check(item))));

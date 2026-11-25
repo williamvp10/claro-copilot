@@ -1,0 +1,65 @@
+x-runtime: &runtime
+  logging:
+    driver: json-file
+    options: {max-size: 20m, max-file: '3'}
+services:
+  postgres:
+    <<: *runtime
+    mem_limit: ${CLARO_POSTGRES_MEMORY:-2g}
+  redis:
+    <<: *runtime
+    mem_limit: ${CLARO_REDIS_MEMORY:-256m}
+  api:
+    <<: *runtime
+    mem_limit: ${CLARO_API_MEMORY:-768m}
+    environment: &inference
+      LM_STUDIO_ENABLED: ${LM_STUDIO_ENABLED:-false}
+      LM_STUDIO_API_TOKEN: ${LM_STUDIO_API_TOKEN:-}
+      AGENT_TURN_TIMEOUT_MS: ${AGENT_TURN_TIMEOUT_MS:-}
+  seed:
+    environment: *inference
+  worker:
+    <<: *runtime
+    mem_limit: ${CLARO_WORKER_MEMORY:-768m}
+    environment: *inference
+  web:
+    <<: *runtime
+    mem_limit: ${CLARO_WEB_MEMORY:-768m}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/chat').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+  crm-simulator:
+    <<: *runtime
+    mem_limit: ${CLARO_MOCK_MEMORY:-256m}
+  billing-simulator:
+    <<: *runtime
+    mem_limit: ${CLARO_MOCK_MEMORY:-256m}
+  crm-mcp:
+    <<: *runtime
+    mem_limit: ${CLARO_MOCK_MEMORY:-256m}
+  billing-mcp:
+    <<: *runtime
+    mem_limit: ${CLARO_MOCK_MEMORY:-256m}
+  knowledge-mcp:
+    <<: *runtime
+    mem_limit: ${CLARO_KNOWLEDGE_MEMORY:-384m}
+  ml:
+    <<: *runtime
+    mem_limit: ${CLARO_ML_MEMORY:-2g}
+    ports: !reset []
+  ml-job:
+    <<: *runtime
+    mem_limit: ${CLARO_ML_TRAIN_MEMORY:-4g}
+  mlflow:
+    <<: *runtime
+    mem_limit: ${CLARO_MLFLOW_MEMORY:-2g}
+  prometheus:
+    <<: *runtime
+    restart: unless-stopped
+    mem_limit: ${CLARO_PROMETHEUS_MEMORY:-512m}
+  otel:
+    <<: *runtime
+    restart: unless-stopped
+    mem_limit: ${CLARO_OTEL_MEMORY:-256m}

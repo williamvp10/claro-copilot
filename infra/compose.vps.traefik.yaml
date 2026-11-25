@@ -1,0 +1,17 @@
+services:
+  web:
+    networks:
+      default: {}
+      ingress: {}
+    labels:
+      traefik.enable: 'true'
+      traefik.docker.network: ${CLARO_TRAEFIK_NETWORK:-dokploy-network}
+      traefik.http.routers.claro-copilot.rule: Host(`${CLARO_DOMAIN:?Set CLARO_DOMAIN}`)
+      traefik.http.routers.claro-copilot.entrypoints: ${CLARO_TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.claro-copilot.tls.certresolver: ${CLARO_TRAEFIK_CERTRESOLVER:-letsencrypt}
+      traefik.http.routers.claro-copilot.service: claro-copilot
+      traefik.http.services.claro-copilot.loadbalancer.server.port: '3000'
+networks:
+  ingress:
+    external: true
+    name: ${CLARO_TRAEFIK_NETWORK:-dokploy-network}

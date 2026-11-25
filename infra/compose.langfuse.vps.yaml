@@ -1,0 +1,50 @@
+x-runtime: &runtime
+  logging:
+    driver: json-file
+    options: {max-size: 20m, max-file: '3'}
+services:
+  langfuse-web:
+    <<: *runtime
+    cpus: ${LANGFUSE_WEB_CPUS:-2}
+    mem_limit: ${LANGFUSE_WEB_MEMORY:-4g}
+    environment:
+      NODE_OPTIONS: --max-old-space-size=${LANGFUSE_WEB_HEAP_MIB:-2560}
+    healthcheck:
+      start_period: 120s
+  langfuse-worker:
+    <<: *runtime
+    cpus: ${LANGFUSE_WORKER_CPUS:-2}
+    mem_limit: ${LANGFUSE_WORKER_MEMORY:-4g}
+    environment:
+      HOSTNAME: 0.0.0.0
+      NODE_OPTIONS: --max-old-space-size=${LANGFUSE_WORKER_HEAP_MIB:-2560}
+      LANGFUSE_INGESTION_QUEUE_PROCESSING_CONCURRENCY: ${LANGFUSE_INGESTION_CONCURRENCY:-4}
+      LANGFUSE_TRACE_UPSERT_WORKER_CONCURRENCY: ${LANGFUSE_TRACE_UPSERT_CONCURRENCY:-4}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3030/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+  lf-clickhouse:
+    <<: *runtime
+    cpus: ${LANGFUSE_CLICKHOUSE_CPUS:-2}
+    mem_limit: ${LANGFUSE_CLICKHOUSE_MEMORY:-8g}
+    volumes:
+      - ./langfuse/clickhouse-vps.xml:/etc/clickhouse-server/config.d/zz-claro-vps.xml:ro
+    healthcheck:
+      start_period: 90s
+  lf-postgres:
+    <<: *runtime
+    cpus: ${LANGFUSE_POSTGRES_CPUS:-2}
+    mem_limit: ${LANGFUSE_POSTGRES_MEMORY:-4g}
+  lf-redis:
+    <<: *runtime
+    cpus: ${LANGFUSE_REDIS_CPUS:-1}
+    mem_limit: ${LANGFUSE_REDIS_MEMORY:-1536m}
+    command: [redis-server, --requirepass, '${LANGFUSE_REDIS_PASSWORD}', --appendonly, 'yes', --maxmemory, '${LANGFUSE_REDIS_MAXMEMORY:-512mb}', --maxmemory-policy, noeviction]
+  lf-storage:
+    <<: *runtime
+    image: cgr.dev/chainguard/minio@sha256:548147b5fc95a67e3e45285dff7e0e50326c3eb1977c6218039461771156c5e7
+    cpus: ${LANGFUSE_STORAGE_CPUS:-2}
+    mem_limit: ${LANGFUSE_STORAGE_MEMORY:-4g}
