@@ -96,6 +96,11 @@ await until(async()=>{
 });
 await get(n1,`/cases/${alternate.id}/integrations/billing`,403);
 assert.equal((await get(second.cookie,'/web-chat/history')).verification.stage,'required');
+const update='La conexión volvió unos minutos y después volvió a fallar.';
+const unverifiedFollowup=await message(second.cookie,update);
+assert.equal(unverifiedFollowup.verification.stage,'required');
+assert.equal(unverifiedFollowup.messages.at(-1).text,update);
+assert.equal((await get(n1,`/cases/${alternate.id}`)).messages.at(-1).text,update);
 const challenge=await post(second.cookie,'/web-chat/verification/start',{identifier:registration.email});
 const verified=await post(second.cookie,'/web-chat/verification/confirm',{
   challenge_id:challenge.verification.challenge_id,code:process.env.DEMO_HOLDER_CODE

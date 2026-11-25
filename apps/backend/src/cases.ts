@@ -698,6 +698,7 @@ export class Cases {
     const lastMessage = row.snapshot.messages.at(-1);
     const handoff = requestedAdvisor(text) || lastMessage?.actor==='agente' && acceptsAdvisorOffer(text,lastMessage.text);
     const verified = customerReference(row);
+    const linkedVerification = demo && row.snapshot.attention_mode==='asistido' && !!row.snapshot.customer_registration && !verified;
     const aliases = demo ? contactCandidates(text) : [];
     const codes = demo ? codeCandidates(text) : [];
     const planChange=demo && asksToChangeMobilePlan(text,lastMessage);
@@ -707,7 +708,7 @@ export class Cases {
     }
     const leavingBilling=(pending==='invoice' || pending==='balance') && !requested &&
       (reading?.domain==='consulta_planes' || reading?.domain==='soporte_tecnico');
-    const leavingIdentification=pending==='identify' && (requested || contextIntent(text));
+    const leavingIdentification=pending==='identify' && !linkedVerification && (requested || contextIntent(text));
     if ((leavingBilling || leavingIdentification) && !codes.length && !aliases.length && !isGreeting(text)) {
       pending=null;
       row.account_inquiry=null;
@@ -749,7 +750,9 @@ export class Cases {
     const collectingCancellation=demo && row.snapshot.attention_mode==='autoservicio' && !pending &&
       (requested==='assistance' && contextIntent(text)==='cancelacion' ||
         previousIntake?.intent==='cancelacion' && !!previousIntake.pending);
-    const verificationTurn = !verified && !handoff && !priority && !claimedBilling && (requested==='identify' || !!pending && (!requested || !!activeChallenge));
+    const verificationInput = !linkedVerification || isVerificationContact(text,aliases) || !!activeChallenge && codes.length>0;
+    const verificationTurn = verificationInput && !verified && !handoff && !priority && !claimedBilling &&
+      (requested==='identify' || !!pending && (!requested || !!activeChallenge));
     const message = addMessage(row,'cliente',verificationTurn
       ? '[Dato de verificación oculto]'
       : safeText);
@@ -814,6 +817,10 @@ export class Cases {
     if (!handoff && (priority || claimedBilling)) {
       row.account_inquiry=null;
       this.clearChallenge(row);
+      await queueRun(tx,row,message,true);
+      return;
+    }
+    if (linkedVerification && !verificationTurn) {
       await queueRun(tx,row,message,true);
       return;
     }
