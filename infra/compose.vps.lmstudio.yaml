@@ -17,8 +17,8 @@ services:
       test: [CMD-SHELL, 'curl -fsS --max-time 4 http://127.0.0.1:1234/v1/models | jq -e ''.data | any(.id == "claro-llama")'' >/dev/null']
       interval: 10s
       timeout: 6s
-      retries: 24
-      start_period: 180s
+      retries: 36
+      start_period: 480s
     logging:
       driver: json-file
       options: {max-size: 20m, max-file: '3'}

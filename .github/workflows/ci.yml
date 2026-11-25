@@ -66,6 +66,13 @@ jobs:
           LANGFUSE_ADMIN_PASSWORD: ci-placeholder
           LANGFUSE_SHARED_NETWORK: claro-ci_default
         run: docker compose -f infra/compose.langfuse.yaml config --quiet
+      - name: Validate the Dokploy entrypoint
+        shell: bash
+        run: |
+          demo_env=$(mktemp -d)
+          digest=$(printf '%064d' 0)
+          bash infra/vps/init-env.sh "$demo_env" ci.example.test "$digest" traefik shared-demo
+          INPUT_ARCHIVE_SHA256="$digest" docker compose --env-file "$demo_env/runtime.env" -f compose.dokploy.yaml config --quiet
       - name: Build containers locally
         run: |
           docker build -f infra/Dockerfile -t claro-copiloto:ci .
