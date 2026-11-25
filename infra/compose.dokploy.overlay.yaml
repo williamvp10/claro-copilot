@@ -125,6 +125,7 @@ services:
     ports: !reset []
     environment:
       KNOWLEDGE_ORIGINALS_DIR: /inputs/originals
+      LANGFUSE_CAPTURE_CHAT_IO: &demo-chat-io ${LANGFUSE_CAPTURE_CHAT_IO:-true}
     volumes:
       - private-inputs:/inputs:ro
     depends_on: &ready
@@ -135,6 +136,8 @@ services:
       crm-simulator: {condition: service_healthy}
       billing-simulator: {condition: service_healthy}
   worker:
+    environment:
+      LANGFUSE_CAPTURE_CHAT_IO: *demo-chat-io
     depends_on: *ready
   prometheus:
     profiles: !reset []
