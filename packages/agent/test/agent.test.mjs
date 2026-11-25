@@ -49,6 +49,8 @@ test('assisted retention advances from offers actually sent and the customer res
     {sent:offer,clarify:'¿Cuál de las alternativas prefieres?',reply:'Acepto la mejora.',next:'retention_proposal_pending',selected:'upgrade'},
     {sent:offer,reply:'Acepto el descuento del 35 %.',next:'retention_awaiting_choice'},
     {sent:offer,reply:'Sí, quiero dar de baja el servicio.',next:'cancellation_requested'},
+    {sent:offer,withdrawn:'Ya no quiero cancelar. Mejor quiero cambiarme a un plan más barato.',
+      reply:'Quiero cancelar el servicio.',next:'retention_present_options'},
     {sent:offer,later:'¿Quieres que te pase con un asesor?',reply:'De acuerdo.',next:'retention_present_options'},
     {sent:'El descuento del 30 % está pendiente de revisión. Puedo ofrecerte una mejora a Fibra 500.',
       reply:'Acepto el descuento.',next:'retention_awaiting_choice'},
@@ -64,6 +66,7 @@ test('assisted retention advances from offers actually sent and the customer res
       msg('Dejé tu solicitud en espera de un asesor.','agente',4));
     if (scenario.sent) messages.push(msg(scenario.sent,'asesor',messages.length+1));
     if (scenario.clarify || scenario.later) messages.push(msg(scenario.clarify ?? scenario.later,'asesor',messages.length+1));
+    if (scenario.withdrawn) messages.push(msg(scenario.withdrawn,'cliente',messages.length+1));
     const customer=msg(scenario.reply,'cliente',messages.length+1);
     messages.push(customer);
     if (!scenario.sent) messages.push(msg('Dejé tu solicitud en espera de un asesor.','agente',customer.turn_seq+1));
