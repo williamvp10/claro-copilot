@@ -7,7 +7,7 @@ export const ModelStep = z.enum([
   'commercial_evidence', 'support_evidence', 'billing_evidence'
 ]);
 export type ModelStep = z.infer<typeof ModelStep>;
-export const ModelProvider = z.enum(['openai', 'openrouter', 'lmstudio']);
+export const ModelProvider = z.enum(['openai', 'openrouter']);
 export type ModelProvider = z.infer<typeof ModelProvider>;
 
 export const ModelComponent = z.enum(['orquestador','comercial','soporte','facturacion']);
@@ -45,8 +45,6 @@ export type ModelOption = {
   supports_no_reasoning?: true;
 };
 
-export const localLlamaModel = {id:'claro-llama',provider:'lmstudio',family:'Meta',label:'Llama 3.2 3B · LM Studio',profile:'economico',input_usd_per_million:0,output_usd_per_million:0} as const satisfies ModelOption;
-
 export const agentModelCatalog: readonly ModelOption[] = [
   {id:'gpt-6-luna',provider:'openai',family:'OpenAI',label:'Luna',profile:'economico',input_usd_per_million:0.10,output_usd_per_million:0.50,reasoning:'none',supports_no_reasoning:true},
   {id:'gpt-6.1-terra',provider:'openai',family:'OpenAI',label:'Terra',profile:'intermedio',input_usd_per_million:1,output_usd_per_million:5,reasoning:'low',supports_no_reasoning:true},
@@ -55,7 +53,6 @@ export const agentModelCatalog: readonly ModelOption[] = [
   {id:'anthropic/claude-sonnet-4.6',provider:'openrouter',family:'Anthropic',label:'Claude Sonnet 4.6',profile:'complejo',input_usd_per_million:3,output_usd_per_million:15},
   {id:'google/gemini-3.5-flash-lite',provider:'openrouter',family:'Google',label:'Gemini 3.5 Flash Lite',profile:'intermedio',input_usd_per_million:0.30,output_usd_per_million:2.50},
   {id:'meta-llama/llama-3.3-70b-instruct',provider:'openrouter',family:'Meta',label:'Llama 3.3 70B',profile:'economico',input_usd_per_million:0.40,output_usd_per_million:2.50},
-  localLlamaModel,
   {id:'mistralai/mistral-small-3.2-24b-instruct',provider:'openrouter',family:'Mistral',label:'Mistral Small 3.2',profile:'economico',input_usd_per_million:0.10,output_usd_per_million:0.30}
 ];
 
@@ -120,7 +117,7 @@ export type AgentModelCatalog = {
 };
 
 export type AgentModelExecution = {
-  id:string; at:string; step:ModelStep; provider:ModelProvider; revision:string;
+  id:string; at:string; step:ModelStep; provider:ModelProvider|'lmstudio'; revision:string;
   requested_model:string; effective_model:string|null; status:string; attempt:number;
   latency_ms:number|null; cost_usd:number|null; cost_basis:string|null; trace_url:string|null;
 };

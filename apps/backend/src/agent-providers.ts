@@ -4,8 +4,7 @@ import type { ModelOption, ModelTuning } from '@claro/contracts';
 export function modelCredentials(env=process.env) {
   return {
     openai:env.OPENAI_API_KEY,
-    openrouter:env.OPENROUTER_API_KEY,
-    lmstudio:env.LM_STUDIO_ENABLED==='true' ? env.LM_STUDIO_API_TOKEN || 'local-docker' : undefined
+    openrouter:env.OPENROUTER_API_KEY
   };
 }
 
@@ -16,7 +15,7 @@ export function agentProviders(env = process.env) {
   const turnTimeoutMs = Number(env.AGENT_TURN_TIMEOUT_MS);
   return {
     requireApprovedPrompts: live,
-    modelCredentials: live ? keys : keys.lmstudio ? {lmstudio:keys.lmstudio} : undefined,
+    modelCredentials: live ? keys : undefined,
     turnTimeoutMs: Number.isSafeInteger(turnTimeoutMs) && turnTimeoutMs > 0 ? turnTimeoutMs : undefined,
     writer: openaiKey ? createOpenAIPublicWriter({ apiKey: openaiKey }) : undefined,
     planner: openaiKey ? createOpenAIObjectivePlanner(openaiKey) : undefined,
@@ -28,10 +27,9 @@ export function agentProviders(env = process.env) {
 }
 
 export async function probeModel(model:ModelOption,key:string,tuning?:ModelTuning) {
-  const timeoutMs = model.provider==='lmstudio' ? 30_000 : 6500;
   try {
     const reply=await requestModel(model,key,'Devuelve exactamente el valor de entrada en el campo resultado.',
-      '{"resultado":"claro-validacion"}',objectSchema({resultado:{type:'string'}}),tuning?.max_output_tokens ?? 400,timeoutMs,fetch,tuning);
+      '{"resultado":"claro-validacion"}',objectSchema({resultado:{type:'string'}}),tuning?.max_output_tokens ?? 400,6500,fetch,tuning);
     return (reply.value as {resultado?:unknown}|null)?.resultado==='claro-validacion' ? '' : 'salida_estructurada_incompatible';
   } catch (error) {
     return error instanceof Error && /^http_\d+$/.test(error.message) ? error.message : 'proveedor_no_disponible';

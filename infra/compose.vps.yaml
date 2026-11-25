@@ -13,8 +13,6 @@ services:
     <<: *runtime
     mem_limit: ${CLARO_API_MEMORY:-768m}
     environment: &inference
-      LM_STUDIO_ENABLED: ${LM_STUDIO_ENABLED:-false}
-      LM_STUDIO_API_TOKEN: ${LM_STUDIO_API_TOKEN:-}
       AGENT_TURN_TIMEOUT_MS: ${AGENT_TURN_TIMEOUT_MS:-}
   seed:
     environment: *inference

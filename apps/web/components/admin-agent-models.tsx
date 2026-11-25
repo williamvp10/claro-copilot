@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { ArrowDownRight, ArrowUpRight, Check, ChevronRight, CircleHelp, FileClock, Network, Pencil, Radio, RefreshCw, Router, SlidersHorizontal } from 'lucide-react';
 import {
-  AgentModelPolicy, initialAgentModelPolicy, maxModelCallMs, ModelProfile, modelComponentByStep, modelProfileRank,
+  AgentModelPolicy, assignedModelIds, initialAgentModelPolicy, maxModelCallMs, ModelProfile, modelComponentByStep, modelProfileRank,
   type AgentModelCatalog, type AgentModelExecutions, type AgentModelRevision, type AgentModelRevisions,
   type ModelAssignment, type ModelStep
 } from '@claro/contracts';
@@ -27,7 +27,7 @@ const stepLabels:Record<ModelStep,string> = {
   billing_evidence:'Sintetizar evidencia de facturación'
 };
 const profiles={economico:'Económico',intermedio:'Intermedio',complejo:'Complejo'};
-const providers={openai:'OpenAI directo',openrouter:'OpenRouter',lmstudio:'LM Studio'};
+const providers={openai:'OpenAI directo',openrouter:'OpenRouter',lmstudio:'LM Studio (retirado)'};
 const tabs=[['policy','Configuración'],['revisions','Revisiones'],['executions','Trazas']] as const;
 type Tab = typeof tabs[number][0];
 const dateFormat=new Intl.DateTimeFormat('es-CO',{dateStyle:'medium',timeStyle:'short',timeZone:'America/Bogota'});
@@ -245,7 +245,9 @@ export function AdminAgentModels() {
 
   const ready=reviewed?.validation?.digest===reviewed?.digest && reviewed?.validation?.issues.length===0;
   const operation=reviewed?.was_active?'restore':'activate';
+  const listedModels = new Set(catalog?.models.map(model=>model.id));
   const canApply=!!reviewed && reviewed.revision!==active?.revision && ready &&
+    Object.values(reviewed.policy.steps).every(rule=>assignedModelIds(rule).every(id=>listedModels.has(id))) &&
     (reviewed.was_active || reviewed.base_revision===history?.active);
   const modelLabel=(id:string)=>catalog?.models.find(model=>model.id===id)?.label ?? id;
 
@@ -368,7 +370,7 @@ export function AdminAgentModels() {
           </div>
         </section>
         <details className={`${styles.surface} ${styles.disclosure}`}><summary>Catálogo y tarifas</summary>
-          <p>OpenAI directo {catalog.providers.openai?'configurado':'sin credencial'} <span aria-hidden="true">·</span> OpenRouter {catalog.providers.openrouter?'configurado':'sin credencial'} <span aria-hidden="true">·</span> LM Studio {catalog.providers.lmstudio?'configurado':'deshabilitado'}</p>
+          <p>OpenAI directo {catalog.providers.openai?'configurado':'sin credencial'} <span aria-hidden="true">·</span> OpenRouter {catalog.providers.openrouter?'configurado':'sin credencial'}</p>
           <div className={styles.catalogFrame} role="region" tabIndex={0} aria-label="Catálogo de modelos con desplazamiento">
             <table className={styles.catalogTable}>
               <thead><tr><th scope="col">Modelo</th><th scope="col">API</th><th scope="col">Perfil</th>

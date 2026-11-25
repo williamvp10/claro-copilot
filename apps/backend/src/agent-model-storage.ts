@@ -1,7 +1,6 @@
-import { createHash } from 'node:crypto';
-import { AgentModelPolicy, initialAgentModelPolicy, localLlamaModel, ModelStep, type AgentModelRevision, type ModelValidation } from '@claro/contracts';
+import { createHash, randomUUID } from 'node:crypto';
+import { AgentModelPolicy, assignedModelIds, initialAgentModelPolicy, ModelStep, type AgentModelRevision, type ModelAssignment, type ModelValidation } from '@claro/contracts';
 import type { DataSource, MigrationInterface, QueryRunner } from 'typeorm';
-import { probeModel } from './agent-providers.js';
 
 export const initialModelRevision = 'agent-models-v1';
 
@@ -34,35 +33,6 @@ export async function loadAgentModelPolicy(db:Pick<DataSource,'query'>, revision
 type RevisionRow=Omit<AgentModelRevision,'created_at'|'validation'> & {created_at:Date;validation:ModelValidation|null};
 export function modelRevision(row:RevisionRow):AgentModelRevision {
   return {...row,policy:AgentModelPolicy.parse(row.policy),created_at:row.created_at.toISOString()};
-}
-
-export async function initializeLocalModelPolicy(db:DataSource, key:string) {
-  const revision = 'agent-models-lmstudio-llama-v1';
-  const [existing] = await db.query('SELECT revision FROM agent_model_config_revision WHERE revision=$1',[revision]);
-  const active = await activeAgentModels(db);
-  if (existing || active.revision !== initialModelRevision) return;
-  const failure = await probeModel(localLlamaModel,key,{max_output_tokens:128});
-  if (failure) throw new Error(`LM Studio structured output check failed (${failure})`);
-
-  const policy = AgentModelPolicy.parse({
-    ...initialAgentModelPolicy,
-    max_call_ms:25000,
-    steps:Object.fromEntries(ModelStep.options.map(step=>[step,{mode:'fixed',model:localLlamaModel.id}]))
-  });
-  const digest = agentModelDigest(policy);
-  await db.transaction(async tx=>{
-    const [current] = await tx.query('SELECT revision FROM agent_model_config_active WHERE singleton FOR UPDATE');
-    const [created] = await tx.query('SELECT revision FROM agent_model_config_revision WHERE revision=$1',[revision]);
-    if (created || current.revision !== initialModelRevision) return;
-    await tx.query(`INSERT INTO agent_model_config_revision(revision,base_revision,digest,policy,created_by,reason)
-      VALUES($1,$2,$3,$4,'bootstrap','Modelo local para el demo')`,[revision,initialModelRevision,digest,policy]);
-    await tx.query('INSERT INTO agent_model_config_validation(revision,report) VALUES($1,$2)',
-      [revision,{digest,checked_at:new Date().toISOString(),issues:[]}]);
-    await tx.query('UPDATE agent_model_config_active SET revision=$1 WHERE singleton',[revision]);
-    await tx.query(`INSERT INTO agent_model_config_event(kind,revision,previous_revision,operator_id,reason,evidence)
-      VALUES('activate',$1,$2,'bootstrap','Modelo local para el demo','Respuesta JSON de LM Studio validada')`,
-      [revision,initialModelRevision]);
-  });
 }
 
 export class AgentModelPolicy1795260000026 implements MigrationInterface {
@@ -104,5 +74,60 @@ export class AgentModelPolicy1795260000026 implements MigrationInterface {
 
   async down(db:QueryRunner) {
     await db.query('DROP TABLE agent_model_config_event,agent_model_config_active,agent_model_config_validation,agent_model_config_revision; DROP FUNCTION agent_model_config_immutable()');
+  }
+}
+
+const retiredModelId = 'claro-llama';
+const openRouterFallback = 'google/gemini-3.5-flash-lite';
+const retirementReason = 'Retiro del modelo local. Inferencia mediante proveedores por API.';
+
+export function usesRetiredModel(policy:AgentModelPolicy) {
+  return Object.values(policy.steps).some(rule=>assignedModelIds(rule).includes(retiredModelId));
+}
+
+function replaceRetiredModel(step:ModelStep, rule:ModelAssignment):ModelAssignment {
+  if (!assignedModelIds(rule).includes(retiredModelId)) return rule;
+  const defaults = initialAgentModelPolicy.steps[step];
+  if (defaults.mode!=='auto') throw new Error('Expected an automatic default assignment');
+  if (rule.mode==='fixed') {
+    if (rule.model!==retiredModelId) return {...rule,fallback:openRouterFallback};
+    return {...defaults,tuning:rule.tuning,fallback:rule.fallback && rule.fallback!==retiredModelId ? rule.fallback : openRouterFallback};
+  }
+  return {
+    ...rule,
+    profiles:{
+      economico:rule.profiles.economico===retiredModelId ? defaults.profiles.economico : rule.profiles.economico,
+      intermedio:rule.profiles.intermedio===retiredModelId ? defaults.profiles.intermedio : rule.profiles.intermedio,
+      complejo:rule.profiles.complejo===retiredModelId ? defaults.profiles.complejo : rule.profiles.complejo
+    },
+    alternatives:rule.alternatives.filter(model=>model!==retiredModelId),
+    fallback:rule.fallback===retiredModelId ? openRouterFallback : rule.fallback
+  };
+}
+
+export class RetireLocalModel1795260000029 implements MigrationInterface {
+  async up(db:QueryRunner) {
+    const [current]=await db.query(`SELECT r.revision,r.digest,r.policy FROM agent_model_config_active a
+      JOIN agent_model_config_revision r USING(revision) WHERE a.singleton FOR UPDATE OF a`);
+    if (!current) throw new Error('No active agent model policy');
+    const previous=AgentModelPolicy.parse(current.policy);
+    if (!usesRetiredModel(previous)) return;
+    if (agentModelDigest(previous)!==current.digest) throw new Error('Agent model policy digest mismatch');
+    const policy=AgentModelPolicy.parse({...previous,steps:Object.fromEntries(
+      ModelStep.options.map(step=>[step,replaceRetiredModel(step,previous.steps[step])])
+    )});
+    const revision=randomUUID();
+    await db.query(`INSERT INTO agent_model_config_revision(revision,base_revision,digest,policy,created_by,reason)
+      VALUES($1,$2,$3,$4,'migration',$5)`,[revision,current.revision,agentModelDigest(policy),policy,retirementReason]);
+    await db.query('UPDATE agent_model_config_active SET revision=$1 WHERE singleton',[revision]);
+    await db.query(`INSERT INTO agent_model_config_event(kind,revision,previous_revision,operator_id,reason,evidence)
+      VALUES('activate',$1,$2,'migration',$3,'Sustitución del modelo retirado por OpenAI con respaldo de OpenRouter')`,
+      [revision,current.revision,retirementReason]);
+  }
+
+  async down(db:QueryRunner) {
+    await db.query(`UPDATE agent_model_config_active a SET revision=r.base_revision
+      FROM agent_model_config_revision r WHERE a.singleton AND a.revision=r.revision
+      AND r.created_by='migration' AND r.reason=$1 AND r.base_revision IS NOT NULL`,[retirementReason]);
   }
 }

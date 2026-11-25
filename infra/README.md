@@ -1,6 +1,6 @@
 # Demo deployment
 
-Para la VPS con HTTPS, LM Studio y despliegue automático desde `main`, usa la [guía de VPS](vps/README.md).
+Para la VPS con HTTPS y despliegue automático desde `main`, usa la [guía de VPS](vps/README.md).
 
 For the isolated Docker Desktop demo with both registered models, inference tracing, and the call-derived Langfuse experiment, follow the [local demo runbook](../docs/08-demo-local.md).
 

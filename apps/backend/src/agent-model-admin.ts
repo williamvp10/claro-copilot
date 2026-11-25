@@ -7,12 +7,13 @@ import type { Request } from 'express';
 import type { DataSource } from 'typeorm';
 import { z } from 'zod';
 import { modelCredentials, probeModel } from './agent-providers.js';
-import { agentModelDigest, modelRevision } from './agent-model-storage.js';
+import { agentModelDigest, modelRevision, usesRetiredModel } from './agent-model-storage.js';
 import { AUTH, canManageAdministration, getViewer, type createAuth } from './auth.js';
 import { DATABASE } from './database.js';
 import { browserEndpoint } from './dashboard.js';
 import { traceIdentifier } from './telemetry.js';
 
+const ExecutionProvider=ProviderSchema.or(z.literal('lmstudio'));
 const Revision=z.string().min(1).max(128);
 const Reason=z.string().trim().min(5).max(300);
 const Draft=z.object({base_revision:Revision,reason:Reason,policy:AgentModelPolicy}).strict();
@@ -34,8 +35,7 @@ type Inventory=Map<string,boolean|null>;
 async function inventory(provider:ModelProvider,key:string|undefined):Promise<Inventory> {
   if (!key) return new Map();
   try {
-    const endpoints={openai:'https://api.openai.com/v1/models',openrouter:'https://openrouter.ai/api/v1/models/user',
-      lmstudio:'http://lm-studio:1234/v1/models'};
+    const endpoints={openai:'https://api.openai.com/v1/models',openrouter:'https://openrouter.ai/api/v1/models/user'};
     const response=await fetch(endpoints[provider],{redirect:'error',headers:{Authorization:`Bearer ${key}`},signal:AbortSignal.timeout(4000)});
     if (!response.ok) return new Map();
     const {data}=await response.json() as {data:{id:string;supported_parameters?:string[]}[]};
@@ -46,10 +46,10 @@ async function inventory(provider:ModelProvider,key:string|undefined):Promise<In
 }
 
 async function capabilities(keys:ModelCredentials) {
-  const [openai,openrouter,lmstudio]=await Promise.all([
-    inventory('openai',keys.openai),inventory('openrouter',keys.openrouter),inventory('lmstudio',keys.lmstudio)
+  const [openai,openrouter]=await Promise.all([
+    inventory('openai',keys.openai),inventory('openrouter',keys.openrouter)
   ]);
-  return {openai,openrouter,lmstudio};
+  return {openai,openrouter};
 }
 
 @Controller('api/v1/admin/agent-models')
@@ -77,7 +77,7 @@ export class AgentModelAdminController {
     await this.viewer(req);
     const keys=modelCredentials(), listed=await capabilities(keys);
     return {
-      providers:{openai:!!keys.openai,openrouter:!!keys.openrouter,lmstudio:!!keys.lmstudio},
+      providers:{openai:!!keys.openai,openrouter:!!keys.openrouter},
       models:agentModelCatalog.map(model=>({...model,available:listed[model.provider].has(model.id),
         structured_outputs:listed[model.provider].get(model.id) ?? null}))
     };
@@ -116,7 +116,7 @@ export class AgentModelAdminController {
       langfuse_url:projectUrl ? `${projectUrl}/traces` : null,
       items:recent.flatMap(({id,created_at,metadata,exported})=>{
         const {step_id,provider,model_config_revision,requested_model,effective_model,status,attempt,ms,cost_usd,cost_basis,run_id}=metadata;
-        const step=ModelStep.safeParse(step_id), route=ProviderSchema.safeParse(provider);
+        const step=ModelStep.safeParse(step_id), route=ExecutionProvider.safeParse(provider);
         if (!step.success || !route.success || typeof model_config_revision!=='string' ||
             typeof requested_model!=='string' || typeof status!=='string' || typeof attempt!=='number') return [];
         return [{
@@ -199,6 +199,7 @@ export class AgentModelAdminController {
       if (!row) throw new NotFoundException('Revisión de modelos desconocida');
       const revision=modelRevision(row);
       if (id===active.revision) throw new ConflictException('La revisión ya está activa');
+      if (usesRetiredModel(revision.policy)) throw new ConflictException('La revisión incluye un modelo retirado');
       if (revision.validation?.digest!==revision.digest || revision.validation.issues.length) {
         throw new ConflictException('Valida la revisión con los proveedores antes de aplicarla');
       }

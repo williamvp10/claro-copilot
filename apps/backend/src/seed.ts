@@ -3,8 +3,6 @@ import { readFile } from 'node:fs/promises';
 import { createAuth } from './auth.js';
 import { audit, createDatabase } from './database.js';
 import { hashPassword, verifyPassword } from 'better-auth/crypto';
-import { initializeLocalModelPolicy } from './agent-model-storage.js';
-import { modelCredentials } from './agent-providers.js';
 import { demoChurnFeatures } from './ml-advisory.js';
 
 if (process.env.DEMO_MODE !== 'true') throw new Error('Set DEMO_MODE=true to seed synthetic cases');
@@ -37,8 +35,6 @@ async function upsertOperator(kind: 'ASESSOR' | 'ADMIN' | 'N2' | 'SUPERVISOR', n
 }
 
 try {
-  const localModelKey = modelCredentials().lmstudio;
-  if (localModelKey) await initializeLocalModelPolicy(db,localModelKey);
   if (process.env.DEMO_ASESSOR_EMAIL?.trim().toLowerCase() === process.env.DEMO_ADMIN_EMAIL?.trim().toLowerCase()) {
     throw new Error('Demo operators require different emails');
   }

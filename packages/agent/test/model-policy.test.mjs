@@ -42,23 +42,12 @@ test('automatic model selection limits alternative providers to explicitly enabl
   assert.ok(observations.every(item=>item.metadata.model_config_revision==='model-rev-a'));
 });
 
-test('the local Llama uses structured output on the private LM Studio endpoint',async()=>{
+test('a retired local model in an old policy cannot make an inference request',async()=>{
   const policy=structuredClone(initialAgentModelPolicy);
   policy.steps.write_public={mode:'fixed',model:'claro-llama'};
-  const calls=[],observations=[];
-  const models=new TurnModels(policy,{lmstudio:'local-token'},'model-rev-local',Date.now()+10000,
-    item=>observations.push(item),async(url,init)=>{
-      calls.push({url,body:JSON.parse(init.body),authorization:init.headers.Authorization});
-      return Response.json({model:'claro-llama',choices:[{finish_reason:'stop',message:{content:JSON.stringify(output)}}],
-        usage:{prompt_tokens:30,completion_tokens:5}});
-    });
-  assert.deepEqual(await models.call({...request,profile:'complejo'}),output);
-  assert.equal(calls[0].url,'http://lm-studio:1234/v1/chat/completions');
-  assert.equal(calls[0].authorization,'Bearer local-token');
-  assert.equal(calls[0].body.provider,undefined);
-  assert.deepEqual(calls[0].body.response_format.json_schema.schema,schema);
-  assert.equal(observations[0].metadata.provider,'lmstudio');
-  assert.equal(observations[0].metadata.cost_usd,0);
+  const {models,calls}=setup(policy);
+  assert.equal(await models.call(request),null);
+  assert.equal(calls.length,0);
 });
 
 test('policy provisions only one fallback and shares the turn budget across concurrent calls',async()=>{

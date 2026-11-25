@@ -17,7 +17,6 @@ export function objectSchema(properties:Record<string,JsonSchema>):JsonSchema {
 export async function requestModel(model:ModelOption, key:string, instructions:string, input:string, schema:JsonSchema,
   maxOutput:number, timeoutMs:number, fetcher:typeof fetch=fetch, tuning?:ModelTuning):Promise<ModelReply> {
   const direct = model.provider==='openai';
-  const local = model.provider==='lmstudio';
   const format={name:'claro_result',strict:true,schema};
   const effort=tuning?.reasoning ?? model.reasoning;
   const body=direct
@@ -26,10 +25,9 @@ export async function requestModel(model:ModelOption, key:string, instructions:s
       text:{format:{...format,type:'json_schema'},...(tuning?.verbosity ? {verbosity:tuning.verbosity} : {})}}
     : {model:model.id,messages:[{role:'system',content:instructions},{role:'user',content:input}],max_tokens:maxOutput,
       response_format:{type:'json_schema',json_schema:format},
-      ...(!local ? {provider:{require_parameters:true,data_collection:'deny',zdr:true,
-        max_price:{prompt:model.input_usd_per_million,completion:model.output_usd_per_million}}} : {})};
-  const endpoints={openai:'https://api.openai.com/v1/responses',openrouter:'https://openrouter.ai/api/v1/chat/completions',
-    lmstudio:'http://lm-studio:1234/v1/chat/completions'};
+      provider:{require_parameters:true,data_collection:'deny',zdr:true,
+        max_price:{prompt:model.input_usd_per_million,completion:model.output_usd_per_million}}};
+  const endpoints={openai:'https://api.openai.com/v1/responses',openrouter:'https://openrouter.ai/api/v1/chat/completions'};
   const response=await fetcher(endpoints[model.provider],{
     method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},
     body:JSON.stringify(body),redirect:'error',signal:AbortSignal.timeout(timeoutMs)
