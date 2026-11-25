@@ -215,6 +215,10 @@
 .follow-up-fields { padding:12px; border:1px solid var(--border); border-radius:8px; }
 .completion-form { overflow-wrap:anywhere; }
 .completion-form p { font-size:13px; color:var(--muted-foreground); }
+.completion-suggestion { display:grid; gap:8px; padding:12px; margin-block:4px 12px; border:1px solid #c7d2fe; border-radius:10px; background:#eef2ff; color:#312e81; }
+.completion-suggestion strong { display:flex; align-items:center; gap:6px; font-size:13px; }
+.completion-suggestion p { margin:0; color:inherit; }
+.completion-suggestion .button { justify-self:start; min-height:44px; }
 @media(max-width:760px) {
   .follow-up-table thead { position:absolute; width:1px; height:1px; clip-path:inset(50%); overflow:hidden; }
   .follow-up-table table,.follow-up-table tbody,.follow-up-table tr { display:block; }

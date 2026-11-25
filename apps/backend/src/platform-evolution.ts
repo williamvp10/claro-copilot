@@ -5,10 +5,11 @@ import { hashPassword } from 'better-auth/crypto';
 import { z } from 'zod';
 import type { DataSource, EntityManager } from 'typeorm';
 import { assistedHistory, assistedWriting, requestedAdvisor, TurnModels, type AgentObservation } from '@claro/agent';
-import { CustomerId, EscalationDestination, escalationDestinations, FollowUpEntry, FollowUpPriority, FollowUpStatus, InvoiceId, type Viewer } from '@claro/contracts';
+import { CustomerId, EscalationDestination, escalationDestinations, FollowUpEntry, FollowUpPriority, FollowUpStatus, InvoiceId, type ClosureEvidenceSuggestion, type Viewer } from '@claro/contracts';
 import { AUTH, canManageAdministration, canReadMockBilling, getViewer, type createAuth } from './auth.js';
 import { audit, DATABASE, enqueue, type CaseRow } from './database.js';
-import { attentionNotice, checkCase, clearPersonalData, customerReference, isEscalationWaiting, loadCase, queueRun, saveCase } from './cases.js';
+import { attentionNotice, checkCase, clearPersonalData, confirmedCaseReceipts, customerReference, isEscalationWaiting, loadCase, queueRun, saveCase } from './cases.js';
+import { closureEvidence, closureEvidencePrompt } from './closure-evidence.js';
 import { readBilling, readInvoice } from './integration-operations.js';
 import { privateSignals, queueChurn } from './ml-advisory.js';
 import { bogotaDate, recordFollowUp } from './follow-up.js';
@@ -67,6 +68,40 @@ export class PlatformEvolutionController {
       throw new ForbiddenException('Se requiere una asignación de atención vigente');
     }
     return row;
+  }
+
+  @Post('cases/:caseId/closure-suggestion')
+  @Header('Cache-Control','private, no-store')
+  async suggestClosure(@Req() req:Request,@Param('caseId') caseId:string,@Body() raw:unknown):Promise<{suggestion:ClosureEvidenceSuggestion}> {
+    const viewer=await this.viewer(req);
+    if (process.env.DEMO_MODE!=='true') throw new ForbiddenException();
+    const input=parse(transition.extend({last_message_id:id.nullable(),evidence:z.enum(['cliente','operativa'])}).strict(),raw);
+    parse(id,caseId);
+    const read=()=>this.db.transaction(async tx=>{
+      const row=await this.confirmCaseOperator(tx,viewer,caseId);
+      if (row.snapshot.status!=='open' || row.snapshot.attention_mode!=='asistido' ||
+          row.snapshot.revision!==input.case_revision || (row.snapshot.messages.at(-1)?.id ?? null)!==input.last_message_id ||
+          await isEscalationWaiting(tx,caseId)) throw new ConflictException('El caso cambió. Revisa su estado.');
+      return {row,evidence:closureEvidence(row.snapshot,input.evidence,row.snapshot.verified ? await confirmedCaseReceipts(tx,caseId) : [])};
+    });
+    const {row,evidence}=await read();
+    if (!evidence) return {suggestion:null};
+    const history=assistedHistory(row.snapshot.messages).map(message=>({...message,text:clearPersonalData(message.text)}));
+    const [revision]=await this.db.query('SELECT revision FROM prompt_revision WHERE activated');
+    const model=await activeAgentModels(this.db);
+    const policy=await loadAgentModelPolicy(this.db,model.revision,model.digest);
+    const observations:AgentObservation[]=[];
+    const started=Date.now();
+    const models=new TurnModels(policy,agentProviders().modelCredentials ?? {},model.revision,started+4500,span=>observations.push(span));
+    const draft=await assistedWriting(models,'closure_evidence.v1',closureEvidencePrompt,'economico',history,{evidence});
+    const latest=await read();
+    if (latest.evidence!==evidence) throw new ConflictException('La evidencia cambió. Revisa el caso.');
+    const source=draft ? 'ia' : 'evidencia';
+    observations.push({name:'context',started,ended:Date.now(),metadata:{step_id:'draft_closure_evidence',agent_id:'copiloto',source}});
+    void exportAgentSpan({run_id:randomUUID(),conversation_id:row.snapshot.conversation_id,channel:row.snapshot.channel,audience:'asesor',
+      config_revision:revision.revision,model_config_revision:model.revision,model_config_digest:model.digest},
+      started,'closure_evidence','suggested',observations,{},row.web_visitor_ref ?? row.contact_ref);
+    return {suggestion:{text:draft?.text ?? evidence,source}};
   }
 
   @Post('cases/:caseId/customer-registration')

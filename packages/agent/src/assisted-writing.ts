@@ -9,10 +9,10 @@ export function assistedHistory(messages: Message[], turn?: number): History {
     (turn === undefined || message.turn_seq<=turn)).slice(-16).map(({id,actor,text})=>({id,actor,text:text.slice(0,900)}));
 }
 
-export async function assistedWriting(models:TurnModels, promptRef:'assisted_case_summary'|'escalation_reason'|'assisted_reply',
+export async function assistedWriting(models:TurnModels, promptRef:'assisted_case_summary'|'escalation_reason'|'assisted_reply'|'closure_evidence.v1',
   instructions:string, profile:ModelProfile, history:History, context:object) {
   if (!history.some(message=>message.actor==='cliente')) return null;
-  const limit=promptRef==='escalation_reason' ? 500 : 1000;
+  const limit=promptRef==='escalation_reason' || promptRef==='closure_evidence.v1' ? 500 : 1000;
   const allowedIds=new Set(history.map(message=>message.id));
   const numbers=(value:string)=>value.match(/\d+(?:[.,]\d+)*/g) ?? [];
   const knownNumbers=new Set(numbers(JSON.stringify({history:history.map(message=>message.text),context})));

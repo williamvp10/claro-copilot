@@ -237,9 +237,11 @@ export const CloseCase = z.object({
   resolved:z.boolean(),retention_outcome:z.enum(['permanencia','baja','pendiente']).optional(),
   completion:z.object({case_revision:z.number().int().positive(),idempotency_key:Id,
     evidence:z.enum(['cliente','operativa','pendientes']),reason:z.string().trim().min(3).max(500).optional(),
+    last_message_id:Id.nullable().optional(),
     follow_up_date:z.iso.date().optional()}).optional()
 });
 export type CloseCompletion = z.infer<typeof CloseCase>['completion'];
+export type ClosureEvidenceSuggestion = {text:string;source:'ia'|'evidencia'} | null;
 export const AgentTurn = z.object({
   run_id: Id, case_id: Id, conversation_id: Id, turn_id: Id, channel: Channel, actor: Actor.exclude(['agente']),
   turn_seq: z.number().int().positive(), case_revision: z.number().int().positive(),

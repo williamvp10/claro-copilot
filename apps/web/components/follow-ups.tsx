@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { CaseSnapshot, FollowUpEntry } from '@claro/contracts';
+import { Sparkles } from 'lucide-react';
+import type { CaseSnapshot, ClosureEvidenceSuggestion, FollowUpEntry } from '@claro/contracts';
 import { ApiError, api, key } from '@/lib/api';
 import { Button } from './ui/button';
 
@@ -115,14 +116,38 @@ export function CaseCloseForm({snapshot,close,confirmed,eligible}:{
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
   const operation=useRef<{fingerprint:string;id:string}|undefined>(undefined);
+  const [suggestionResult,setSuggestionResult]=useState<{key:string;suggestion:ClosureEvidenceSuggestion;error?:true}>();
+  const [usedSuggestion,setUsedSuggestion]=useState('');
+  const reasonInput=useRef<HTMLTextAreaElement>(null);
+  const {id,revision}=snapshot;
+  const lastMessage=snapshot.messages.at(-1)?.id ?? null;
+  const confirmedByCustomer=!!snapshot.customer_resolution?.satisfied_message_id;
+  const canSuggest=evidence==='operativa' || evidence==='cliente' && confirmedByCustomer;
+  const suggestionKey=JSON.stringify([id,revision,lastMessage,evidence]);
+  const currentSuggestion=suggestionResult?.key===suggestionKey ? suggestionResult : undefined;
+  const stale=!!usedSuggestion && usedSuggestion!==suggestionKey;
   const current=snapshot.ml?.follow_up;
   const existing=current && current.status!=='cancelled';
   const effectiveDate=due ?? snapshot.ml?.recommended_due_date ?? '';
   const canSchedule=snapshot.verified && !existing;
 
+  useEffect(()=>{
+    if (!canSuggest) return;
+    const pending=new AbortController();
+    api.closureSuggestion(id,{case_revision:revision,last_message_id:lastMessage,evidence},pending.signal)
+      .then(({suggestion})=>{if(!pending.signal.aborted)setSuggestionResult({key:suggestionKey,suggestion});})
+      .catch(()=>{if(!pending.signal.aborted)setSuggestionResult({key:suggestionKey,suggestion:null,error:true});});
+    return ()=>pending.abort();
+  },[id,revision,lastMessage,evidence,canSuggest,suggestionKey]);
+
+  function selectEvidence(value:typeof evidence) {
+    setEvidence(value);setReason('');setUsedSuggestion('');setError('');
+  }
+
   async function submit() {
-    if (!evidence) return;
+    if (!evidence || stale || evidence==='cliente' && !confirmedByCustomer) return;
     const completion={case_revision:snapshot.revision,evidence,reason:reason.trim() || undefined,
+      last_message_id:lastMessage,
       follow_up_date:schedule ? effectiveDate : undefined};
     const fingerprint=JSON.stringify([completion,outcome]);
     if (operation.current?.fingerprint!==fingerprint) operation.current={fingerprint,id:key()};
@@ -136,15 +161,29 @@ export function CaseCloseForm({snapshot,close,confirmed,eligible}:{
 
   return <form className="completion-form" onSubmit={event=>{event.preventDefault();void submit();}}>
     <p>El cierre quedará registrado en el historial de {snapshot.display_name}.</p>
-    <label>Resultado del caso<select value={evidence} required onChange={event=>setEvidence(event.target.value as typeof evidence)}>
+    <label>Resultado del caso<select value={evidence} required onChange={event=>selectEvidence(event.target.value as typeof evidence)}>
       <option value="">Selecciona el resultado</option>
-      {snapshot.customer_resolution?.satisfied_message_id&&<option value="cliente">Cerrar como resuelto · Confirmado por el cliente</option>}
+      {confirmedByCustomer&&<option value="cliente">Cerrar como resuelto · Confirmado por el cliente</option>}
       <option value="operativa">Cerrar como resuelto · Con evidencia operativa</option>
       <option value="pendientes">Cerrar con pendientes</option>
     </select></label>
-    {evidence&&evidence!=='cliente'&&<label>{evidence==='operativa'?'Evidencia de resolución':'Motivo y pendientes'}
-      <textarea required minLength={3} maxLength={500} rows={3} value={reason} onChange={event=>setReason(event.target.value)}/>
+    {canSuggest&&<section className="completion-suggestion" aria-label="Sugerencia de Copiloto" aria-live="polite">
+      <strong><Sparkles size={16} aria-hidden="true"/> Sugerencia de Copiloto</strong>
+      {!currentSuggestion ? <p role="status">Preparando la evidencia de resolución…</p>
+        : currentSuggestion.suggestion ? <>
+          <p>{currentSuggestion.suggestion.text}</p>
+          <Button className="button outline" variant="outline" type="button" disabled={busy||usedSuggestion===suggestionKey} onClick={()=>{
+            setReason(currentSuggestion.suggestion!.text);setUsedSuggestion(suggestionKey);setError('');
+            reasonInput.current?.focus();
+          }}>{usedSuggestion===suggestionKey?'Sugerencia aplicada':'Usar sugerencia'}</Button>
+        </> : <p>{currentSuggestion.error?'No pudimos cargar la sugerencia. Puedes registrar la evidencia en el campo de abajo.'
+          :'Puedes registrar la evidencia del resultado en el campo de abajo.'}</p>}
+    </section>}
+    {evidence&&<label>{evidence==='pendientes'?'Motivo y pendientes':'Evidencia de resolución'}
+      <textarea ref={reasonInput} required={evidence!=='cliente'} minLength={3} maxLength={500} rows={3} value={reason}
+        onChange={event=>{setReason(event.target.value);setUsedSuggestion('');}}/>
     </label>}
+    {stale&&<p role="status">El caso se actualizó. Revisa la evidencia o usa la sugerencia actualizada.</p>}
     {eligible&&<label>Resultado de retención<select value={outcome} onChange={event=>setOutcome(event.target.value as typeof outcome)}>
       <option value="pendiente">Pendiente</option><option value="permanencia">Permanencia confirmada</option><option value="baja">Baja confirmada</option>
     </select></label>}
@@ -159,7 +198,7 @@ export function CaseCloseForm({snapshot,close,confirmed,eligible}:{
     {error&&<p className="alert error" role="alert">{error}</p>}
     <div className="modal-actions">
       <Button className="button outline" type="button" variant="outline" onClick={close} disabled={busy}>Volver</Button>
-      <Button className="button default" disabled={busy||!evidence}>{busy?'Cerrando…':'Confirmar cierre'}</Button>
+      <Button className="button default" disabled={busy||!evidence||stale||(evidence==='cliente'&&!confirmedByCustomer)}>{busy?'Cerrando…':'Confirmar cierre'}</Button>
     </div>
   </form>;
 }

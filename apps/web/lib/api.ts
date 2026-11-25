@@ -1,5 +1,5 @@
 import type { AgentModelActivation, AgentModelCatalog, AgentModelExecutions, AgentModelPolicy, AgentModelRevision, AgentModelRevisions, ModelValidation } from '@claro/contracts';
-import type { CaseEvent, CaseSnapshot, CaseSummary, Contact, Dashboard, DashboardFilters, EvalJob, EvalStatus, PromptRevision, Viewer, BillingView, CrmView, InvoiceDetail, ManualAction, IntegrationHealth, IntegrationOperation, KnowledgeInventory, KnowledgeLabQuery, KnowledgeLabResult, KnowledgePassage, CaseDiscount, BillingDiscount, CloseCompletion, FollowUpEntry } from '@claro/contracts';
+import type { CaseEvent, CaseSnapshot, CaseSummary, Contact, Dashboard, DashboardFilters, EvalJob, EvalStatus, PromptRevision, Viewer, BillingView, CrmView, InvoiceDetail, ManualAction, IntegrationHealth, IntegrationOperation, KnowledgeInventory, KnowledgeLabQuery, KnowledgeLabResult, KnowledgePassage, CaseDiscount, BillingDiscount, CloseCompletion, ClosureEvidenceSuggestion, FollowUpEntry } from '@claro/contracts';
 import type { LangfuseEvaluations } from '@claro/contracts';
 
 const fixtures = process.env.NEXT_PUBLIC_FIXTURES === 'true';
@@ -85,7 +85,10 @@ export const api = {
  take:(id:string)=>fixtures?Promise.resolve(update(id,c=>{c.attention_mode='asistido';c.owner_id='advisor-demo';})):post<CaseSnapshot>(`/api/v1/cases/${encodeURIComponent(id)}/take`),
  send:(id:string,text:string,draft?:{run_id:string;case_revision:number})=>fixtures?Promise.resolve(update(id,c=>{c.messages.push({id:key(),turn_seq:c.messages.length+1,actor:'asesor',text,created_at:now()});c.last_message=text;if(c.id==='C-1004'&&c.verified&&c.card)c.card.pending=['Esperar confirmación del cliente'];})):post<CaseSnapshot>(`/api/v1/cases/${encodeURIComponent(id)}/messages`,{text,idempotency_key:key(),...(draft?{draft}:{})}),
  close:(id:string,resolved:boolean,retention_outcome?:'permanencia'|'baja'|'pendiente',completion?:CloseCompletion)=>
-   fixtures?Promise.resolve(update(id,c=>{c.status='closed';})):post<CaseSnapshot>(casePath(id)+'/close',{resolved,retention_outcome,completion}),
+   fixtures?Promise.resolve(update(id,c=>{c.status='closed';if(completion)c.closure={outcome:resolved?'resolved':'pending',evidence:completion.evidence,reason:completion.reason};})):post<CaseSnapshot>(casePath(id)+'/close',{resolved,retention_outcome,completion}),
+ closureSuggestion:(id:string,input:{case_revision:number;last_message_id:string|null;evidence:'cliente'|'operativa'},signal:AbortSignal)=>fixtures
+   ? Promise.resolve({suggestion:null})
+   : request<{suggestion:ClosureEvidenceSuggestion}>(casePath(id)+'/closure-suggestion',{method:'POST',body:JSON.stringify(input),signal}),
  decision:(id:string,proposalId:string,revision:number,decision:'approved'|'rejected')=>fixtures?Promise.resolve(update(id,c=>{if(c.card?.proposal){c.card.proposal.status=decision==='approved'?'confirmed':'rejected';if(decision==='approved')c.card.proposal.effect_ref='CRM-OFERTA-1004';}})):post<CaseSnapshot>(`/api/v1/proposals/${encodeURIComponent(proposalId)}/decision`,{decision,revision,idempotency_key:key()}),
  draftEvent:(id:string,run_id:string,case_revision:number,kind:'used'|'edited'|'feedback_positive'|'feedback_negative')=>post(`/api/v1/cases/${encodeURIComponent(id)}/draft-events`,{run_id,case_revision,event_id:key(),kind}),
  dashboard:(filters: DashboardFilters)=>fixtures?Promise.resolve(copy(dashboard)):request<Dashboard>('/api/v1/admin/dashboard?'+new URLSearchParams(filters)),

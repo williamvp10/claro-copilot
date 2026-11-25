@@ -482,7 +482,10 @@ export class Cases {
       if (row.snapshot.status!=='open') throw new UnprocessableEntityException('El caso ya está cerrado');
       if (process.env.DEMO_MODE==='true' && await isEscalationWaiting(tx,id)) throw new ConflictException('El caso está en espera de otro equipo.');
       if (completion) {
-        if (row.snapshot.revision!==completion.case_revision) throw new ConflictException('El caso cambió. Verifica el último mensaje.');
+        if (row.snapshot.revision!==completion.case_revision || completion.last_message_id!==undefined &&
+            completion.last_message_id!==(row.snapshot.messages.at(-1)?.id ?? null)) {
+          throw new ConflictException('El caso cambió. Verifica el último mensaje.');
+        }
         if (resolved===(completion.evidence==='pendientes') ||
             (completion.evidence==='cliente' ? !row.snapshot.customer_resolution?.satisfied_message_id : !completion.reason)) {
           throw new ConflictException('Indica la evidencia de resolución o el motivo del cierre con pendientes');
