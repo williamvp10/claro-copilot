@@ -1,5 +1,5 @@
 import type { AdvisorCard, AgentTurn, CaseDiscount, Message, Retention } from '@claro/contracts';
-import { cancellationRequest } from './objectives.js';
+import { cancellationRequest, changesCancellationToPlan } from './objectives.js';
 
 type Option = Retention['options'][number];
 const normalize = (text:string) => text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
@@ -27,7 +27,9 @@ export function continuesCancellation(text:string) {
 
 export function retentionDialogue(turn:Pick<AgentTurn,'actor'|'text'|'turn_seq'>,messages:Message[],options:Option[]) {
   // Only sent customer-facing messages can establish that an offer was made. The private card is not an input.
-  const sent=messages.filter(message=>message.turn_seq<=turn.turn_seq && !message.verification_input && !message.attention_notice &&
+  const withdrawn=messages.filter(message=>message.actor==='cliente' && message.turn_seq<turn.turn_seq &&
+    changesCancellationToPlan(message.text)).at(-1)?.turn_seq ?? 0;
+  const sent=messages.filter(message=>message.turn_seq>withdrawn && message.turn_seq<=turn.turn_seq && !message.verification_input && !message.attention_notice &&
     (message.actor==='asesor' || message.actor==='agente'));
   let offered:Option[]=[];
   for (const message of sent.reverse()) {
