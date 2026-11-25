@@ -1,0 +1,11 @@
+include:
+  - path:
+      - infra/compose.yaml
+      - infra/compose.local.yaml
+      - infra/compose.vps.yaml
+      - infra/compose.vps.lmstudio.yaml
+      - infra/compose.langfuse.yaml
+      - infra/compose.langfuse.vps.yaml
+      - infra/compose.vps.traefik.yaml
+      - infra/compose.dokploy.overlay.yaml
+    project_directory: ./infra

@@ -1,0 +1,142 @@
+services:
+  private-inputs:
+    image: alpine:3.22
+    restart: unless-stopped
+    mem_limit: 64m
+    environment:
+      INPUT_ARCHIVE_SHA256: ${INPUT_ARCHIVE_SHA256:?Set the checksum of the private demo archive}
+    volumes:
+      - private-inputs:/inputs
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        umask 022
+        while :; do
+          if [ "$$(cat /inputs/.revision 2>/dev/null || true)" != "$$INPUT_ARCHIVE_SHA256" ] &&
+             [ -f /inputs/demo-inputs.tgz ] &&
+             printf '%s  /inputs/demo-inputs.tgz\n' "$$INPUT_ARCHIVE_SHA256" | sha256sum -c - >/dev/null 2>&1; then
+            tar --no-same-owner -xzf /inputs/demo-inputs.tgz -C /inputs
+            printf '%s\n' "$$INPUT_ARCHIVE_SHA256" > /inputs/.revision
+          fi
+          sleep 5
+        done
+    healthcheck:
+      test: [CMD-SHELL, 'test "$$(cat /inputs/.revision 2>/dev/null)" = "$$INPUT_ARCHIVE_SHA256"']
+      interval: 8s
+      timeout: 4s
+      retries: 100
+  ml-prepare:
+    image: ${ML_IMAGE:-claro-ml:local}
+    restart: 'no'
+    mem_limit: ${CLARO_ML_TRAIN_MEMORY:-2304m}
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      OPENBLAS_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+    command: [python, -c, "import runpy; runpy.run_path('/bootstrap/train.py', run_name='__main__')"]
+    volumes:
+      - private-inputs:/inputs:ro
+      - ml-models:/models
+      - encoder-cache:/encoder
+    configs:
+      - source: train-demo
+        target: /bootstrap/train.py
+    depends_on:
+      private-inputs: {condition: service_healthy}
+      mlflow: {condition: service_healthy}
+      ml-init: {condition: service_completed_successfully}
+  ml-init:
+    profiles: !reset []
+    command: ['mkdir -p /models/releases /state /mlflow/db /mlflow/artifacts /encoder && chown -R 65532:65532 /models /state /mlflow /encoder']
+    volumes:
+      - encoder-cache:/encoder
+  mlflow:
+    profiles: !reset []
+    ports: !reset []
+  ml:
+    profiles: !reset []
+    depends_on:
+      ml-prepare: {condition: service_completed_successfully}
+  knowledge-mcp:
+    profiles: !reset []
+    depends_on:
+      publish-knowledge: {condition: service_completed_successfully}
+  seed:
+    profiles: !reset []
+    depends_on:
+      lm-studio: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+  publish-knowledge:
+    profiles: !reset []
+    depends_on:
+      private-inputs: {condition: service_healthy}
+      ml: {condition: service_healthy}
+    volumes: !override
+      - private-inputs:/publication-root:ro
+    command: [node, apps/backend/dist/knowledge-ingest.js, /publication-root/publication/corpus.json, /publication-root/publication/manifest.json]
+  prompts-init:
+    image: ${CLARO_IMAGE:-claro-copiloto:local}
+    restart: 'no'
+    command: [node, apps/backend/scripts/bootstrap-prompts.mjs]
+    environment:
+      DEMO_MODE: 'true'
+      LANGFUSE_BASE_URL: http://langfuse-web:3000
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+    depends_on:
+      langfuse-web: {condition: service_healthy}
+  api:
+    ports: !reset []
+    environment:
+      KNOWLEDGE_ORIGINALS_DIR: /inputs/originals
+    volumes:
+      - private-inputs:/inputs:ro
+    depends_on: &ready
+      seed: {condition: service_completed_successfully}
+      prompts-init: {condition: service_completed_successfully}
+      publish-knowledge: {condition: service_completed_successfully}
+      langfuse-web: {condition: service_healthy}
+      crm-simulator: {condition: service_healthy}
+      billing-simulator: {condition: service_healthy}
+  worker:
+    depends_on: *ready
+  prometheus:
+    profiles: !reset []
+    ports: !reset []
+    volumes: !override
+      - prometheus-data:/prometheus
+    configs:
+      - source: prometheus-config
+        target: /etc/prometheus/prometheus.yml
+  web:
+    ports: !reset []
+  langfuse-web:
+    ports: !reset []
+    networks: !override [default]
+  lf-clickhouse:
+    volumes: !override
+      - clickhouse:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+    configs:
+      - source: clickhouse-network
+        target: /etc/clickhouse-server/config.d/99-claro-ipv4.xml
+      - source: clickhouse-budget
+        target: /etc/clickhouse-server/config.d/zz-claro-vps.xml
+networks:
+  application: !reset null
+  default:
+    ipam: !override
+      config: [{subnet: '${DEMO_PRIVATE_SUBNET:-10.254.93.0/24}'}]
+volumes:
+  private-inputs:
+    name: ${CLARO_INPUT_VOLUME:-claro-copilot-private-inputs}
+  encoder-cache:
+configs:
+  train-demo:
+    file: ./vps/train-demo.py
+  prometheus-config:
+    file: ./observability/prometheus.yaml
+  clickhouse-network:
+    file: ./langfuse/clickhouse.xml
+  clickhouse-budget:
+    file: ./langfuse/clickhouse-vps.xml

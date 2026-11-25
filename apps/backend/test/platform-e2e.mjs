@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { setTimeout as wait } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
+import { writeDocument } from '../dist/knowledge.js';
 
 const origin = process.env.BETTER_AUTH_URL;
 if (!origin || !process.env.DATABASE_URL || process.env.DEMO_MODE !== 'true') throw new Error('A dedicated seeded demo database and running backend are required');
@@ -226,6 +227,13 @@ try {
     assert.deepEqual(rows, [{score:5}]);
   }
   if (process.env.DEMO_SUPPORT_CHAT_ID) {
+    if (!process.env.KNOWLEDGE_INDEX_REVISION || process.env.KNOWLEDGE_INDEX_REVISION === 'legacy') {
+      await writeDocument({query:async (sql,params)=>(await db.query(sql,params)).rows}, {
+        id:'retencion-991',version:'POL-RET-CI v1',title:'Política de retención por fallas técnicas recurrentes',
+        excerpt:'Con tres o más tickets técnicos en 90 días, gestionar una visita técnica prioritaria dentro de 24 horas antes de evaluar una oferta.',
+        scope:'advisor',effective_from:'2026-11-01',type:'politica'
+      });
+    }
     await incoming('C-1013','Me quiero retirar porque el internet se cae todo el tiempo.');
     const support = await until(async ()=>(await get('/cases')).find(c=>c.display_name==='Cliente C-1013'), 'support case');
     await verifyByChat('C-1013',process.env.DEMO_SUPPORT_CHAT_ID,'11013');

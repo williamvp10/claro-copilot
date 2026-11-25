@@ -674,9 +674,9 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     if (intent === 'cancelacion' && reportsCancellationFaults(turn,state)) {
       const history = supportingCards.find(result => result.route === 'soporte_tecnico');
       const contextRead = reads ? undefined : customerContext();
-      const support = history ?? (reads ? undefined : (await supportGraph.invoke({
+      const support = history ?? (await supportGraph.invoke({
         turn,caseState:state,intent:'soporte_tecnico',profile,publicPrompt,prompts,historyOnly:true,deadline,supportingCards
-      })).result);
+      })).result;
       const tickets = support?.type === 'card' ? support.card.facts : [];
       if (!tickets.length || sourceUnavailable(tickets)) return card(intent,'Falta confirmar las fallas reportadas.',[...(await contextRead ?? []),...tickets],[],['Consultar antecedentes técnicos en CRM · API mock'],'Revisar los tickets antes de evaluar una oferta.',['source_unavailable']);
       const recurrence = tickets.find(fact => fact.id === 'technical-tickets-90d');
