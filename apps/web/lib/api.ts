@@ -1,3 +1,4 @@
+import type { AgentModelActivation, AgentModelCatalog, AgentModelPolicy, AgentModelRevision, AgentModelRevisions, ModelValidation } from '@claro/contracts';
 import type { CaseEvent, CaseSnapshot, CaseSummary, Contact, Dashboard, DashboardFilters, EvalJob, EvalStatus, PromptRevision, Viewer, BillingView, CrmView, InvoiceDetail, ManualAction, IntegrationHealth, IntegrationOperation, KnowledgeInventory, KnowledgeLabQuery, KnowledgeLabResult, KnowledgePassage } from '@claro/contracts';
 import type { LangfuseEvaluations } from '@claro/contracts';
 
@@ -51,6 +52,14 @@ export const integrations = {
  approve: (id: string, approved: boolean) => post<IntegrationOperation>(adminIntegration+'/approvals/'+encodeURIComponent(id),{approved})
 };
 export const api = {
+  agentModelCatalog:()=>request<AgentModelCatalog>('/api/v1/admin/agent-models/catalog'),
+  agentModelRevisions:()=>request<AgentModelRevisions>('/api/v1/admin/agent-models/revisions'),
+  saveAgentModelRevision:(input:{base_revision:string;reason:string;policy:AgentModelPolicy})=>request<AgentModelRevision>(
+    '/api/v1/admin/agent-models/revisions',{method:'POST',body:JSON.stringify(input)}),
+  validateAgentModelRevision:(revision:string)=>request<ModelValidation>(
+    `/api/v1/admin/agent-models/revisions/${encodeURIComponent(revision)}/validate`,{method:'POST',body:'{}'}),
+  applyAgentModelRevision:(revision:string,action:'activate'|'restore',input:{expected_revision:string;reason:string;evidence:string})=>request<AgentModelActivation>(
+    `/api/v1/admin/agent-models/revisions/${encodeURIComponent(revision)}/${action}`,{method:'POST',body:JSON.stringify(input)}),
  fixtures,
  me:()=>fixtures?Promise.resolve<Viewer>({id:'advisor-demo',name:'Valentina Torres',role:'admin',capabilities:['admin','n1'],specialties:[],available:true}):request<Viewer>('/api/v1/me'),
  login:(email:string,password:string)=>fixtures?Promise.resolve({}):post('/api/auth/sign-in/email',{email,password}),

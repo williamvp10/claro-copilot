@@ -4,6 +4,8 @@ El [diagrama del agente](diagramas/arquitectura-agente.html) muestra el enrutami
 
 ## Responsabilidades y límites
 
+La ampliación del agente está descrita en el [plan Multi-LLM y RAG](orquestacion-multillm-y-rag.md). Incluye configuración de modelos por superadmin, una política versionada en PostgreSQL y la recuperación de evidencia por dominio. El diagrama del agente representa ese diseño propuesto.
+
 | Componente | Responsabilidad |
 | --- | --- |
 | Next.js y NestJS | Proyectar el caso y el CRM por rol. El navegador usa HTTPS y SSE de plataforma. NestJS aplica Better Auth, ámbito, titularidad, revisión y autorización de acciones. |

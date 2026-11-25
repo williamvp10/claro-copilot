@@ -1,5 +1,12 @@
+export { requestedAdvisor, acceptsAdvisorOffer } from './human-attention.js';
+export { requestModel, objectSchema, TurnModels } from './model-runtime.js';
+export type { ModelCredentials } from './model-runtime.js';
+export { extractorInstructions, orchestratedPublicInstructions } from './turn-brief.js';
 export { createOpenAIPublicWriter, isModelObservation, modelObservationNames, validateDraft } from './generation.js';
 export type { AgentObservation, PublicWriter } from './generation.js';
+import { requestedAdvisor } from './human-attention.js';
+import { TurnModels, type ModelCredentials } from './model-runtime.js';
+import { createBrief, extractBrief, extractorVersion, orchestratedPublicInstructions, modelDraft, modelEvidenceOrder, modelObjectiveOrder, type Brief, type Extracted } from './turn-brief.js';
 import type { AgentObservation, Profile, PublicWriter } from './generation.js';
 import { safeKnowledgeQuery } from './mcp.js';
 import { claimedBillingAccount, explainInvoiceChange, invoicePeriods, reportedAdjustmentAmount } from './billing-evidence.js';
@@ -17,7 +24,7 @@ import { advisorEscalationReply, advisorPromotionReply, mobileCommitmentQuestion
 import { catalogComparison, catalogComparisonAfterWithdrawal, catalogMemoryFromReply, catalogPlans, compareCatalog } from './catalogue.js';
 import { answerCommercial, commercialHandoff, commercialRequest, confirmCommercialPurchase, offerPrice } from './commercial.js';
 import { finishConversation, prepareConversation } from './conversation-context.js';
-export { interpretConversation, platformBillingContext, traceConversation } from './conversation-context.js';
+export { interpretConversation, platformBillingContext, recordPublishedReply, traceConversation } from './conversation-context.js';
 export { commercialHandoff } from './commercial.js';
 export { catalogComparison, catalogPlans } from './catalogue.js';
 export { asksToChangeMobilePlan, mobilePlanTopic } from './public-reply.js';
@@ -40,13 +47,13 @@ export interface KnowledgeAdapter {
   search(query: string, context: { business_date: string; audience: 'cliente' | 'asesor'; channel: string; filters?:KnowledgeSearchFilters }): Promise<KnowledgeDocument[]>;
 }
 export interface CheckpointStore { get(key: string): Promise<RunResult | undefined>; put(key: string, result: RunResult): Promise<void> }
-export type AgentOptions = { requireApprovedPrompts?: boolean; documents?: KnowledgeDocument[]; knowledge?: KnowledgeAdapter; checkpoints?: CheckpointStore; rerank?: (query: string, documents: KnowledgeDocument[]) => Promise<KnowledgeDocument[]>; evidenceSelector?: EvidenceSelector; writer?: PublicWriter; planner?: ObjectivePlanner; turnTimeoutMs?:number; observe?: (runId: string, observation: AgentObservation) => void; };
+export type AgentOptions = { modelCredentials?: ModelCredentials; requireApprovedPrompts?: boolean; documents?: KnowledgeDocument[]; knowledge?: KnowledgeAdapter; knowledgeFor?: (revision:string)=>KnowledgeAdapter; checkpoints?: CheckpointStore; rerank?: (query: string, documents: KnowledgeDocument[]) => Promise<KnowledgeDocument[]>; evidenceSelector?: EvidenceSelector; writer?: PublicWriter; planner?: ObjectivePlanner; turnTimeoutMs?:number; observe?: (runId: string, observation: AgentObservation) => void; };
 
 const norm = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const tokens = (s: string) => norm(s).match(/[a-z0-9]+/g)?.filter(x => x.length > 2) ?? [];
 const has = (s: string, re: RegExp) => re.test(norm(s));
 const defaultDocuments: KnowledgeDocument[] = [{ id: 'catalogo-2026-fibra500', title: 'Catálogo de Planes y Tarifas 2026, pág. 1', version: 'CAT-2026 v1.0', excerpt: 'Hogar Fibra 500: 500 Mbps, $109.900 mensuales, módem WiFi 6 y 1 repetidor WiFi. Los precios incluyen IVA.', scope: 'public', effective_from: '2026-11-01', status: 'ready' }];
-type KnowledgeTurn = Pick<AgentTurn, 'text' | 'run_id' | 'business_date' | 'audience' | 'channel'> & { home_preference?: ReturnType<typeof homePlanPreference>; intake?:CaseIntake; deadline?: number; reads?:TurnReads };
+type KnowledgeTurn = Pick<AgentTurn, 'text' | 'run_id' | 'business_date' | 'audience' | 'channel' | 'knowledge_revision'> & { home_preference?: ReturnType<typeof homePlanPreference>; intake?:CaseIntake; deadline?: number; reads?:TurnReads; models?:TurnModels; brief?:Brief; evidenceIntent?:Intent };
 function allowed(doc: KnowledgeDocument, turn: KnowledgeTurn): boolean {
   return doc.status !== 'draft' && doc.effective_from <= turn.business_date && (!doc.effective_to || turn.business_date < doc.effective_to) && (turn.audience === 'asesor' || doc.scope === 'public') && (!doc.channels || doc.channels.includes(turn.channel));
 }
@@ -189,8 +196,9 @@ function card(intent: Intent, summary: string, facts: Fact[], citations: Citatio
 }
 
 /** The read-only retrieval and answer path shared by attention and the admin lab. */
-export function createKnowledgePipeline(options:Pick<AgentOptions,'requireApprovedPrompts'|'documents'|'knowledge'|'rerank'|'evidenceSelector'|'writer'|'observe'>) {
+export function createKnowledgePipeline(options:Pick<AgentOptions,'requireApprovedPrompts'|'documents'|'knowledge'|'knowledgeFor'|'rerank'|'evidenceSelector'|'writer'|'observe'>) {
   type SearchPlan=ReturnType<typeof prepareKnowledgeQuery>;
+  const knowledgeFor=(turn:KnowledgeTurn)=>(turn.knowledge_revision && options.knowledgeFor?.(turn.knowledge_revision)) || options.knowledge;
   const Retrieval = Annotation.Root({turn:Annotation<KnowledgeTurn>(), plan:Annotation<SearchPlan>(),
     ranked:Annotation<KnowledgeDocument[]>(), unavailable:Annotation<boolean>(), attempts:Annotation<number>()});
   const graph=new StateGraph(Retrieval)
@@ -201,7 +209,7 @@ export function createKnowledgePipeline(options:Pick<AgentOptions,'requireApprov
         if (Date.now() >= (turn.deadline ?? Infinity)) throw new Error('knowledge deadline expired');
         const read=()=>{
           attempts+=1;
-          return options.knowledge?.search(query,{business_date:turn.business_date,audience:turn.audience,
+          return knowledgeFor(turn)?.search(query,{business_date:turn.business_date,audience:turn.audience,
             channel:turn.channel,filters:plan.filters}) ?? Promise.resolve(options.documents ?? defaultDocuments);
         };
         const docs=turn.reads ? await turn.reads.read({tool:'search_knowledge',agent:'conocimiento',step:'retrieve_knowledge',
@@ -233,7 +241,7 @@ export function createKnowledgePipeline(options:Pick<AgentOptions,'requireApprov
     const started = Date.now();
     const timeout = {turn,plan:prepareKnowledgeQuery(turn.text,turn.intake),ranked:[],unavailable:true,attempts:0};
     const {plan,ranked,unavailable,attempts}=await withinDeadline(turn.deadline ?? Infinity,()=>graph.invoke({turn}),timeout);
-    const revision=options.knowledge?.revision ?? 'legacy';
+    const revision=knowledgeFor(turn)?.revision ?? turn.knowledge_revision ?? 'legacy';
     let docs=ranked;
     const rerank=options.rerank;
     if (rerank && docs.length) {
@@ -254,11 +262,14 @@ export function createKnowledgePipeline(options:Pick<AgentOptions,'requireApprov
   async function selectPublicEvidence(turn:KnowledgeTurn, profile:Profile, prompt:string|undefined, documents:KnowledgeDocument[]) {
     const publicCandidates = documents.filter(doc=>doc.scope==='public' && doc.provider_approved===true);
     const selector=options.evidenceSelector;
-    if (turn.audience==='cliente' && !plansDiscovery(turn.text) && selector && publicCandidates.length > 1 && (!options.requireApprovedPrompts || Boolean(prompt))) {
+    const {models,brief}=turn;
+    if (turn.audience==='cliente' && !plansDiscovery(turn.text) && (selector || models && brief) && publicCandidates.length > 1 && (!options.requireApprovedPrompts || Boolean(prompt))) {
       try {
         const features=publicCandidates.map(c => ({id:'',title:safeDecisionFeatures(c.title),excerpt:safeDecisionFeatures(c.excerpt),version:''}));
-        const index=await withinDeadline(turn.deadline ?? Infinity,()=>selector.select(safeDecisionFeatures(turn.text),features,profile,
-          prompt,item=>options.observe?.(turn.run_id,item)),null);
+        const index=models && brief
+          ? await modelEvidenceOrder(models,brief,turn.text,features,profile,prompt ?? '')
+          : await withinDeadline(turn.deadline ?? Infinity,()=>selector!.select(safeDecisionFeatures(turn.text),features,profile,
+            prompt,item=>options.observe?.(turn.run_id,item)),null);
         const selected=index !== null && Number.isInteger(index) ? publicCandidates[index] : undefined;
         if (selected) {
           const position=documents.indexOf(selected);
@@ -357,7 +368,15 @@ export function createKnowledgePipeline(options:Pick<AgentOptions,'requireApprov
     // A remote ranking is only needed when local evidence has not produced a complete reply.
     if (fallbackEvidencePrompt !== undefined) documents=await selectPublicEvidence(turn,profile,fallbackEvidencePrompt,documents);
     const approvedEvidence=documents.filter(document=>document.scope==='public' && document.provider_approved===true).map(citation);
-    if (turn.audience==='cliente' && options.writer && approvedEvidence.length && (!options.requireApprovedPrompts || Boolean(publicPrompt))) {
+    if (turn.models && turn.brief && approvedEvidence.length && publicPrompt) {
+      const step=turn.evidenceIntent==='soporte_tecnico' ? 'support_evidence'
+        : turn.evidenceIntent==='facturacion' ? 'billing_evidence' : 'commercial_evidence';
+      const partial=await modelDraft(turn.models,step,turn.brief,turn.text,approvedEvidence,profile,publicPrompt);
+      const final=turn.audience==='cliente' ? await modelDraft(turn.models,'write_public',turn.brief,turn.text,
+        approvedEvidence,profile,publicPrompt) : null;
+      const draft=final ?? partial;
+      if (draft) return {...draft,used:draft.citations,mode:'openai' as const};
+    } else if (turn.audience==='cliente' && options.writer && approvedEvidence.length && (!options.requireApprovedPrompts || Boolean(publicPrompt))) {
       const writer = options.writer;
       const draft=await withinDeadline(turn.deadline ?? Infinity,()=>writer.write(safeKnowledgeQuery(turn.text),approvedEvidence,profile,publicPrompt,
         observation=>options.observe?.(turn.run_id,{...observation,metadata:{...observation.metadata,agent_id:'copiloto',step_id:'draft_public_reply',prompt_ref:'public_answer'}}),turn.channel,turn.deadline),null);
@@ -397,11 +416,16 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
   const results = new Map<string, RunResult>();
   const inFlight = new Map<string, Promise<RunResult>>();
   const readBudgets = new Map<string, TurnReads>();
+  const runtime = new Map<string,{models?:TurnModels;brief:Brief;extracted?:Extracted;publicEvidence:Set<string>}>();
+  const turnModelContext=(id:string)=>runtime.get(id) ?? {};
   const get = async (key: string) => (await options.checkpoints?.get(key)) ?? results.get(key);
   const put = async (key: string, value: RunResult) => { results.set(key, value); await options.checkpoints?.put(key, value); };
   const {retrieve: retrieveKnowledge, answer: answerKnowledge} = createKnowledgePipeline(options);
   async function retrieve(turn:AgentTurn & KnowledgeTurn, profile:Profile, prompts:Record<string,string>, selectEvidence=true) {
-    return (await retrieveKnowledge({...turn,reads:readBudgets.get(turn.run_id)},profile,prompts,selectEvidence)).candidates;
+    const {candidates}=await retrieveKnowledge({...turn,...turnModelContext(turn.run_id),reads:readBudgets.get(turn.run_id)},profile,prompts,selectEvidence);
+    const approved=runtime.get(turn.run_id)?.publicEvidence;
+    for(const doc of candidates) if (doc.scope==='public' && doc.provider_approved) approved?.add(JSON.stringify([doc.id,doc.version]));
+    return candidates;
   }
   type CaseState = Awaited<ReturnType<AgentPorts['readCaseForRun']>>;
   function policyText(turn:AgentTurn,state:CaseState):string {
@@ -417,18 +441,19 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       ? catalogComparison(turn.text,state.messages,state.conversation_memory,turn.turn_seq) : undefined);
   }
   function commercialFor(turn:AgentTurn, state:CaseState) {
-    if (turn.actor!=='cliente' || turn.audience!=='cliente' || turn.attention_mode!=='autoservicio') return;
+    if (turn.actor!=='cliente') return;
     const query=planConversation(turn,state.messages);
     const memory=state.conversation_memory;
     const previous=memory?.purchase_confirmation && state.messages.filter(message=>message.turn_seq<turn.turn_seq).at(-1);
     const request=commercialRequest(turn.text,query.text,memory?.purchase_confirmation
       ? {...memory,purchase_confirmation:!!previous && previous.actor==='agente' && previous.text.includes(confirmCommercialPurchase)} : memory);
     // Legacy fixtures with prose-only catalogues still use the knowledge path.
+    if (turn.audience==='asesor' && request?.action==='purchase') return;
     if (request && (request.action==='list' || request.action==='detail') && !options.knowledge?.catalog && !catalogPlans(options.documents ?? [],turn).length) return;
     return request;
   }
   async function readCatalogue(turn:AgentTurn, deadline:number, purpose:string) {
-    const knowledge=options.knowledge;
+    const knowledge=(turn.knowledge_revision && options.knowledgeFor?.(turn.knowledge_revision)) || options.knowledge;
     if (!knowledge) return catalogPlans(options.documents ?? [],turn);
     const read=()=>knowledge.catalog?.({business_date:turn.business_date,channel:turn.channel}) ?? Promise.resolve([]);
     const budget=readBudgets.get(turn.run_id);
@@ -447,10 +472,16 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     comercial:['crm.get_customer_context','crm.list_services','crm.evaluate_retention']
   };
   const sourceUnavailable = (facts:Fact[]) => facts.some(fact => fact.id.endsWith('-unavailable'));
+  const catalogPart = (text:string) => text.split(/\s+(?:y|adem[aá]s|tambi[eé]n)\s+|[;\n]/i).find(part=>
+    has(part,/\b(?:planes?|ofertas?|opciones|alternativas|paquetes?|catalogo)\b/) &&
+    has(part,/\b(?:que|cuales|compar\w*|muestr\w*|ofrec\w*|precios?|barat\w*|econom\w*|ten\w*|conocer|nuev\w*)\b/) &&
+    !has(part,/\b(?:mi factura|mi saldo|me cobr\w*)\b/));
   const explicitAccountBilling = (text:string) => has(text,/\b(mi factura|mi saldo|saldo actual|saldo pendiente|mi vencimiento|mi deuda|cuanto debo|cuanto adeudo|me cobro|me cobraron|f-\d{4,10})\b/);
   const reportsCancellationFaults = (turn:AgentTurn,state:CaseState) => [turn.text,...state.messages
     .filter(message => message.actor==='cliente' && message.turn_seq<turn.turn_seq).map(message => message.text)]
     .some(text => cancellationWithFaults(text) || has(text,/\b(se cae|caidas|fallas recurrentes|intermitencia|falla todo el tiempo)\b/));
+  const asksRecurrenceOffer=(turn:AgentTurn,state:CaseState)=>Boolean(turn.model_config_revision &&
+    has(turn.text,/\b(?:descuento|oferta|beneficio|compensaci[oó]n)\b/) && reportsCancellationFaults(turn,state));
   async function resolve(turn: AgentTurn, state: CaseState, intent: Intent, profile: Profile, publicPrompt: string, prompts:Record<string,string>, agentId:Domain, historyOnly:boolean, deadline:number, supportingCards:Extract<RunResult,{type:'card'}>[]): Promise<RunResult> {
     const reads=readBudgets.get(turn.run_id);
     const scopeStep = agentId==='facturacion' ? 'resolve_billing_facts'
@@ -548,7 +579,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
             !has(turn.text,/\b(?:tarda|cuanto|plazo)\b/)) return has(doc.excerpt,/\b(?:operador receptor|requisitos|nip)\b/);
         return true;
       });
-      const reply=await answerKnowledge(query,profile,publicPrompt,applicable,objectives,objectives ? prompts.public_evidence_selector ?? '' : undefined);
+      const reply=await answerKnowledge({...query,...turnModelContext(turn.run_id),evidenceIntent:intent},profile,publicPrompt,applicable,objectives,objectives ? prompts.public_evidence_selector ?? '' : undefined);
       const continuing=intent===state.public_route && isPublicContinuation(turn) && !contextIntent(turn.text);
       if ((scopedDetail || continuing) && (!reply || 'needsClarification' in reply && reply.needsClarification && !('contextField' in reply))) {
         const answer=scopedDetail ? `No puedo confirmar ese detalle para ${detailFocus.name} con las fuentes vigentes. ¿Qué otra condición quieres revisar?`
@@ -752,34 +783,60 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     .addNode('load_case', async ({ turn, deadline }) => {
       const started = Date.now();
       const caseState = await ports.readCaseForRun(turn.run_id);
-      const config = await ports.getAgentConfig(turn.config_revision);
-      if (config.revision !== turn.config_revision) throw new Error('configuration revision mismatch');
-      if (config.prompts.agent_objectives) {
+      const config = await ports.getAgentConfig(turn.config_revision,turn.model_config_revision,turn.model_config_digest);
+      if (config.revision !== turn.config_revision ||
+          turn.prompt_manifest_digest && config.promptManifestDigest!==turn.prompt_manifest_digest) throw new Error('configuration revision mismatch');
+      if (config.prompts.agent_objectives || turn.model_config_revision) {
         const readDeadline=deadline - Math.min(150, Math.floor(turnTimeoutMs/10));
         readBudgets.set(turn.run_id,new TurnReads(readDeadline,observation=>options.observe?.(turn.run_id,observation)));
       }
-      const history = caseState.messages.filter(message=>message.turn_seq<turn.turn_seq);
-      options.observe?.(turn.run_id,{name:'context',started,ended:Date.now(),metadata:{
+      const brief=createBrief(turn,caseState.messages,caseState.conversation_context);
+      const models=config.modelPolicy && options.modelCredentials && turn.model_config_revision
+        ? new TurnModels(config.modelPolicy,options.modelCredentials,turn.model_config_revision,deadline-150,
+          observation=>options.observe?.(turn.run_id,observation)) : undefined;
+      runtime.set(turn.run_id,{brief,models,publicEvidence:new Set()});
+      const history = brief.history;
+      options.observe?.(turn.run_id,{name:'context.load',started,ended:Date.now(),metadata:{
         agent_id:'copiloto',step_id:'load_case',history_count:history.length,
         first_turn_seq:history[0]?.turn_seq ?? 0,last_turn_seq:history.at(-1)?.turn_seq ?? 0
       }});
-      const context=prepareConversation(turn,caseState);
-      return {turn:context.turn,caseState:context.state,context,prompts:config.prompts,publicPrompt:config.prompts.public_answer ?? '',
+      const allowedMessages = turn.model_config_revision
+        ? [...history,...caseState.messages.filter(message=>message.turn_seq===turn.turn_seq && !message.verification_input)]
+        : caseState.messages;
+      const context=prepareConversation(turn,{...caseState,messages:allowedMessages});
+      return {turn:context.turn,caseState:context.state,context,prompts:config.prompts,
+        publicPrompt:models ? config.prompts.orchestrated_public_answer ?? orchestratedPublicInstructions : config.prompts.public_answer ?? '',
         intent:context.domain ?? recentPurpose(caseState.messages,turn)};
+    })
+    .addNode('extract_turn', async ({turn,caseState,prompts,context}) => {
+      const current=runtime.get(turn.run_id);
+      if (!current?.models || turn.actor!=='cliente') return {};
+      if (contextIntent(current.brief.current.text) && !context.reading.ambiguous &&
+          caseState.intake?.facts && Object.values(caseState.intake.facts).some(Boolean)) return {};
+      const started=Date.now();
+      current.extracted=(await extractBrief(current.models,current.brief,prompts.conversation_extract)) ?? undefined;
+      options.observe?.(turn.run_id,{name:'context.extract',started,ended:Date.now(),metadata:{
+        agent_id:'copiloto',step_id:'extract_turn',prompt_ref:'conversation_extract',extractor_version:extractorVersion,
+        intent:current.extracted?.intent ?? '',action:current.extracted?.action ?? '',
+        slots:current.extracted?.slots.map(slot=>slot.key).join(',') ?? '',status:current.extracted?'accepted':'deterministic'
+      }});
+      return {};
     })
     .addNode('resolve_turn', ({ turn, caseState, prompts, context }) => {
       const started = Date.now();
       let intent = recentPurpose(caseState.messages, turn);
       const explicitIntent=contextIntent(turn.text);
-      const continuation=!explicitIntent ? context.domain ?? (isPublicContinuation(turn) ? caseState.public_route : undefined) : undefined;
+      const extracted=runtime.get(turn.run_id)?.extracted?.intent;
+      const continuation=!explicitIntent ? (turn.actor==='asesor' ? caseState.conversation_context?.active : undefined) ?? context.domain ?? (isPublicContinuation(turn) ? caseState.public_route : undefined) : undefined;
       if (continuation) intent=continuation;
+      else if (!explicitIntent && extracted) intent=extracted;
       if (turn.actor === 'cliente' && !accepted(turn.text) && tokens(turn.text).length > 2) {
         const activeOffer = intent === 'cancelacion' && !explicitIntent && has(turn.text,/\b(?:descuento|oferta)\b/);
-        if (!activeOffer && !continuation) intent = classify(turn.text) ?? explicitIntent ?? intent;
+        if (!activeOffer && !continuation) intent = classify(turn.text) ?? explicitIntent ?? extracted ?? intent;
       }
       const newPlan = changesCancellationToPlan(turn.text);
       if (newPlan) intent='consulta_planes';
-      else if (retentionPolicyQuery(turn.text) || cancellationWithFaults(turn.text) || has(turn.text, cancellationRequest)) intent='cancelacion';
+      else if (retentionPolicyQuery(turn.text) || asksRecurrenceOffer(turn,caseState) || cancellationWithFaults(turn.text) || has(turn.text, cancellationRequest)) intent='cancelacion';
       else if ((has(turn.text, portabilityRequest) || prompts.agent_objectives && portabilityTimingQuestion(turn.text)) && !has(turn.text,/\b(?:junt\w*|combina\w*|convergen\w*)\b/)) intent='portabilidad';
       else if (prompts.agent_objectives && (asksReconnectionCharge(turn.text) ||
         !caseState.verified && turn.channel==='telegram' && turn.audience==='cliente' && claimedBillingAccount(turn.text) ||
@@ -791,7 +848,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       else if (caseState.intake?.intent==='cancelacion' && !retentionPolicyQuery(turn.text)) intent='cancelacion';
       else if (caseState.intake?.intent==='soporte_tecnico' && ['Lentitud','E-202','Luz LOS roja','Cortes en videollamadas'].includes(caseState.intake.facts.sintoma ?? '')) intent='soporte_tecnico';
       const profile: Profile = caseState.verified && turn.audience==='asesor' ? 'intermedio' : 'economico';
-      options.observe?.(turn.run_id,{name:'context',started,ended:Date.now(),metadata:{
+      options.observe?.(turn.run_id,{name:'orchestrator.route',started,ended:Date.now(),metadata:{
         agent_id:'copiloto',step_id:'resolve_turn',decision:'orchestrator',intent,profile,
         context_route:caseState.public_route ?? '',continuation:continuation===intent ? 'yes' : 'no'
       }});
@@ -807,30 +864,79 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
           prompts.agent_objectives && has(turn.text,/\b(?:intermiten\w*|se cae|sin (?:senal|internet)|luz los|videollamadas? se cortan)\b/))) {
         objectives.add('soporte_tecnico');
       }
+      const commercialGoal=turn.model_config_revision && caseState.verified && turn.audience==='asesor' &&
+        objectives.has('facturacion') && catalogPart(turn.text);
+      if (commercialGoal) objectives.add('consulta_planes');
       const planned = [...objectives];
       const profile: Profile = planned.length > 1 ? 'complejo' : state.profile;
       if (!prompts.agent_objectives) return {objectives:planned,profile};
       const started = Date.now();
       const planner=options.planner;
-      const order = planned.length > 1 && planner
-        ? await withinDeadline(deadline,()=>planner.order(planned,turn.audience,prompts.agent_objectives,observation => options.observe?.(turn.run_id,observation)),null)
-        : null;
+      const current=runtime.get(turn.run_id);
+      const order = planned.length<2 ? null : current?.models
+        ? await modelObjectiveOrder(current.models,current.brief,planned,profile,prompts.agent_objectives)
+        : planner ? await withinDeadline(deadline,()=>planner.order(planned,turn.audience,prompts.agent_objectives,
+          observation => options.observe?.(turn.run_id,observation)),null) : null;
       const proposedOrder = validObjectiveOrder(order,planned) ? order : planned;
       const ordered = intent === 'cancelacion'
         ? [...proposedOrder.filter(objective => objective !== intent), intent]
         : proposedOrder;
-      const evidence = caseState.verified && turn.audience === 'asesor'
+      const delegatedStarted=Date.now();
+      const evidence = (intent==='cancelacion' || !turn.model_config_revision) && caseState.verified && turn.audience === 'asesor'
         ? await Promise.all(ordered.filter(objective=>objective!==intent).map(async objective => {
           if (objective==='facturacion') return billingGraph.invoke({...state,intent:objective});
           if (objective==='soporte_tecnico') return supportGraph.invoke({...state,intent:objective,historyOnly:intent==='cancelacion'});
           return null;
         })) : [];
       const supportingCards=evidence.flatMap(item=>item?.result.type==='card' ? [item.result] : []);
-      options.observe?.(turn.run_id,{name:'context',started,ended:Date.now(),metadata:{
+      if (turn.model_config_revision && intent==='cancelacion' && ordered.includes('soporte_tecnico') && supportingCards.length) {
+        options.observe?.(turn.run_id,{name:'orchestrator.delegate',started:delegatedStarted,ended:Date.now(),metadata:{
+          agent_id:'copiloto',step_id:'delegate_tasks',mode:'dependency',max_parallel:2,objectives:ordered.join(','),
+          findings:supportingCards.map(item=>item.route).join(','),status:'prerequisite_complete'
+        }});
+      }
+      options.observe?.(turn.run_id,{name:'orchestrator.plan',started,ended:Date.now(),metadata:{
         agent_id:'copiloto',step_id:'plan_objectives',primary:intent,
         objectives:ordered.join(','),investigated:supportingCards.map(result=>result.route).join(',')
       }});
       return {objectives:ordered,supportingCards,profile};
+    })
+    .addNode('delegate_tasks', async (state) => {
+      const {turn,caseState,intent,objectives,deadline}=state;
+      const started=Date.now();
+      const findings:RunResult[]=[];
+      const tasks=[intent,...objectives.filter(objective=>objective!==intent)];
+      for(let index=0;index<tasks.length && Date.now()<deadline;index+=2) {
+        const batch=tasks.slice(index,index+2);
+        const outputs=await Promise.all(batch.map(async objective=>{
+          if (objective==='consulta_planes' && catalogPart(turn.text)) {
+            const query=catalogPart(turn.text)!;
+            const memory=caseState.conversation_context?.frames.consulta_planes?.catalogue;
+            const plans=await readCatalogue(turn,deadline,'read_public_catalogue');
+            const comparison=catalogComparison(query,caseState.messages,memory,turn.turn_seq);
+            if (comparison) {
+              const {text,citations}=compareCatalog(comparison,plans);
+              return card('consulta_planes',text,[],citations,citations.length?[]:['Confirmar las ofertas vigentes'],
+                'Orientar al cliente con los precios del catálogo.',['knowledge','catalogue_comparison']);
+            }
+            const request=commercialRequest(query,query,memory) ?? {action:'list' as const,query,groups:[]};
+            const catalog=answerCommercial(request,plans,undefined);
+            if (catalog?.type==='answer') return card('consulta_planes',catalog.answer,[],catalog.citations,[],
+              'Compartir las opciones del catálogo vigente.',['knowledge']);
+          }
+          const graph=objective==='soporte_tecnico'?supportGraph:objective==='facturacion'?billingGraph:commercialGraph;
+          return (await graph.invoke({...state,intent:objective})).result;
+        }));
+        findings.push(...outputs);
+      }
+      const [primary,...rest]=findings;
+      const result=primary ?? card(intent,'La consulta requiere más tiempo.',[],[],['Confirmar información pendiente'],
+        'Continuar la revisión con el cliente.',['deadline']);
+      options.observe?.(turn.run_id,{name:'orchestrator.delegate',started,ended:Date.now(),metadata:{
+        agent_id:'copiloto',step_id:'delegate_tasks',mode:'parallel',max_parallel:2,objectives:tasks.join(','),
+        findings:findings.map(item=>item.route).join(','),status:findings.length===tasks.length?'complete':'partial'
+      }});
+      return {result,supportingCards:rest.filter((item):item is Extract<RunResult,{type:'card'}>=>item.type==='card')};
     })
     .addNode('unresolved_objective', ({turn}) => ({
       result: turn.audience === 'asesor'
@@ -874,7 +980,10 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
         catalog_version:result?.type==='answer' ? result.citations[0]?.version ?? 'unavailable' : 'unavailable',
         decision:result?.type ?? 'documentary_fallback',reason:plans.length ? 'reviewed_catalogue' : 'unconfirmed_catalogue'
       }});
-      return {result,intent:'consulta_planes' as const,profile:'economico' as const};
+      const assisted=turn.audience==='asesor' && result?.type==='answer'
+        ? {...card('consulta_planes',result.answer,[],result.citations,[], 'Continuar la consulta del cliente.',['knowledge']),
+          conversation_memory:result.conversation_memory} as RunResult : result;
+      return {result:assisted,intent:'consulta_planes' as const,profile:'economico' as const};
     })
     .addNode('clarify_duration', async ({turn,caseState,prompts,deadline}):Promise<{result:RunResult}> => {
       if (turn.audience==='asesor') return {result:card('soporte_tecnico','Falta confirmar cuánto tiempo lleva roja la luz LOS.',[],[],
@@ -899,18 +1008,21 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const policy=mandatoryPolicyRoute(query);
       if (!policy) {
         if (turn.audience==='cliente') return {result:{type:'handoff',reason:'Solicitaré atención de un asesor.',pending:'Atención humana',route:'handoff'} as RunResult};
-        const selected=caseState.conversation_memory?.selected_plan;
-        if (selected && (caseState.pending===commercialHandoff || caseState.pending==='Atención humana')) {
+        const selected=(caseState.conversation_context?.frames.consulta_planes?.catalogue ?? caseState.conversation_memory)?.selected_plan;
+        if (selected && (caseState.pending===commercialHandoff || turn.observed_context?.decision==='prepare_commercial_handoff')) {
           return {result:card('consulta_planes',`El cliente eligió ${selected.name}, por ${offerPrice(selected)} según el catálogo citado.`,
             [{id:'selected-plan',label:'Plan elegido',value:selected.name}], [selected.citation],
             ['Confirmar las condiciones vigentes','Gestionar inscripción y facturación'],
             'Revisar la solicitud con el cliente y continuar el trámite.',['human_requested','commercial_selection'])};
         }
         const previous=caseState.messages.filter(message=>message.actor==='cliente' && message.turn_seq<turn.turn_seq).at(-1);
+        const published=runtime.get(turn.run_id)?.brief.published.at(-1);
+        const sources=caseState.messages.find(message=>message.id===published?.id)?.citations ?? [];
         const attempt=prompts.agent_objectives && turn.actor==='cliente'
           ? reportedHandoffAttempt([turn.text,previous?.text].filter(Boolean).join(' '),caseState.intake) : '';
-        return {result:card(intent,['Se solicita atención humana.',attempt].filter(Boolean).join(' '),[],[],
-          [attempt ? 'Revisar el resultado del procedimiento informado' : 'Derivación'],
+        const reason=caseState.handoff_reason ?? 'Se solicita atención humana.';
+        return {result:card(intent,[reason,attempt,published && `Ya se comunicó: ${published.text.slice(0,720)}`].filter(Boolean).join(' '),[],sources,
+          [attempt ? 'Revisar el resultado del procedimiento informado' : 'Continuar la consulta pendiente'],
           attempt ? 'Continuar la atención con el responsable del caso.' : 'Contactar al responsable de atención.',['human_requested'])};
       }
       const destination=policy.destination === 'supervision' ? 'supervisión' : 'soporte técnico de nivel 2';
@@ -927,6 +1039,8 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       if (out.type === 'card') out.card.suggested_escalation=policy;
       return {result:out};
     })
+    .addNode('resolution_ready', ({intent})=>({result:card(intent,'El cliente confirmó que la consulta quedó resuelta y pidió cerrar.',
+      [],[],['Confirmar el cierre en consola'],'Cerrar el caso como resuelto.',['customer_resolution_confirmed'])}))
     .addNode('support_followup', ({turn}):{result:RunResult} => {
       if (turn.audience==='cliente') return {result:{type:'answer',route:'seguimiento',citations:[],
         answer:'El seguimiento con Soporte sigue abierto. Un asesor puede revisar el estado de la visita.'}};
@@ -949,24 +1063,30 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     })
     .addEdge(START, 'load_case')
     .addConditionalEdges('load_case', ({ turn,caseState,prompts,context }) => {
-      if (mandatoryPolicyRoute(policyText(turn,caseState)) || /hablar con (un |una )?(humano|asesor|persona)/.test(norm(turn.text))) return 'priority_handoff';
-      if (turn.audience==='asesor' && turn.observed_context?.decision==='prepare_commercial_handoff') return 'priority_handoff';
+      if (turn.audience==='asesor' && turn.observed_context?.decision==='resolution_ready') return 'resolution_ready';
+      if (mandatoryPolicyRoute(policyText(turn,caseState)) || turn.actor==='cliente' && requestedAdvisor(turn.text)) return 'priority_handoff';
+      if (turn.audience==='asesor' && ['prepare_handoff','prepare_commercial_handoff'].includes(turn.observed_context?.decision ?? '')) return 'priority_handoff';
       if (prompts.agent_objectives && turn.actor==='cliente' && caseState.pending_support_handoff && waitingForSupportVisit(turn.text)) return 'support_followup';
       if (needsLosDuration(turn.text)) return 'clarify_duration';
-      if (context.unresolved) return 'clarify_context';
+      if (context.unresolved) return context.reading.ambiguous && runtime.get(turn.run_id)?.models ? 'extract_turn' : 'clarify_context';
+      if (turn.model_config_revision && caseState.verified && turn.audience==='asesor' &&
+          explicitAccountBilling(turn.text) && catalogPart(turn.text)) return 'extract_turn';
       const commercial=commercialFor(turn,caseState);
       if (commercial && ['purchase','download','select'].includes(commercial.action)) return 'commercial_catalogue';
       if (comparisonFor(turn,caseState,Boolean(prompts.agent_objectives))) return 'catalogue_advice';
-      return commercial ? 'commercial_catalogue' : 'resolve_turn';
+      return commercial ? 'commercial_catalogue' : 'extract_turn';
     })
+    .addConditionalEdges('extract_turn', ({turn,context})=>
+      context.unresolved && !runtime.get(turn.run_id)?.extracted?.intent ? 'clarify_context' : 'resolve_turn')
     .addEdge('resolve_turn', 'plan_objectives')
-    .addConditionalEdges('plan_objectives', ({turn,intent,caseState,prompts}) => {
+    .addConditionalEdges('plan_objectives', ({turn,intent,caseState,prompts,objectives}) => {
       const publicPolicy=prompts.agent_objectives && (asksReconnectionCharge(turn.text) || portabilityTimingQuestion(turn.text) ||
         !caseState.verified && turn.channel==='telegram' && intent==='facturacion' && claimedBillingAccount(turn.text));
-      if (prompts.agent_objectives && !publicPolicy && !retentionPolicyQuery(turn.text) && !caseState.intake && !contextIntent(turn.text)
+      if (prompts.agent_objectives && !publicPolicy && !retentionPolicyQuery(turn.text) && !caseState.intake && !contextIntent(turn.text) && !runtime.get(turn.run_id)?.extracted?.intent
           && !(caseState.public_route===intent && isPublicContinuation(turn))
           && !has(turn.text,/\b(?:declarar renta|declaracion de renta|cotizacion bursatil|bolsa de valores|criptomoneda)\b/)
           && !has(turn.text,/\b(?:plan|fibra|precio|empresa|servicio|contrato|e-?sim|roaming|descuento|oferta|portabilidad|pqr|reclamo|velocidad|internet|senal|factur\w*)\b/)) return 'unresolved_objective';
+      if (turn.model_config_revision && intent!=='cancelacion' && objectives.length>1 && caseState.verified && turn.audience==='asesor') return 'delegate_tasks';
       const next=caseState.intake?.intent===intent ? nextContextQuestion(caseState.intake) : undefined;
       if (turn.audience==='cliente' && !publicPolicy && next && ['codigo','medio','cable','cargo','pago','direccion','tramite'].includes(next.id)) return 'context_question';
       return intent === 'facturacion' ? 'billing' : intent === 'soporte_tecnico' ? 'support' : 'commercial';
@@ -989,18 +1109,30 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       }}};
 
     })
-    .addNode('render_private_draft', async ({result,prompts,turn,caseState,objectives}) => ({result:advisorDraft(result,prompts,turn,caseState,prompts.agent_objectives ? objectives : [])}))
+    .addNode('render_private_draft', async ({result,prompts,turn,caseState,objectives,profile}) => {
+      const prepared=advisorDraft(result,prompts,turn,caseState,prompts.agent_objectives ? objectives : []);
+      const current=runtime.get(turn.run_id);
+      if (prepared.type!=='card' || !current?.models || prepared.card.facts.length || prepared.card.pending.length ||
+          prepared.card.proposal || prepared.card.suggested_escalation || !prepared.card.reason_codes.includes('knowledge')) return {result:prepared};
+      const sources=prepared.card.citations.filter(({id,version})=>current.publicEvidence.has(JSON.stringify([id,version])));
+      if (!sources.length) return {result:prepared};
+      const draft=await modelDraft(current.models,'write_advisor',current.brief,turn.text,sources,
+        profile ?? 'economico',prompts.orchestrated_public_answer ?? orchestratedPublicInstructions);
+      return {result:draft ? {...prepared,card:{...prepared.card,advisor_draft:draft.answer}} : prepared};
+    })
     .addEdge('priority_handoff', 'render_private_draft')
+    .addEdge('resolution_ready', 'render_private_draft')
     .addEdge('support_followup', 'render_private_draft')
     .addEdge('clarify_duration', 'render_private_draft')
     .addEdge('context_question', END)
     .addEdge('clarify_context', END)
     .addEdge('unresolved_objective', 'render_private_draft')
     .addConditionalEdges('catalogue_advice', ({result})=>result.type==='card' ? 'render_private_draft' : END)
-    .addConditionalEdges('commercial_catalogue', ({result})=>result ? END : 'commercial')
+    .addConditionalEdges('commercial_catalogue', ({result})=>result?.type==='card' ? 'render_private_draft' : result ? END : 'commercial')
     .addEdge('support', 'compose_secondary')
     .addEdge('billing', 'compose_secondary')
     .addEdge('commercial', 'compose_secondary')
+    .addEdge('delegate_tasks', 'compose_secondary')
     .addEdge('compose_secondary', 'render_private_draft')
     .addEdge('render_private_draft', END)
     .compile();
@@ -1012,13 +1144,13 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const task = (async () => {
         try {
           const state=await graph.invoke({turn,deadline:Date.now()+turnTimeoutMs});
-          const context=finishConversation(state.context,state.result,turn);
+          const context=finishConversation(state.context,state.result,turn,runtime.get(turn.run_id)?.extracted);
           const result=ResultSchema.parse({...state.result,...(context ? {conversation_context:context} : {})});
           await put(key,result);
           return result;
         } catch { return {type:'failed',reason:'agent_unavailable',route:'error'} as RunResult; }
       })();
-      inFlight.set(key, task); try { return await task; } finally { inFlight.delete(key); readBudgets.delete(turn.run_id); }
+      inFlight.set(key, task); try { return await task; } finally { inFlight.delete(key); readBudgets.delete(turn.run_id); runtime.delete(turn.run_id); }
     },
     async resume(input: RunResume) {
       const key = `resume:${input.run_id}:${input.effect_id}:${input.status}:${input.effect_ref ?? ''}`;

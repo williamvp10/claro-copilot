@@ -59,7 +59,7 @@ export function businessPorts(db: DataSource): AgentPorts {
         AND destination='soporte_tecnico' AND status IN ('en_cola','tomado')) AS pending`,[row.id]) : [];
       return {
         messages: row.snapshot.messages.filter(m => !m.verification_input).map(m => ({ ...m, text: clearPersonalData(m.text) })),
-        verified: row.snapshot.verified, pending: row.handoff_pending, intake: row.snapshot.intake, conversation_memory: row.snapshot.conversation_memory,
+        verified: row.snapshot.verified, pending: row.handoff_pending, handoff_reason:row.snapshot.handoff_reason, intake: row.snapshot.intake, conversation_memory: row.snapshot.conversation_memory,
         public_route: row.snapshot.public_route,
         conversation_context: row.snapshot.conversation_context,
         pending_support_handoff:support?.pending===true,

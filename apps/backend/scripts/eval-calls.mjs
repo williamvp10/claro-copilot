@@ -4,7 +4,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { createAgent, createJevSemanticEvaluator, evolveContext, isModelObservation, recordQuestion } from '@claro/agent';
 import { createDatabase } from '../dist/database.js';
 import { activeKnowledgeRevision, databaseKnowledge, knowledgeCorpus } from '../dist/knowledge.js';
-import { manifestDigest, readRunPromptConfig } from '../dist/prompt-catalog.js';
+import { manifestDigest, readRunPromptConfig, runPromptDigest } from '../dist/prompt-catalog.js';
+import { activeAgentModels, loadAgentModelPolicy } from '../dist/agent-model-storage.js';
 import { agentProviders } from '../dist/agent-providers.js';
 import { runtimeSha256 } from '../dist/runtime-revision.js';
 
@@ -66,7 +67,7 @@ const attr = values => Object.entries(values).map(([key, stringValue]) => ({ key
 const expected = item => ({ intent: item.intent, required: item.required, forbidden: item.forbidden });
 const citationKey = ({ id, version }) => JSON.stringify([id, version]);
 
-async function replay(item, knowledge, config, approvedEvidence) {
+async function replay(item, knowledge, config, approvedEvidence, modelPin) {
   const messages = [], observations = [], outputs = [], evidence = [], calls = [];
   let intake, conversation_memory, conversation_context, turnIndex = 0;
   const privateRead = name => async () => { calls.push(name); return []; };
@@ -90,6 +91,8 @@ async function replay(item, knowledge, config, approvedEvidence) {
       channel: 'web', actor: 'cliente', turn_seq: turnSeq, case_revision: turnSeq,
       attention_mode: 'autoservicio', audience: 'cliente', scope_ref: 'unverified',
       config_revision: config.revision, business_date: businessDate, text: question,
+      model_config_revision:modelPin.revision,model_config_digest:modelPin.digest,knowledge_revision:indexRevision,
+      prompt_manifest_digest:config.promptManifestDigest,
     });
     const answer = result.type === 'answer' ? result.answer : result.type === 'handoff' ? result.reason : '';
     const citations = result.type === 'answer' ? result.citations : [];
@@ -115,7 +118,8 @@ try {
     ? await db.query('SELECT revision FROM prompt_revision WHERE revision=$1', [chosenRevision])
     : await db.query('SELECT revision FROM prompt_revision WHERE activated ORDER BY created_at DESC LIMIT 1');
   if (!revision) throw new Error('Prompt revision not found');
-  const config = await readRunPromptConfig(db, revision);
+  const [pin,prompts]=await Promise.all([activeAgentModels(db),readRunPromptConfig(db,revision,true)]);
+  const config = {...prompts,promptManifestDigest:runPromptDigest(prompts),modelPolicy:await loadAgentModelPolicy(db,pin.revision,pin.digest)};
   if (!Object.keys(config.prompts).length) throw new Error('Prompt revision has no valid templates');
   const promptManifestSha = manifestDigest(config.prompt_metadata);
   const knowledge = databaseKnowledge(db, indexRevision);
@@ -143,7 +147,7 @@ try {
     const expectedOutput = expected(item);
     const data = items[index];
     const started = Date.now();
-    const { outputs, observations, calls, evidence } = await replay(item, knowledge, config, approvedEvidence);
+    const { outputs, observations, calls, evidence } = await replay(item, knowledge, config, approvedEvidence,pin);
     const safe = !calls.length && outputs.every(out => ['answer', 'handoff'].includes(out.type));
     if (native && !safe) throw new Error(`Evaluation crossed the public boundary for ${item.id}`);
     const routeMatch = outputs[0].route === (item.id === 'TRX-0007' ? 'handoff' : item.intent);

@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { asksToChangeMobilePlan, catalogComparison, changesCancellationToPlan, claimedBillingAccount, commercialHandoff, contextIntent, evolveContext, interpretConversation, mandatoryPolicyRoute, nextContextQuestion, platformBillingContext, recordQuestion, renderCaseSummary, traceConversation } from '@claro/agent';
+import { acceptsAdvisorOffer, recordPublishedReply, requestedAdvisor, asksToChangeMobilePlan, catalogComparison, changesCancellationToPlan, claimedBillingAccount, commercialHandoff, contextIntent, evolveContext, interpretConversation, mandatoryPolicyRoute, nextContextQuestion, platformBillingContext, recordQuestion, renderCaseSummary, traceConversation } from '@claro/agent';
 import { ConflictException, ForbiddenException, ServiceUnavailableException, Inject, Injectable, NotFoundException, UnauthorizedException, HttpException, UnprocessableEntityException } from '@nestjs/common';
 import { type z } from 'zod';
 import {
@@ -8,9 +8,12 @@ import {
 } from '@claro/contracts';
 import { DataSource, type EntityManager } from 'typeorm';
 import { audit, type CaseRow, type ContactRow, type DraftPublication, DATABASE, enqueue } from './database.js';
-import { accountHandoffReason, accountInquiry, accountReply, accountVerificationPrompt, codeCandidates, contactCandidates, isGreeting, isVerificationContact, requestedAdvisor, type AccountInquiry, type AccountRead } from './demo-accounts.js';
+import { accountHandoffReason, accountInquiry, accountReply, accountVerificationPrompt, codeCandidates, contactCandidates, isGreeting, isVerificationContact, type AccountInquiry, type AccountRead } from './demo-accounts.js';
 import { privateSignals, queueChurn } from './ml-advisory.js';
-import { readRunPromptConfig } from './prompt-catalog.js';
+import { resolutionSignals } from './customer-resolution.js';
+import { activeAgentModels } from './agent-model-storage.js';
+import { activeKnowledgeRevision } from './knowledge.js';
+import { readRunPromptConfig, runPromptDigest } from './prompt-catalog.js';
 import { SimulatorFailure, simulators } from './simulator-client.js';
 
 export async function confirmedCaseReceipts(tx:EntityManager, caseId:string):Promise<ConfirmedReceipt[]> {
@@ -177,12 +180,14 @@ export async function queueRun(tx: EntityManager, row: CaseRow, message = latest
   observedContext?:AgentTurn['observed_context']) {
   if (!message || message.actor === 'agente') return;
   const {revision,scenario} = await revisionForTurn(tx, row);
+  const [model,prompts]=await Promise.all([activeAgentModels(tx),readRunPromptConfig(tx,revision,true)]);
   const scope = row.snapshot.verified ? 'verified' : 'unverified';
   const turn = AgentTurn.parse({
     run_id: randomUUID(), case_id: row.id, conversation_id: row.snapshot.conversation_id, turn_id: message.id,
     channel: row.snapshot.channel, actor: message.actor, turn_seq: message.turn_seq, case_revision: row.snapshot.revision,
     attention_mode: row.snapshot.attention_mode, audience: row.snapshot.attention_mode === 'asistido' ? 'asesor' : 'cliente',
     scope_ref: scope, config_revision: revision, business_date: businessDate(),
+    prompt_manifest_digest:runPromptDigest(prompts),model_config_revision:model.revision,model_config_digest:model.digest,knowledge_revision:activeKnowledgeRevision(),
     text: clearPersonalData(message.text), observed_context:observedContext
   });
   await tx.query('INSERT INTO agent_run VALUES ($1,$2,$3)', [turn.run_id, row.id, turn]);
@@ -276,13 +281,16 @@ export class Cases {
       row.snapshot.handoff_reason = handoffReason(row);
       row.snapshot.owner_id = viewer.id;
       row.snapshot.attention_mode = 'asistido';
+      if (row.snapshot.conversation_context) row.snapshot.conversation_context.variables.awaiting_advisor=false;
       row.snapshot.revision += 1;
       row.snapshot.card = null;
       await audit(tx, id, 'handoff_taken');
       await queueChurn(tx,row);
-      const commercial=row.snapshot.conversation_memory?.selected_plan &&
-        (row.handoff_pending===commercialHandoff || row.handoff_pending==='Atención humana');
-      await queueRun(tx,row,undefined,false,commercial ? {decision:'prepare_commercial_handoff'} : undefined);
+      const memory=row.snapshot.conversation_context?.frames.consulta_planes?.catalogue ?? row.snapshot.conversation_memory;
+      const commercial=memory?.selected_plan && (row.handoff_pending===commercialHandoff ||
+        row.handoff_pending==='Atención humana' && (!row.snapshot.conversation_context || row.snapshot.conversation_context.active==='consulta_planes'));
+      await queueRun(tx,row,undefined,false,commercial ? {decision:'prepare_commercial_handoff'}
+        : row.handoff_pending==='Atención humana' ? {decision:'prepare_handoff'} : undefined);
     });
   }
 
@@ -394,6 +402,9 @@ export class Cases {
   async close(viewer: Viewer, id: string, input:z.infer<typeof CloseCase>) {
     return this.change(viewer, id, true, async (tx, row) => {
       const {resolved,retention_outcome} = input;
+      if (resolved && row.snapshot.channel==='web' && row.contact_ref.startsWith('web:') && !row.snapshot.customer_resolution?.close_message_id) {
+        throw new ConflictException('El cliente debe confirmar que quedó resuelto y que desea cerrar');
+      }
       const eligible = row.snapshot.verified && row.intent_hint === 'cancelacion' &&
         (row.snapshot.card?.reason_codes.includes('retention_eligible') || row.snapshot.card?.proposal?.kind === 'retention_offer');
       if (retention_outcome && retention_outcome !== 'pendiente' && !eligible) {
@@ -616,9 +627,7 @@ export class Cases {
     }
     let pending = demo ? this.pendingInquiry(row) : null;
     const lastMessage = row.snapshot.messages.at(-1);
-    const handoff = requestedAdvisor(text) || (
-      lastMessage?.actor === 'agente' && lastMessage.text.endsWith('¿Quieres hablar con uno?') && /^\s*(?:s[ií](?:,? por favor)?|por favor|de acuerdo|claro(?: que s[ií])?)[. !]*$/i.test(text)
-    );
+    const handoff = requestedAdvisor(text) || lastMessage?.actor==='agente' && acceptsAdvisorOffer(text,lastMessage.text);
     const verified = customerReference(row);
     const aliases = demo ? contactCandidates(text) : [];
     const codes = demo ? codeCandidates(text) : [];
@@ -676,11 +685,48 @@ export class Cases {
       ? '[Dato de verificación oculto]'
       : safeText);
     if (verificationTurn) message.verification_input = true;
+    if (!verificationTurn && !handoff && !priority) {
+      const signals=resolutionSignals(text);
+      const previous=row.snapshot.customer_resolution;
+      if (signals.satisfied || signals.close && previous) {
+        const resolution={satisfied_message_id:signals.satisfied ? message.id : previous!.satisfied_message_id,
+          ...(signals.close ? {close_message_id:message.id} : {})};
+        row.snapshot.customer_resolution=resolution;
+        if (signals.close) {
+          await audit(tx,row.id,'customer_resolution_confirmed',resolution);
+          if (row.snapshot.attention_mode==='autoservicio') {
+            row.handoff_pending=null;
+            row.account_inquiry=null;
+            this.clearChallenge(row);
+            if (row.snapshot.conversation_context) row.snapshot.conversation_context.variables.awaiting_advisor=false;
+            row.snapshot.status='closed';
+            row.snapshot.revision+=1;
+            await tx.query('UPDATE attention_case SET resolved=true WHERE id=$1',[row.id]);
+            await audit(tx,row.id,'closed',{resolved:true,by:'customer'});
+            await this.channelReply(tx,row,'Me alegra que haya quedado resuelto. Cerré esta conversación.');
+            if (row.snapshot.channel==='telegram') await enqueue(tx,`feedback:${row.id}`,row.id,'deliver',{
+              sender:'sistema',revision:row.snapshot.revision,feedback_case_id:row.id,
+              text:'¿Qué tan satisfecho quedaste con esta atención? Elige del 1 al 5.'
+            });
+          } else await queueRun(tx,row,message,false,{decision:'resolution_ready'});
+          return;
+        }
+        if (row.snapshot.attention_mode==='autoservicio' && !row.handoff_pending && !pending) {
+          await this.channelReply(tx,row,'Me alegra que haya quedado resuelto. Si tienes otra pregunta, puedes seguir en este chat.');
+          return;
+        }
+      } else if (previous) delete row.snapshot.customer_resolution;
+    } else if (!verificationTurn) delete row.snapshot.customer_resolution;
 
     if (row.snapshot.attention_mode === 'autoservicio' && row.handoff_pending && !pending) {
       const canResume = isLegacyKnowledgeWait(row) && (handoff || priority ||
         !!catalogComparison(safeText,row.snapshot.messages,row.snapshot.conversation_memory,message.turn_seq));
       if (!canResume) return;
+    }
+    const thanks=/^(?:muchas |mil )?gracias(?:, (?:claro|entendido))?[.! ]*$/i.test(safeText.trim());
+    if (thanks && !requested && !pending && row.snapshot.attention_mode==='autoservicio') {
+      await this.channelReply(tx,row,'Con gusto. Si tienes otra pregunta, podemos seguir en este chat.');
+      return;
     }
     if (greeting && row.snapshot.attention_mode==='autoservicio') {
       await this.channelReply(tx,row,row.snapshot.channel==='web' || lastMessage
@@ -825,6 +871,7 @@ export class Cases {
   private async requestHumanAttention(tx: EntityManager,row: CaseRow,reason: string,reply: string) {
     row.snapshot.revision += 1;
     row.snapshot.handoff_reason = reason;
+    if (row.snapshot.conversation_context) row.snapshot.conversation_context.variables.awaiting_advisor=true;
     row.handoff_pending = 'Atención humana';
     row.account_inquiry = null;
     this.clearChallenge(row);
@@ -836,6 +883,7 @@ export class Cases {
   private async channelReply(tx: EntityManager,row: CaseRow,text: string, context?:{before:string;after:string}) {
     const previous = row.snapshot.messages.at(-1);
     const message = addMessage(row,'agente',text);
+    if (context) recordPublishedReply(row.snapshot.conversation_context,message);
     if (previous && (context || publicDemoChatPair(row, previous, message))) {
       await enqueue(tx,`chat-trace:${message.id}`,row.id,'chat_trace',{input_id:previous.id,output_id:message.id,context});
     }
@@ -922,7 +970,9 @@ export class Cases {
   }
 
   private async assessorMessage(tx: EntityManager, row: CaseRow, text: string, publication?:DraftPublication) {
-    const m = addMessage(row, 'asesor', text);
+    const citations=publication?.source ? row.snapshot.card?.citations : undefined;
+    const m = addMessage(row, 'asesor', text,citations);
+    recordPublishedReply(row.snapshot.conversation_context,m,contextIntent(text) ?? row.snapshot.card?.intent ?? undefined);
     const question=row.snapshot.card?.context_question;
     if (question && row.snapshot.intake && text.includes(question.text)) recordQuestion(row.snapshot.intake,question);
     if (row.snapshot.channel === 'telegram') {

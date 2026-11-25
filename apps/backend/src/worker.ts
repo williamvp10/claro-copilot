@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { setTimeout as wait } from 'node:timers/promises';
 import { Logger, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { createAgent, isModelObservation, recordQuestion, traceConversation, type AgentObservation } from '@claro/agent';
+import { createAgent, isModelObservation, recordPublishedReply, recordQuestion, traceConversation, type AgentObservation } from '@claro/agent';
 import { Intent, RunResult, type AgentTurn, type Citation, type RunResume } from '@claro/contracts';
 import { createClient } from 'redis';
 import type { DataSource } from 'typeorm';
@@ -13,7 +13,8 @@ import { addMessage, loadCase, saveCase, stillCurrent, latestAnalyzable, isLegac
 import { businessPorts, runContext } from './business.js';
 import { integrationMcpPorts } from './integration-mcp-client.js';
 import { agentProviders } from './agent-providers.js';
-import { readRunPromptConfig } from './prompt-catalog.js';
+import { readRunPromptConfig, runPromptDigest } from './prompt-catalog.js';
+import { loadAgentModelPolicy } from './agent-model-storage.js';
 import { configuredKnowledge } from './knowledge.js';
 import { exportAgentSpan } from './telemetry.js';
 import { executeAgentIntegration, executeIntegration } from './integration-operations.js';
@@ -39,10 +40,15 @@ const basePorts = businessPorts(db);
 const ports = process.env.CRM_MCP_URL && process.env.BILLING_MCP_URL ? integrationMcpPorts(db, basePorts) : basePorts;
 const runner = createAgent({
   ...ports,
-  getAgentConfig: revision => readRunPromptConfig(db, revision)
+  async getAgentConfig(revision,modelRevision,modelDigest) {
+    const [config,modelPolicy]=await Promise.all([readRunPromptConfig(db,revision,!!modelRevision),
+      modelRevision ? loadAgentModelPolicy(db,modelRevision,modelDigest) : undefined]);
+    return {...config,modelPolicy,promptManifestDigest:runPromptDigest(config)};
+  }
 }, {
   ...agentProviders(),
   knowledge: configuredKnowledge(db).adapter,
+  knowledgeFor: revision=>configuredKnowledge(db,revision).adapter,
   observe: (runId, item) => {
     const list = observations.get(runId);
     if (list) list.push(item);
@@ -100,6 +106,7 @@ async function project(turn: AgentTurn, result: RunResult) {
     if (result.type === 'failed') throw new Error('agent_failed');
     const contextBefore=row.snapshot.conversation_context;
     let exchange;
+    let publishedReply;
     if (turn.audience === 'cliente' && (result.type === 'answer' || result.type === 'handoff')) {
       const conversationalVerification = process.env.DEMO_MODE === 'true' && result.type === 'handoff' &&
         result.verification_required && !row.snapshot.verified && (row.snapshot.channel === 'web' || row.snapshot.channel === 'telegram');
@@ -133,7 +140,10 @@ async function project(turn: AgentTurn, result: RunResult) {
           : result.answer
         : result.reason;
       const msg = addMessage(row, 'agente', text.slice(0, 4096), result.type === 'answer' ? result.citations : []);
-      if (!conversationalVerification) exchange = publicDemoChatPair(row,row.snapshot.messages.find(item=>item.id===turn.turn_id),msg);
+      if (!conversationalVerification) {
+        publishedReply=msg;
+        exchange=publicDemoChatPair(row,row.snapshot.messages.find(item=>item.id===turn.turn_id),msg);
+      }
       if (result.type==='answer' && result.context_question && row.snapshot.intake) {
         recordQuestion(row.snapshot.intake,result.context_question);
         await audit(tx,row.id,'case_context_question',{run_id:turn.run_id,question_id:result.context_question.id,channel:turn.channel});
@@ -158,7 +168,8 @@ async function project(turn: AgentTurn, result: RunResult) {
     let context;
     if (result.conversation_context) {
       const updated = result.conversation_context;
-      updated.variables = {...updated.variables,verified:row.snapshot.verified,awaiting_advisor:!!row.handoff_pending};
+      updated.variables = {...updated.variables,verified:row.snapshot.verified,awaiting_advisor:row.snapshot.attention_mode==='autoservicio' && !!row.handoff_pending};
+      if (publishedReply) recordPublishedReply(updated,publishedReply,result.route);
       row.snapshot.conversation_context=updated;
       row.snapshot.intake=updated.frames[updated.active]?.intake;
       context={before:JSON.stringify(traceConversation(contextBefore)),after:JSON.stringify(traceConversation(updated))};
@@ -173,7 +184,7 @@ async function project(turn: AgentTurn, result: RunResult) {
       await audit(tx,row.id,'conversation_publication',metadata);
       await audit(tx,row.id,'conversation_completed',metadata);
     }
-    await audit(tx, row.id, 'agent_completed', { run_id: turn.run_id, route: result.route, clarification, runtime_sha256:runtimeSha256 });
+    await audit(tx, row.id, 'agent_completed', { run_id: turn.run_id, route: result.route, clarification, model_config_revision:turn.model_config_revision, knowledge_revision:turn.knowledge_revision, runtime_sha256:runtimeSha256 });
     await saveCase(tx, row);
     return {exchange,context};
   });
@@ -255,7 +266,7 @@ async function handle(job: CaseJob) {
     case 'run': {
       const { row } = await runContext(db.manager, job.payload.run_id, false);
       const subject = row.web_visitor_ref ?? row.contact_ref;
-      if (job.payload.observed_context && job.payload.observed_context.decision!=='prepare_commercial_handoff') {
+      if (job.payload.observed_context && ['ask','handoff'].includes(job.payload.observed_context.decision)) {
         const at=Date.now();
         const metadata=job.payload.observed_context;
         const config=await readRunPromptConfig(db,job.payload.config_revision);
@@ -268,7 +279,7 @@ async function handle(job: CaseJob) {
       }
       if (!stillCurrent(row, job.payload)) return audit(db.manager, job.case_id, 'agent_stale');
       const started = Date.now();
-      const promptConfig = await readRunPromptConfig(db, job.payload.config_revision);
+      const promptConfig = await readRunPromptConfig(db, job.payload.config_revision,!!job.payload.model_config_revision);
       const spans: AgentObservation[] = [];
       observations.set(job.payload.run_id, spans);
       const result = await runner.run(job.payload).finally(() => observations.delete(job.payload.run_id));
@@ -276,7 +287,7 @@ async function handle(job: CaseJob) {
       if (publication?.context) spans.push(contextObservation(publication.context));
       await audit(db.manager, job.case_id, 'agent_latency', { ms: Date.now() - started, run_id:job.payload.run_id, route:result.route });
       for (const item of spans) {
-        if (isModelObservation(item.name) || item.name.startsWith('tool.')) {
+        if (isModelObservation(item.name) || item.name.startsWith('tool.') || item.name==='orchestrator.delegate') {
           await audit(db.manager, job.case_id, item.name, { ...item.metadata, route:result.route, run_id:job.payload.run_id, ms: item.ended - item.started });
         }
       }

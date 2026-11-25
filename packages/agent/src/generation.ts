@@ -3,13 +3,13 @@ import { publicReplyLimit } from './public-reply.js';
 
 export type Profile = 'economico' | 'intermedio' | 'complejo';
 export type AgentObservation = {
-  name: 'retrieval' | 'context' | 'conversation_context' | 'decision.objectives' | 'decision.evidence' | 'generation.openai' | 'catalogue.selection' | 'advisor.handoff_summary' | 'effect' | `tool.${string}`;
+  name: 'model.call' | 'context.load' | 'context.extract' | 'orchestrator.route' | 'orchestrator.plan' | 'orchestrator.delegate' | 'retrieval' | 'context' | 'conversation_context' | 'decision.objectives' | 'decision.evidence' | 'generation.openai' | 'catalogue.selection' | 'advisor.handoff_summary' | 'effect' | `tool.${string}`;
   started: number;
   ended: number;
   metadata: Record<string, string | number>;
 };
 export type Observe = (observation: AgentObservation) => void;
-export const modelObservationNames = ['generation.openai','decision.objectives','decision.evidence'] as const;
+export const modelObservationNames = ['generation.openai','decision.objectives','decision.evidence','model.call'] as const;
 export function isModelObservation(name:AgentObservation['name']):boolean {
   return modelObservationNames.some(modelName=>modelName===name);
 }

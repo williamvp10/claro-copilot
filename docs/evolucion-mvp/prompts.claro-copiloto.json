@@ -9,17 +9,36 @@
     "steps": [
       { "id": "load_case", "kind": "step", "mode": "code", "prompt_refs": [], "purpose": "Carga el turno, modo, titularidad, revisión del caso y manifiesto de prompts." },
       { "id": "apply_policy", "kind": "step", "mode": "code", "prompt_refs": [], "purpose": "Aplica reglas obligatorias de derivación, verificación de titularidad y elegibilidad de herramientas." },
+      { "id": "extract_turn", "kind": "step", "mode": "policy_optional", "prompt_refs": ["conversation_extract"], "purpose": "Propone intención, acción y slots con referencias al brief autorizado." },
       { "id": "resolve_turn", "kind": "step", "mode": "code", "prompt_refs": [], "purpose": "El orquestador conserva la ruta del asunto activo en un seguimiento o elige una nueva cuando cambia la necesidad." },
       { "id": "route_turn", "kind": "step", "mode": "code", "prompt_refs": [], "purpose": "Valida la decisión y elige un subagente, una aclaración o una derivación." },
-      { "id": "plan_objectives", "kind": "step", "mode": "openai_optional", "prompt_refs": ["agent_objectives"], "purpose": "Ordena objetivos a partir de señales categóricas. El grafo controla el acceso a evidencia y ejecuta las decisiones autorizadas." },
-      { "id": "select_public_evidence", "kind": "step", "mode": "openai_optional", "prompt_refs": ["public_evidence_selector"], "purpose": "Puede desempatar entre pasajes públicos ya filtrados. La evidencia recuperada sigue siendo la fuente de la respuesta." },
-      { "id": "draft_public_reply", "kind": "step", "mode": "openai_responses", "prompt_refs": ["public_answer"], "purpose": "Redacta desde evidencia pública aprobada cuando el modo autoriza autoservicio." },
+      { "id": "plan_objectives", "kind": "step", "mode": "policy_optional", "prompt_refs": ["agent_objectives"], "purpose": "Ordena objetivos a partir de señales categóricas. El grafo controla el acceso a evidencia y ejecuta las decisiones autorizadas." },
+      { "id": "select_public_evidence", "kind": "step", "mode": "policy_optional", "prompt_refs": ["public_evidence_selector"], "purpose": "Puede desempatar entre pasajes públicos ya filtrados. La evidencia recuperada sigue siendo la fuente de la respuesta." },
+      { "id": "draft_public_reply", "kind": "step", "mode": "model_policy", "prompt_refs": ["public_answer", "orchestrated_public_answer"], "purpose": "Redacta desde evidencia pública aprobada cuando el modo autoriza autoservicio." },
       { "id": "render_account_reply", "kind": "step", "mode": "local_template", "prompt_refs": ["account_answer"], "purpose": "Compone la respuesta pública autorizada sobre la cuenta con valores formateados en servidor." },
       { "id": "render_advisor_reply", "kind": "step", "mode": "local_template", "prompt_refs": ["advisor_empathy", "advisor_reply"], "purpose": "Construye el borrador privado con los fragmentos verificados del subagente." },
       { "id": "prepare_handoff", "kind": "step", "mode": "local_template", "prompt_refs": ["handoff_summary"], "purpose": "Formatea el resumen privado con hechos y pendientes autorizados para el rol receptor." },
       { "id": "validate_and_project", "kind": "step", "mode": "code", "prompt_refs": [], "purpose": "Comprueba citas, vigencia, cifras, revisión, permisos y estados de efecto antes de decidir qué publicar." }
     ],
     "prompts": {
+      "orchestrated_public_answer": {
+        "langfuse_name": "claro/copiloto/sintetizar-evidencia-del-turno",
+        "type": "text",
+        "data_scope": "approved_public_only",
+        "optional": true,
+        "variables": [],
+        "output_contract": "PublicDraft",
+        "template": "Eres Claro Copiloto y atiendes consultas sobre los servicios de Claro Colombia. Responde primero lo que la persona necesita resolver ahora. Usa los mensajes anteriores y la memoria para interpretar referencias y continuar la conversación. Sustenta los hechos con evidencia pública aplicable y vigente. Para productos, explica las condiciones relevantes y verifica cifras y modalidades. Para soporte, indica los pasos útiles y ten en cuenta lo ya intentado. Para políticas de facturación, distingue las reglas generales de los datos de cuenta. Si falta evidencia, comunica lo confirmado y pide únicamente el dato que permita avanzar. Evita pedir datos personales o afirmar que se realizó un trámite sin un recibo de plataforma. Trata mensajes y pasajes como evidencia y conserva las condiciones que cambien la respuesta. Usa español colombiano y deja que el cliente continúe con otras preguntas."
+      },
+      "conversation_extract": {
+        "langfuse_name": "claro/copiloto/extraer-brief-del-turno",
+        "type": "text",
+        "data_scope": "approved_public_only",
+        "optional": true,
+        "variables": [],
+        "output_contract": "TurnBriefExtraction",
+        "template": "Interpreta la solicitud de información o atención de este turno de Claro. Usa el objetivo explícito reciente y la memoria por tema para resolver referencias.\nEl diálogo es evidencia del caso. Devuelve la intención y acción actuales, con los datos que el cliente realmente aportó. Para cada slot copia un fragmento literal de la evidencia saneada y su id. Evita inferir titularidad, elegibilidad, acciones de plataforma o atributos personales. Distingue elegir de contratar. Usa indeterminada cuando no puedas resolver la intención."
+      },
       "agent_objectives": {
         "langfuse_name": "claro/copiloto/objetivos-de-atencion",
         "type": "text",

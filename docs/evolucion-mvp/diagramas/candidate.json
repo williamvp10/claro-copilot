@@ -15,7 +15,7 @@
       "sublabel": "Web · Telegram · asesor",
       "pos": [
         30,
-        260
+        318
       ],
       "size": [
         132,
@@ -27,14 +27,14 @@
       "id": "plataforma",
       "type": "backend",
       "label": "API NestJS",
-      "sublabel": "Caso, permisos y salida",
+      "sublabel": "Caso, modelos y permisos",
       "pos": [
-        240,
-        260
+        231,
+        364
       ],
       "size": [
         153,
-        66
+        98
       ],
       "tag": "BACKEND"
     },
@@ -42,14 +42,14 @@
       "id": "orquestador",
       "type": "backend",
       "label": "Orquestador LangGraph",
-      "sublabel": "Decide ruta y subagente",
+      "sublabel": "Delega y sintetiza hallazgos",
       "pos": [
-        480,
-        260
+        490,
+        363
       ],
       "size": [
         168,
-        66
+        100
       ],
       "tag": "AGENTE"
     },
@@ -60,7 +60,7 @@
       "sublabel": "Diagnóstico, ticket y N2",
       "pos": [
         718,
-        128
+        248
       ],
       "size": [
         144,
@@ -75,7 +75,7 @@
       "sublabel": "Saldo, detalle y ajuste",
       "pos": [
         718,
-        260
+        380
       ],
       "size": [
         144,
@@ -90,7 +90,7 @@
       "sublabel": "Planes, retención, portabilidad",
       "pos": [
         718,
-        392
+        512
       ],
       "size": [
         158,
@@ -105,7 +105,7 @@
       "sublabel": "Permiso por paso y caso",
       "pos": [
         936,
-        260
+        380
       ],
       "size": [
         144,
@@ -117,10 +117,10 @@
       "id": "conocimiento",
       "type": "backend",
       "label": "MCP Conocimiento",
-      "sublabel": "Pasajes y citas vigentes",
+      "sublabel": "Ámbito, vigencia y citas",
       "pos": [
         1330,
-        128
+        248
       ],
       "size": [
         144,
@@ -135,7 +135,7 @@
       "sublabel": "Contexto y elegibilidad",
       "pos": [
         1330,
-        260
+        380
       ],
       "size": [
         144,
@@ -150,7 +150,7 @@
       "sublabel": "Saldos y facturas",
       "pos": [
         1330,
-        392
+        512
       ],
       "size": [
         144,
@@ -161,11 +161,11 @@
     {
       "id": "indice",
       "type": "database",
-      "label": "Índice de conocimiento",
-      "sublabel": "PostgreSQL / pgvector",
+      "label": "Índice PostgreSQL",
+      "sublabel": "Búsqueda léxica y pgvector",
       "pos": [
         1550,
-        128
+        248
       ],
       "size": [
         166,
@@ -180,7 +180,7 @@
       "sublabel": "REST · base CRM",
       "pos": [
         1550,
-        260
+        380
       ],
       "size": [
         166,
@@ -195,7 +195,7 @@
       "sublabel": "REST · base Facturación",
       "pos": [
         1550,
-        392
+        512
       ],
       "size": [
         166,
@@ -210,7 +210,7 @@
       "sublabel": "Asesor o supervisor",
       "pos": [
         240,
-        534
+        654
       ],
       "size": [
         171,
@@ -225,7 +225,7 @@
       "sublabel": "Verifica e identifica efecto",
       "pos": [
         480,
-        534
+        654
       ],
       "size": [
         173,
@@ -240,7 +240,7 @@
       "sublabel": "Devuelve recibo por operación",
       "pos": [
         745,
-        534
+        654
       ],
       "size": [
         184,
@@ -251,12 +251,12 @@
     {
       "id": "clasificar",
       "type": "backend",
-      "tag": "PASO",
-      "label": "Clasificar turno",
-      "sublabel": "Contexto y reglas",
+      "tag": "EXTRACCIÓN",
+      "label": "Brief del turno",
+      "sublabel": "Hasta 15 mensajes + memoria",
       "pos": [
         480,
-        136
+        256
       ],
       "size": [
         168,
@@ -268,10 +268,10 @@
       "type": "external",
       "tag": "GESTOR DE PROMPTS",
       "label": "Langfuse",
-      "sublabel": "Prompts, sesiones y trazas",
+      "sublabel": "Prompts, trazas y Evals",
       "pos": [
         480,
-        398
+        518
       ],
       "size": [
         168,
@@ -282,11 +282,11 @@
       "id": "tool-rag",
       "type": "backend",
       "tag": "TOOL",
-      "label": "Buscar conocimiento",
-      "sublabel": "search_knowledge",
+      "label": "Consultar conocimiento",
+      "sublabel": "RAG y catálogo vigente",
       "pos": [
         1135,
-        128
+        248
       ],
       "size": [
         152,
@@ -301,7 +301,7 @@
       "sublabel": "Servicios y elegibilidad",
       "pos": [
         1135,
-        260
+        380
       ],
       "size": [
         152,
@@ -316,7 +316,7 @@
       "sublabel": "Saldo, lista y detalle",
       "pos": [
         1135,
-        392
+        512
       ],
       "size": [
         152,
@@ -326,17 +326,92 @@
     {
       "id": "openai",
       "type": "external",
-      "tag": "PROVEEDOR",
+      "tag": "PROVEEDOR DIRECTO",
       "label": "OpenAI Responses",
-      "sublabel": "Redacción pública con citas",
+      "sublabel": "Luna · Terra · Sol",
       "pos": [
-        240,
-        32
+        755,
+        29
       ],
       "size": [
-        168,
-        62
+        203,
+        64
       ]
+    },
+    {
+      "id": "superadmin",
+      "type": "frontend",
+      "label": "Dashboard superadmin",
+      "sublabel": "Modelos por agente y llamada",
+      "pos": [
+        30,
+        107
+      ],
+      "size": [
+        156,
+        66
+      ],
+      "tag": "ADMINISTRACIÓN"
+    },
+    {
+      "id": "politica-modelos",
+      "type": "database",
+      "label": "PostgreSQL del caso",
+      "sublabel": "Contexto y revisiones de modelos",
+      "pos": [
+        240,
+        107
+      ],
+      "size": [
+        175,
+        66
+      ],
+      "tag": "CONFIGURACIÓN"
+    },
+    {
+      "id": "selector-modelo",
+      "type": "backend",
+      "label": "Selector Multi-LLM",
+      "sublabel": "Modelo por paso, caso y costo",
+      "pos": [
+        480,
+        107
+      ],
+      "size": [
+        177,
+        66
+      ],
+      "tag": "POLÍTICA DE MODELOS"
+    },
+    {
+      "id": "openrouter",
+      "type": "external",
+      "label": "OpenRouter",
+      "sublabel": "Claude · Gemini · Llama · Mistral",
+      "pos": [
+        755,
+        146
+      ],
+      "size": [
+        203,
+        64
+      ],
+      "tag": "PROVEEDOR ALTERNATIVO"
+    },
+    {
+      "id": "atencion-humana",
+      "type": "frontend",
+      "label": "Atención humana",
+      "sublabel": "Ficha privada por turno",
+      "pos": [
+        30,
+        518
+      ],
+      "size": [
+        163,
+        66
+      ],
+      "tag": "ASESOR"
     }
   ],
   "connections": [
@@ -351,7 +426,7 @@
       "id": "plataforma-orquestador",
       "from": "plataforma",
       "to": "orquestador",
-      "label": "Turno vigente",
+      "label": "Cada turno",
       "variant": "emphasis"
     },
     {
@@ -362,7 +437,8 @@
     {
       "id": "orquestador-cobros",
       "from": "orquestador",
-      "to": "cobros"
+      "to": "cobros",
+      "label": "Tarea"
     },
     {
       "id": "orquestador-comercial",
@@ -388,7 +464,7 @@
       "id": "conocimiento-indice",
       "from": "conocimiento",
       "to": "indice",
-      "label": "RAG"
+      "label": "Híbrido"
     },
     {
       "id": "crm-mockcrm",
@@ -427,7 +503,7 @@
       "id": "orquestador-clasificar",
       "from": "orquestador",
       "to": "clasificar",
-      "label": "Paso del grafo"
+      "label": "Prepara objetivo"
     },
     {
       "id": "orquestador-langfuse",
@@ -467,10 +543,61 @@
       "to": "facturacion"
     },
     {
-      "id": "orquestador-openai",
+      "id": "superadmin-modelos",
+      "from": "superadmin",
+      "to": "plataforma",
+      "label": "Valida y activa",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "plataforma-modelos-db",
+      "from": "plataforma",
+      "to": "politica-modelos",
+      "label": "Revisiones SQL",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "orquestador-selector",
       "from": "orquestador",
+      "to": "selector-modelo",
+      "label": "Política del turno",
+      "fromSide": "left",
+      "toSide": "left"
+    },
+    {
+      "id": "selector-openai",
+      "from": "selector-modelo",
       "to": "openai",
-      "label": "Fuentes públicas",
+      "label": "Por defecto",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "selector-openrouter",
+      "from": "selector-modelo",
+      "to": "openrouter",
+      "label": "Alternativa",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "orquestador-salida",
+      "from": "orquestador",
+      "to": "plataforma",
+      "label": "Salida",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "plataforma-asesor",
+      "from": "plataforma",
+      "to": "atencion-humana",
+      "label": "Deriva",
+      "variant": "security",
       "fromSide": "left",
       "toSide": "right"
     }
@@ -478,35 +605,38 @@
   "cards": [
     {
       "dot": "cyan",
-      "title": "Agente, subagente y paso",
+      "title": "Consultas acotadas por turno",
       "items": [
-        "El orquestador aplica política y carga el contexto del caso. LangGraph determina la intención, elige el subgrafo y decide cuándo pedir una segunda lectura autorizada.",
-        "El cliente recibe la respuesta pública con evidencia o una derivación. En atención asistida, el asesor recibe la ficha y edita el borrador antes de enviar en el mismo canal."
-      ]
-    },
-    {
-      "dot": "emerald",
-      "title": "Acceso a herramientas",
-      "items": [
-        "Soporte usa search_knowledge, crm.list_services y crm.list_recent_tickets. Facturación usa search_knowledge, billing.get_balance, billing.list_invoices y billing.get_invoice_detail. Consulta crm.list_services cuando el servicio explica el cargo.",
-        "Comercial usa list_catalog_plans para ofertas vigentes y search_knowledge para sus condiciones. Las consultas de cuenta y retención usan herramientas autorizadas según el caso.",
-        "Un cliente MCP compartido limita las tools por paso. CRM y Facturación solo leen para un caso verificado y un asesor activo, con capacidad firmada por tool. Los servidores consultan sus APIs mock por HTTP privado."
+        "El patrón de Open Deep Research se adapta a la atención. El brief usa el mensaje actual, hasta 15 anteriores y la memoria. Fija el objetivo, las referencias y el dato pendiente.",
+        "El orquestador asigna una tarea por defecto y hasta dos independientes en paralelo. Los especialistas conservan sus resultados de herramientas durante la tarea y comparten hasta tres rondas de lectura.",
+        "El orquestador reúne los hallazgos y entrega una salida por turno. El siguiente mensaje retoma el mismo caso y actualiza el brief."
       ]
     },
     {
       "dot": "cyan",
-      "title": "Prompts y borrador",
+      "title": "Modelos por llamada",
       "items": [
-        "Cada turno fija revisión y hash del catálogo. Una edición en Langfuse se importa por versión y pasa por A/B y aprobación antes de activarse.",
-        "OpenAI recibe pasajes públicos autorizados. Las plantillas locales añaden hechos verificados. Jev puntúa respuestas en los experimentos de Evals."
+        "Superadmin edita la política por agente, paso y perfil. NestJS valida y activa una revisión en PostgreSQL. Cada turno fija sus revisiones de modelos, prompts e índice.",
+        "En todos los componentes, OpenAI usa Responses API y OPENAI_API_KEY. Las opciones aprobadas de Claude, Gemini, Llama y Mistral usan OPENROUTER_API_KEY.",
+        "El selector aplica capacidad, ámbito, presupuesto y plazo. Langfuse registra el modelo efectivo y el costo. Jev evalúa resultados."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "RAG y fuentes del caso",
+      "items": [
+        "Comercial usa list_catalog_plans para ofertas vigentes y search_knowledge para condiciones y portabilidad. CRM aporta servicios y elegibilidad cuando corresponda.",
+        "Soporte recupera manuales por equipo y síntoma. Facturación recupera políticas y consulta las APIs autorizadas para importes, vencimientos y conceptos.",
+        "Conocimiento filtra por audiencia, canal y vigencia. Fusiona búsqueda léxica y vectorial y devuelve referencias citables."
       ]
     },
     {
       "dot": "rose",
-      "title": "Efectos y escalamiento",
+      "title": "Continuidad y cierre",
       "items": [
-        "El asesor confirma la propuesta y supervisión aprueba cuando la política lo exige. El outbox revalida el caso y confirma la escritura con un recibo idempotente de la API mock.",
-        "Con el permiso del caso, N2 o supervisión recibe historial, evidencia y pendientes. En el demo, Langfuse agrupa los mensajes saneados de autoservicio por sesión."
+        "La solicitud de asesor abre una espera. Después de la toma, el Copiloto sigue haciendo consultas breves y proponiendo respuestas privadas al asesor.",
+        "El caso permanece abierto entre turnos. La plataforma registra el cierre cuando el cliente confirma que su consulta quedó resuelta y quiere terminar.",
+        "La aprobación que corresponda habilita al outbox para revalidar permisos y registrar el efecto con recibo idempotente."
       ]
     }
   ]

@@ -117,3 +117,37 @@
 .knowledge-tags{display:flex;flex-wrap:wrap;gap:6px}
 .knowledge-stack summary{cursor:pointer}
 @media(max-width:820px){.knowledge-sources{grid-template-columns:minmax(0,1fr)}.knowledge-meta{grid-template-columns:minmax(0,1fr)}}
+
+.agent-model-panel {
+  display: grid;
+  gap: 14px;
+  margin-block: 14px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+.agent-model-panel h2 { margin: 0; font-size: 1.125rem; font-weight: 650; }
+.agent-model-panel p { margin: 0; }
+.agent-model-fields {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+}
+.agent-model-fields label { display: grid; gap: 5px; font-weight: 600; font-size: .85rem; }
+.agent-model-fields input, .agent-model-fields select {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  font: inherit;
+  font-weight: 400;
+}
+.agent-model-alternatives { display: flex; flex-wrap: wrap; gap: 10px 18px; }
+.agent-model-alternatives legend { font-weight: 600; font-size: .85rem; margin-block-end: 4px; }
+.agent-model-alternatives input { margin-inline-end: 6px; }
+.agent-model-table { overflow-x: auto; }
+.agent-model-table table { width: 100%; text-align: left; }
+.agent-model-table th, .agent-model-table td { padding: 8px; border-bottom: 1px solid var(--border); }
+.agent-model-table small { display: block; font-weight: 400; }

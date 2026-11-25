@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import type { AgentModelPolicy } from './agent-models.js';
+export * from './agent-models.js';
 
 export const Id = z.string().trim().min(1).max(128);
 export const Text = z.string().trim().min(1).max(4096);
@@ -90,7 +92,7 @@ export type ContextDomain = z.infer<typeof ContextDomain>;
 const ContextAction = z.enum(['consultar','listar','comparar','detallar','elegir','contratar','descargar','diagnosticar','confirmar','aclarar']);
 const ContextSlot = z.object({
   value: z.string().min(1).max(120).optional(), status: z.enum(['pendiente','inferido','confirmado']),
-  source: z.enum(['cliente','catalogo','plataforma']), turn: z.number().int().positive()
+  source: z.enum(['cliente','catalogo','plataforma']), turn: z.number().int().positive(), message_id:Id.optional()
 });
 const ContextFrame = z.object({
   intent: ContextDomain, action: ContextAction, last_turn: z.number().int().positive(),
@@ -99,7 +101,8 @@ const ContextFrame = z.object({
     options: z.array(CatalogPlan.pick({name:true,segment:true})).max(32).optional(),
     equipment: z.string().max(120).optional()
   }),
-  slots: z.record(Id,ContextSlot), intake: CaseIntake.optional(), catalogue: ConversationMemory.optional()
+  slots: z.record(Id,ContextSlot), last_reply: z.object({message_id:Id,actor:z.enum(['agente','asesor']),
+    turn_seq:z.number().int().positive(),sources:z.array(z.object({id:Id,version:z.string()})).max(32)}).optional(), intake: CaseIntake.optional(), catalogue: ConversationMemory.optional()
 });
 export const ConversationContext = z.object({
   version: z.literal(1), active: ContextDomain, transition: z.enum(['iniciar','continuar','cambiar','retomar','corregir']),
@@ -164,6 +167,7 @@ export const CaseSnapshot = CaseSummary.extend({
   }).optional(),
   ml: CaseMlSignals.optional(),
   handoff_reason: z.string().max(300).optional(),
+  customer_resolution: z.object({satisfied_message_id:Id,close_message_id:Id.optional()}).optional(),
   intake: CaseIntake.optional(),
   conversation_memory: ConversationMemory.optional(),
   conversation_context: ConversationContext.optional(),
@@ -198,8 +202,9 @@ export const AgentTurn = z.object({
   run_id: Id, case_id: Id, conversation_id: Id, turn_id: Id, channel: Channel, actor: Actor.exclude(['agente']),
   turn_seq: z.number().int().positive(), case_revision: z.number().int().positive(),
   attention_mode: AttentionMode, audience: Audience, scope_ref: Id, config_revision: Id,
+  prompt_manifest_digest: KnowledgeDigest.optional(), model_config_revision: Id.optional(), model_config_digest: KnowledgeDigest.optional(), knowledge_revision: z.union([KnowledgeDigest,z.literal('legacy')]).optional(),
   business_date: z.iso.date(), text: Text, traceparent: z.string().optional(),
-  observed_context: z.object({decision:z.enum(['ask','handoff','prepare_commercial_handoff']),question_id:Id.optional()}).optional()
+  observed_context: z.object({decision:z.enum(['ask','handoff','prepare_commercial_handoff','prepare_handoff','resolution_ready']),question_id:Id.optional()}).optional()
 });
 export type AgentTurn = z.infer<typeof AgentTurn>;
 export const RunResult = z.discriminatedUnion('type', [
@@ -207,7 +212,7 @@ export const RunResult = z.discriminatedUnion('type', [
     conversation_memory: ConversationMemory.optional(), conversation_context: ConversationContext.optional(), catalog_answer: z.literal(true).optional() }),
   z.object({ type: z.literal('handoff'), reason: Text, pending: Text, route: Id, verification_required: z.literal(true).optional(),
     commercial_plan: CatalogPlan.optional(), conversation_context: ConversationContext.optional() }),
-  z.object({ type: z.literal('card'), card: AdvisorCard, route: Id, conversation_context: ConversationContext.optional() }),
+  z.object({ type: z.literal('card'), card: AdvisorCard, route: Id, conversation_context: ConversationContext.optional(), conversation_memory: ConversationMemory.optional() }),
   z.object({ type: z.literal('failed'), reason: Id, route: Id })
 ]);
 export type RunResult = z.infer<typeof RunResult>;
@@ -219,6 +224,8 @@ export type RunResume = {
 export type AgentConfig = {
   revision: string;
   prompts: Record<string, string>;
+  modelPolicy?: AgentModelPolicy;
+  promptManifestDigest?:string;
   models?: Partial<Record<'economico' | 'intermedio' | 'complejo', string>>;
 };
 export type Retention = { eligible: boolean; reason: string; facts: Fact[]; policy: Citation; options: { id: string; title: string; detail: string }[] };
@@ -227,8 +234,8 @@ export class TransientReadError extends Error {
   constructor() { super('Read source temporarily unavailable'); }
 }
 export interface AgentPorts {
-  readCaseForRun(runId: string): Promise<{ messages: Message[]; verified: boolean; pending: string | null; intake?: CaseIntake; conversation_memory?: ConversationMemory; conversation_context?: ConversationContext; public_route?: Intent; confirmed_receipts?: ConfirmedReceipt[]; pending_support_handoff?: boolean }>;
-  getAgentConfig(revision: string): Promise<AgentConfig>;
+  readCaseForRun(runId: string): Promise<{ messages: Message[]; verified: boolean; pending: string | null; handoff_reason?:string; intake?: CaseIntake; conversation_memory?: ConversationMemory; conversation_context?: ConversationContext; public_route?: Intent; confirmed_receipts?: ConfirmedReceipt[]; pending_support_handoff?: boolean }>;
+  getAgentConfig(revision: string, modelRevision?: string, modelDigest?: string): Promise<AgentConfig>;
   getCustomerContext(runId: string): Promise<Fact[]>;
   listServices?(runId: string): Promise<Fact[]>;
   getBilling(runId: string): Promise<Fact[]>;

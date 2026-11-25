@@ -1,3 +1,4 @@
+import { AgentModelAdminController } from './agent-model-admin.js';
 import {
   BadRequestException, Body, Controller, ForbiddenException, Get, HttpException, Inject, Module, Param, Post, Query,
   Req, Res, ServiceUnavailableException, UnauthorizedException, type DynamicModule
@@ -463,7 +464,7 @@ class PlatformController {
 export class ApiModule {
   static create(auth: Auth): DynamicModule {
     return {
-      module: ApiModule, controllers: [PlatformController, PlatformEvolutionController, HealthController, WebChatController, KnowledgeAdminController, KnowledgeSourceController],
+      module: ApiModule, controllers: [PlatformController, PlatformEvolutionController, HealthController, WebChatController, KnowledgeAdminController, KnowledgeSourceController, AgentModelAdminController],
       providers: [Cases, IntegrationOperations, PromptReleases, { provide: AUTH, useValue: auth }, {
         provide: DATABASE,
         async useFactory() {

@@ -16,6 +16,15 @@ const featureQuestion = /^(?:(.*?) )?(?:incluye|trae|tiene|cuenta con) (.+)$/;
 const detailFollowUp = /^(?:y )?(?:(?:el|la|los|las) )?(roaming|velocidad|vigencia|condiciones|beneficios)$/;
 const detailAlias = /^(?:(?:el|la) )?(?:(?:plan|paquete) )?(?:de )?(?:ilimitad[oa]|\d+\s*(?:gb|mbps)|semanal|mensual|diario)$/;
 
+function referenceText(value: string) {
+  return words(value).replace(/^(?:(?:en|de|del|sobre|el|la|un|una)\s+)+/, '').replace(/\s+por favor$/, '');
+}
+
+function matchesPlanReference(target: string, name: string) {
+  const product=words(name);
+  return !!target && (product===target || target.includes(' ') && product.endsWith(` ${target}`));
+}
+
 export function commercialRequest(text: string, contextualText: string, memory?: ConversationMemory): CatalogRequest | undefined {
   const query = clean(text);
   const reply = clean(contextualText);
@@ -46,6 +55,10 @@ export function commercialRequest(text: string, contextualText: string, memory?:
     /\b(?:plan|paquete|catalogo|gb|mbps|ilimitad[oa])\b/.test(query);
   if (hasCommercialSubject && price.test(query)) return request('price');
   if (hasCommercialSubject && (overview.test(query) || featureQuestion.test(query) || detailFollowUp.test(query))) return request('detail');
+  const reference=referenceText(query);
+  if (memory?.presented_plans?.some(plan=>matchesPlanReference(reference,plan.name)) ||
+      memory?.focused_plan && matchesPlanReference(reference,memory.focused_plan.name) ||
+      memory?.selected_plan && matchesPlanReference(reference,memory.selected_plan.name)) return request('detail');
 }
 
 const money = (price: number) => '$' + new Intl.NumberFormat('es-CO').format(price);
@@ -103,7 +116,7 @@ export function answerCommercial(request: CatalogRequest, plans: CatalogPlan[], 
   const {action, groups, query} = request;
   const selected = memory?.selected_plan;
   const scoped = plans.filter(plan => !groups.length || groups.includes(plan.segment));
-  const answer = (text: string, used: CatalogPlan[], next = memory): RunResult => ({ type:'answer', route:'consulta_planes',
+  const answer = (text: string, used: CatalogPlan[], next = memory): Extract<RunResult,{type:'answer'}> => ({ type:'answer', route:'consulta_planes',
     answer:text, citations:citations(used), conversation_memory:next, ...(used.length ? {catalog_answer:true} : {}) });
   const focusOn = (plan: CatalogPlan): ConversationMemory => ({...memory,focused_plan:{name:plan.name,segment:plan.segment}});
   const remember = (plan: CatalogPlan, confirmation = false): ConversationMemory => ({
@@ -145,11 +158,15 @@ export function answerCommercial(request: CatalogRequest, plans: CatalogPlan[], 
   // A full published name can change the topic. Short descriptions refer to the options shown.
   const overviewQuestion = action==='detail' ? query.match(overview) : null;
   const feature = action==='detail' && !overviewQuestion ? query.match(featureQuestion) : null;
-  const target = action==='detail' ? overviewQuestion?.[1] ?? (feature?.[1]==='y' ? '' : feature?.[1] ?? '') : query;
+  const target = action==='detail' ? referenceText(overviewQuestion?.[1] ?? (feature ? feature[1]==='y' ? '' : feature[1] ?? ''
+    : detailFollowUp.test(query) ? '' : query)) : query;
   const named = scoped.filter(plan => (` ${words(target)} `).includes(` ${words(plan.name)} `));
   const offered = !groups.length ? memory?.offered_segments : undefined;
   const references = offered ? scoped.filter(plan=>offered.includes(plan.segment)) : scoped;
-  const options = named.length || action==='detail' && !detailAlias.test(target) ? named : matchingDescription(target, references);
+  const partialNames = named.length || detailAlias.test(referenceText(target)) ? []
+    : references.filter(plan=>matchesPlanReference(referenceText(target),plan.name));
+  const options = named.length ? named : partialNames.length ? partialNames
+    : action!=='detail' || detailAlias.test(target) ? matchingDescription(target,references) : [];
   const currentSelection = selected && scoped.find(plan => sameProduct(plan, selected));
   const focus = memory?.focused_plan;
   const currentFocus = focus && scoped.find(plan=>sameProduct(plan,focus));
@@ -181,7 +198,9 @@ export function answerCommercial(request: CatalogRequest, plans: CatalogPlan[], 
   }
   if (action === 'price') return current ? answer(`${current.name} cuesta ${offerPrice(current)}.`, [current], focusOn(current)) : undefined;
   if (action === 'detail') {
-    if (!current) return memory?.offered_segments?.length ? answer('¿De cuál de los planes que te mostré quieres conocer los detalles?', []) : undefined;
+    if (!current) return memory?.offered_segments?.length ? {
+      ...answer('¿De cuál de los planes que te mostré quieres conocer los detalles?', []),needs_clarification:true
+    } : undefined;
     const next = focusOn(current);
     const {benefits,condition} = publishedDetails(current,plans);
     const subject = feature?.[2] ?? query.match(detailFollowUp)?.[1];

@@ -310,6 +310,8 @@ Medir las metas del reto, con exactitud golden ≥80 %, groundedness ≥0,85, Re
 
 ## Orden de implementación
 
+El [plan Multi-LLM y RAG](orquestacion-multillm-y-rag.md) amplía este corte con selección de modelos por superadmin, persistencia de la política en PostgreSQL, contexto de hasta 15 mensajes y recuperación por dominio. Las suites y resultados anteriores sirven de base para ese A/B.
+
 1. Verificar la importación y obtener la corrida base nativa de las 15 llamadas. Registrar sus 30 scores, rutas, revisión y huella antes de editar prompts. Preparar aparte los fixtures de generalización.
 2. Incorporar la instrucción base como candidata, el contrato interno de decisión y los límites en el worker. Mantener la lectura de manifiestos anteriores y verificar por traza qué versión intervino realmente en cada paso.
 3. Adaptar los tres subgrafos y los resúmenes a objetivos pendientes, evidencia referenciada y recibos. Demostrar primero el recorrido asistido de GEN-01 y repetir con indisponibilidad, cambio de intención y autoservicio.

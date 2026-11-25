@@ -19,7 +19,7 @@ const vocabulary = new Set((
   'internet fibra hogar plan planes triple play max movil moviles pospago precio cuanto cuanta incluye bono ' +
   'instalacion reconecta reconexion permanencia penalidad clausula regulacion prorrateo costo cargo compensacion ' +
   'ajuste tarifa pqr plazo pin nip deuda deudas requisitos usuario clave contrasena recargo suspender restablezco ' +
-  'restablecer reinicio fabrica control parental antiguedad nuevo actuales cambiar cobertura velocidad promocion ' +
+  'restablecer reinicio fabrica control parental antiguedad nuevo actuales cambiar cobertura incluye trae elegir quedo contratar descargar resuelto cerrar celular hogar pagar vence pospago prepago primero segundo tercero mismo ese esa antes ahora prioritaria velocidad promocion ' +
   'descuento factura pago financiado financiacion soporte modem wifi decodificador television televisor tv senal error refrescar reiniciar ' +
   'pantalla canal canales azul negro rojo luz luces intermitente parpadea sin con no funciona repetidor ilimitado ' +
   'datos minutos mensajes red portabilidad cancelar cancelacion politica retencion elegibilidad requisitos mora visita ticket esim roaming compatibilidad apple watch intermitencia videollamada videollamadas recurrencia recurrentes fallas prioritaria'

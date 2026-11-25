@@ -1,5 +1,6 @@
-import { ContextDomain, type AgentPorts, type AgentTurn, type CaseIntake, type ConversationContext, type ConversationMemory, type RunResult } from '@claro/contracts';
+import { ContextDomain, type AgentPorts, type AgentTurn, type CaseIntake, type ConversationContext, type ConversationMemory, type Message, type RunResult } from '@claro/contracts';
 import { commercialRequest } from './commercial.js';
+import type { Extracted } from './turn-brief.js';
 import { contextIntent, evolveContext, recordQuestion } from './context.js';
 
 type CaseState = Awaited<ReturnType<AgentPorts['readCaseForRun']>>;
@@ -70,7 +71,7 @@ function resolvePresentedOption(text:string, memory?:ConversationMemory) {
 export function prepareConversation(turn:AgentTurn, state:CaseState) {
   const before=state.conversation_context;
   const reading=interpretConversation(turn.text,before);
-  const eligible=turn.actor==='cliente' && turn.audience==='cliente' && turn.attention_mode==='autoservicio';
+  const eligible=turn.actor==='cliente';
   if (!eligible) return {turn,state,before,reading,unresolved:false,domain:undefined};
   const foreignIntent=contextIntent(turn.text);
   const priorOutsideDomain=state.intake && !domainOf(state.intake.intent);
@@ -91,7 +92,7 @@ export function prepareConversation(turn:AgentTurn, state:CaseState) {
 
 function makeFrame(domain:ContextDomain, action:Frame['action'], turn:number, old:Frame|undefined,
   intake?:CaseIntake, catalogue?:ConversationMemory, account?:{kind:'invoice'|'balance';verified:boolean}):Frame {
-  const slots: Frame['slots'] = {};
+  const slots: Frame['slots'] = Object.fromEntries(Object.entries(old?.slots ?? {}).filter(([,slot])=>slot.status==='inferido' && slot.message_id));
   const put=(key:string,value: string | undefined,source:Frame['slots'][string]['source'],status:Frame['slots'][string]['status'])=>{
     const previous=old?.slots[key];
     slots[key]=previous && previous.value===value && previous.source===source && previous.status===status
@@ -115,7 +116,7 @@ function makeFrame(domain:ContextDomain, action:Frame['action'], turn:number, ol
   return {intent:domain,action,last_turn:turn,entities:{
     ...(plan ? {plan:{name:plan.name,segment:plan.segment}} : {}),
     options:catalogue?.presented_plans,equipment:domain==='soporte_tecnico' ? intake?.facts.equipo : undefined
-  },slots,intake,catalogue};
+  },slots,intake,catalogue,last_reply:old?.last_reply};
 }
 
 function transitionOf(before:ConversationContext|undefined, domain:ContextDomain, correction:boolean):Transition {
@@ -131,21 +132,21 @@ function updateContext(before:ConversationContext|undefined, frame:Frame, variab
 
 const actions = {list:'listar',select:'elegir',price:'consultar',detail:'detallar',download:'descargar',purchase:'contratar'} as const;
 
-export function finishConversation(prepared:ReturnType<typeof prepareConversation>, result:RunResult, turn:AgentTurn):ConversationContext|undefined {
+export function finishConversation(prepared:ReturnType<typeof prepareConversation>, result:RunResult, turn:AgentTurn, extracted?:Extracted):ConversationContext|undefined {
   const {before,state,reading}=prepared;
   const domain=domainOf(result.route);
-  if (result.type==='failed' || !domain || turn.actor!=='cliente' || reading.ambiguous) return;
+  if (result.type==='failed' || !domain || turn.actor!=='cliente' || (reading.ambiguous && extracted?.intent!==domain)) return;
   const old=before?.frames[domain];
   const grounded=result.type==='answer' && (result.citations.length || result.context_question)
     || result.type==='handoff' && (result.verification_required || result.commercial_plan)
     || result.type==='card' && result.card.intent===domain;
-  if (reading.domain!==domain && before?.active!==domain && prepared.domain!==domain && !grounded) return;
+  if (reading.domain!==domain && before?.active!==domain && prepared.domain!==domain && extracted?.intent!==domain && !grounded) return;
   const previous=state.intake?.intent===domain ? state.intake : old?.intake;
   const intake=evolveIntake(prepared.turn.text,domain,previous);
   const question=result.type==='answer' ? result.context_question : result.type==='card' ? result.card.context_question : undefined;
   if (intake && question) recordQuestion(intake,question);
   const priorCatalogue=old?.catalogue ?? state.conversation_memory;
-  const catalogue=domain!=='consulta_planes' ? undefined : result.type==='answer'
+  const catalogue=domain!=='consulta_planes' ? undefined : (result.type==='answer' || result.type==='card')
     ? result.conversation_memory ?? priorCatalogue
     : result.type==='handoff' && result.commercial_plan ? {...priorCatalogue,selected_plan:result.commercial_plan} : priorCatalogue;
   const request=domain==='consulta_planes' ? commercialRequest(prepared.turn.text,prepared.turn.text,priorCatalogue) : undefined;
@@ -154,6 +155,17 @@ export function finishConversation(prepared:ReturnType<typeof prepareConversatio
       : domain==='soporte_tecnico' ? intake?.facts.imagen ? 'confirmar' : 'diagnosticar' : 'consultar';
   const edition=domain==='consulta_planes' && result.type==='answer' ? result.citations.find(citation=>/^CAT-/.test(citation.version))?.version : undefined;
   const frame=makeFrame(domain,action,turn.turn_seq,old,intake,catalogue);
+  for (const slot of Object.values(frame.slots)) {
+    if (slot.source==='cliente' && slot.turn===turn.turn_seq) slot.message_id=turn.turn_id;
+  }
+  if (extracted?.intent===domain) {
+    if (!request && !prepared.unresolved && !question) frame.action=extracted.action;
+    for (const slot of extracted.slots) {
+      const previous=frame.slots[slot.key];
+      if (previous?.status==='confirmado' || (previous?.turn ?? 0)>slot.turn) continue;
+      frame.slots[slot.key]={value:slot.value,source:'cliente',status:'inferido',turn:slot.turn,message_id:slot.message_id};
+    }
+  }
   return updateContext(before,frame,{channel:turn.channel,business_date:turn.business_date,config_revision:turn.config_revision,
     verified:state.verified,awaiting_advisor:!!state.pending,catalogue_version:edition ?? before?.variables.catalogue_version},reading.correction);
 }
@@ -168,12 +180,21 @@ export function platformBillingContext(before:ConversationContext|undefined, inp
     {...variables,catalogue_version:before?.variables.catalogue_version},reading.correction);
 }
 
+export function recordPublishedReply(context:ConversationContext|undefined,message:Message,route?:string) {
+  if (!context || message.actor==='cliente' || message.verification_input) return;
+  const domain=route ? domainOf(route) : context.active;
+  const frame=domain && context.frames[domain];
+  if (!frame) return;
+  frame.last_reply={message_id:message.id,actor:message.actor,turn_seq:message.turn_seq,
+    sources:(message.citations ?? []).slice(0,32).map(({id,version})=>({id,version}))};
+}
+
 export function traceConversation(context:ConversationContext|undefined) {
   if (!context) return null;
   const frames=Object.fromEntries(Object.entries(context.frames).map(([domain,frame])=>[domain,{
     action:frame.action,last_turn:frame.last_turn,entity:frame.entities.plan?.name,
-    options:frame.entities.options?.length,
-    slots:Object.fromEntries(Object.entries(frame.slots).map(([key,{status,source,turn}])=>[key,{status,source,turn}]))
+    options:frame.entities.options?.length,last_reply:frame.last_reply,
+    slots:Object.fromEntries(Object.entries(frame.slots).map(([key,{status,source,turn,message_id}])=>[key,{status,source,turn,message_id}]))
   }]));
   return {version:context.version,intent:context.active,transition:context.transition,frames,variables:context.variables};
 }

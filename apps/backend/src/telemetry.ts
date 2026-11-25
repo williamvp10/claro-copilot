@@ -8,7 +8,7 @@ import { runtimeSha256 } from './runtime-revision.js';
 
 export const traceIdentifier = (runId: string) => createHash('sha256').update(runId).digest('hex').slice(0,32);
 
-type TraceTurn = Pick<AgentTurn,'run_id'|'conversation_id'|'channel'|'audience'|'config_revision'>;
+type TraceTurn = Pick<AgentTurn,'run_id'|'conversation_id'|'channel'|'audience'|'config_revision'|'knowledge_revision'|'model_config_revision'|'model_config_digest'|'prompt_manifest_digest'>;
 type TraceExchange = {input: string; output: string};
 
 function traceText(text: string) {
@@ -29,7 +29,13 @@ function stepExchange({name,metadata}: AgentObservation): Record<string,string> 
     {messages:metadata.history_count,first_turn:metadata.first_turn_seq,last_turn:metadata.last_turn_seq});
   if (metadata.step_id==='resolve_turn') return io({decision:metadata.decision,context_route:metadata.context_route},
     {intent:metadata.intent,profile:metadata.profile,continuation:metadata.continuation});
-  if (metadata.step_id==='plan_objectives') return io({primary:metadata.primary}, {objectives:metadata.objectives,investigated:metadata.investigated});
+  if (name==='model.call') return io({step:metadata.step_id,profile:metadata.profile,requested_model:metadata.requested_model},
+    {provider:metadata.provider,effective_model:metadata.effective_model,status:metadata.status});
+  if (name==='context.extract') return io({revision:metadata.extractor_version},
+    {intent:metadata.intent,action:metadata.action,slots:metadata.slots,status:metadata.status});
+  if (name==='orchestrator.delegate') return io({objectives:metadata.objectives,mode:metadata.mode},
+    {findings:metadata.findings,status:metadata.status});
+  if (name==='orchestrator.plan') return io({primary:metadata.primary}, {objectives:metadata.objectives,investigated:metadata.investigated});
   if (name==='retrieval' && metadata.step_id==='retrieve_knowledge') return io({source:metadata.source,tags:metadata.tags,index:metadata.index_revision},
     {count:metadata.count,passages:metadata.top_5,attempts:metadata.attempts});
   if (name==='catalogue.selection') return io({request:metadata.reference_resolution,context_route:metadata.context_route,focused:metadata.focused},
@@ -63,7 +69,10 @@ export async function exportAgentSpan(turn: TraceTurn, started: number, route: s
       'claro.audience': turn.audience,
       'claro.result': result,
       'claro.config_revision': turn.config_revision,
-      'claro.index_revision': activeKnowledgeRevision(),
+      ...(turn.prompt_manifest_digest ? {'claro.prompt_manifest_digest':turn.prompt_manifest_digest} : {}),
+      'claro.index_revision': turn.knowledge_revision ?? activeKnowledgeRevision(),
+      ...(turn.model_config_revision ? {'claro.model_config_revision':turn.model_config_revision} : {}),
+      ...(turn.model_config_digest ? {'claro.model_config_digest':turn.model_config_digest} : {}),
       'claro.runtime_sha256': runtimeSha256
     };
     const root = createHash('sha256').update(`root:${turn.run_id}`).digest('hex').slice(0,16);
@@ -114,7 +123,7 @@ export async function exportAgentSpan(turn: TraceTurn, started: number, route: s
       }
       if (externalModel) {
         const {model,input_tokens,output_tokens,cost_usd}=item.metadata;
-        if (typeof model==='string') metadata['langfuse.observation.model.name']=model;
+        if (typeof model==='string' && model) metadata['langfuse.observation.model.name']=model;
         if (typeof input_tokens==='number' || typeof output_tokens==='number') {
           metadata['langfuse.observation.usage_details']=JSON.stringify({input:input_tokens,output:output_tokens});
         }

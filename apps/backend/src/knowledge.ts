@@ -81,12 +81,12 @@ export function knowledgeCorpus(db:Db, revision=activeKnowledgeRevision()):Promi
     db.query('SELECT id,version,document FROM knowledge_contextual_document WHERE revision=$1 ORDER BY id,version',[revision]);
 }
 
-export function configuredKnowledge(db: Pick<DataSource,'query'>) {
+export function configuredKnowledge(db: Pick<DataSource,'query'>,revision=activeKnowledgeRevision()) {
   const url=process.env.KNOWLEDGE_MCP_URL;
   const token=process.env.KNOWLEDGE_SERVICE_TOKEN;
-  return url && token
-    ? {adapter:createKnowledgeMcpAdapter({url,token,trustedLocal:true,revision:activeKnowledgeRevision()}),transport:'mcp' as const}
-    : {adapter:databaseKnowledge(db),transport:'postgres' as const};
+  return url && token && revision===activeKnowledgeRevision()
+    ? {adapter:createKnowledgeMcpAdapter({url,token,trustedLocal:true,revision}),transport:'mcp' as const}
+    : {adapter:databaseKnowledge(db,revision),transport:'postgres' as const};
 }
 
 export async function hasKnowledgeEmbedding(db: Db,revision=activeKnowledgeRevision()):Promise<boolean> {

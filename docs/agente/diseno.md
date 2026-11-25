@@ -1,6 +1,6 @@
 # SDD de agente, conocimiento y LLMOps
 
-El [spec del próximo corte](../evolucion-mvp/comportamiento-del-agente.md) define la decisión por objetivos, el contexto confiable del turno y las pruebas de generalización sobre los tres subgrafos del demo.
+El [plan del próximo corte](../evolucion-mvp/orquestacion-multillm-y-rag.md) define el contexto compartido de hasta 15 mensajes, la selección Multi-LLM por superadmin y el uso de RAG de los tres subgrafos. El [spec de comportamiento](../evolucion-mvp/comportamiento-del-agente.md) conserva las pruebas de generalización y su evidencia.
 
 [Propuesta de orquestador, subagentes, MCPs y prompts para el siguiente corte](../evolucion-mvp/agente-y-prompts.md) · [Catálogo JSON de arranque](../evolucion-mvp/prompts.claro-copiloto.json)
 
@@ -42,7 +42,7 @@ En Langfuse, abre **Sessions**, selecciona la conversación y busca la observaci
 
 La suite [`claro-contexto-conversacional-v1`](contexto-conversacional-evals.v1.jsonl) cubre 29 turnos en dos chats, referencias ordinales, cambio de tema, correcciones, retomadas y verificación. Usa el mismo juez nativo que las 15 llamadas y las 10 conversaciones de contratación. Importa la suite con `node --env-file=.env.demo.local scripts/bootstrap-langfuse-calls.mjs --context --dataset-only` y ejecuta `node apps/backend/scripts/eval-commercial-web.mjs TARGETS.json REPORT.json --context --publish --require-pass` con un demo sintético y su fixture `standard`. El reporte comprueba también la elección, las esperas, la edición del PDF y las lecturas autorizadas. La entrada del juez incluye la transición, el nombre del plan público elegido y el estado de verificación que observó la prueba. Los dos puntajes nativos de Jev se consultan en el experimento publicado.
 
-La generación, el análisis de casos y los subagentes usan **OpenAI Responses API directamente**. Seleccionar perfiles por dificultad, calidad esperada, presupuesto y latencia. OpenRouter se usa solo para Jev. El lanzamiento fija modelos y límites en el manifiesto y registra ruta, proveedor, consumo y resultado en Langfuse. El cambio de modelo durante un turno respeta el presupuesto y el contexto autorizado. [Perfiles, límites y re-ranking](enrutamiento-y-reranking.md) · [TypeSafe en OpenRouter](https://openrouter.ai/typesafe) · [Modelos OpenAI](https://developers.openai.com/api/docs/models)
+En el código actual, los adaptadores en vivo de atención usan **OpenAI Responses API directamente** y OpenRouter aloja el evaluador Jev. El próximo corte incorpora modelos alternativos de OpenRouter bajo una política aprobada, con OpenAI directo por defecto y revisiones de modelos independientes de las plantillas. [Perfiles, límites y re-ranking](enrutamiento-y-reranking.md) · [Plan Multi-LLM](../evolucion-mvp/orquestacion-multillm-y-rag.md)
 
 ## Memoria y persistencia
 

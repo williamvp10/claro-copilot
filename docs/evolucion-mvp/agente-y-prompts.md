@@ -1,6 +1,6 @@
 # Orquestador, subagentes, herramientas y prompts
 
-[Diagrama Archify](diagramas/arquitectura-agente.html) · [Catálogo de prompts y pasos en JSON](prompts.claro-copiloto.json) · [Arquitectura y aceptación](arquitectura-y-aceptacion.md)
+[Plan Multi-LLM y RAG](orquestacion-multillm-y-rag.md) · [Diagrama Archify](diagramas/arquitectura-agente.html) · [Catálogo de prompts y pasos en JSON](prompts.claro-copiloto.json) · [Arquitectura y aceptación](arquitectura-y-aceptacion.md)
 
 ## Orquestación propuesta
 
@@ -46,7 +46,7 @@ El grafo registra el propósito tipado de cada lectura y aplica permisos por dom
 
 | Servidor | Tools de lectura del demo | Contraparte |
 | --- | --- | --- |
-| **MCP Conocimiento** existente | `search_knowledge` / filtros de audiencia, producto, canal y vigencia, top-k acotado, citas y fechas. | Índice de PostgreSQL con pgvector. |
+| **MCP Conocimiento** existente | `search_knowledge` para pasajes con citas y `list_catalog_plans` para ofertas vigentes. Filtrar por ámbito y fecha de negocio. | Índice de PostgreSQL con pgvector. |
 | **MCP CRM** | `crm.get_customer_context`, `crm.list_services`, `crm.list_recent_tickets`, `crm.evaluate_retention`. | CRM · API mock, mediante los adaptadores HTTP y la evaluación de elegibilidad. |
 | **MCP Facturación** | `billing.get_balance`, `billing.list_invoices`, `billing.get_invoice_detail` con identificador de factura validado. | Facturación · API mock. |
 
@@ -56,7 +56,7 @@ El JSON asigna una lista de tools a cada subagente y a cada paso de lectura. El 
 | --- | --- |
 | Soporte | `search_knowledge`, `crm.list_services`, `crm.list_recent_tickets`. Consultar CRM con titularidad vigente y cuando el servicio o los antecedentes cambien el diagnóstico. |
 | Facturación | `search_knowledge`, `billing.get_balance`, `billing.list_invoices`, `billing.get_invoice_detail`. Agregar `crm.list_services` para contrastar el plan vinculado cuando el cargo lo requiera. |
-| Comercial y portabilidad | `search_knowledge`, `crm.get_customer_context`, `crm.list_services`, `crm.evaluate_retention`. Si aparecen fallas recurrentes, el orquestador puede activar la lectura `crm.list_recent_tickets` mediante el paso autorizado de Soporte. |
+| Comercial y portabilidad | `list_catalog_plans`, `search_knowledge`, `crm.get_customer_context`, `crm.list_services`, `crm.evaluate_retention`. Si aparecen fallas recurrentes, el orquestador puede activar la lectura `crm.list_recent_tickets` mediante el paso autorizado de Soporte. |
 
 La rama comercial delega la comprobación de recurrencia al subgrafo Soporte. Si faltan los antecedentes técnicos, la ficha deja esa consulta pendiente antes de evaluar una oferta. La traza usa `review_recurrence` para la lectura de tickets.
 

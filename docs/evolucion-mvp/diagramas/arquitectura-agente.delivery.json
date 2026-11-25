@@ -1,17 +1,17 @@
 {
   "schemaVersion": 1,
-  "receiptId": "1906105b-d259-4f79-9c4f-cde08e771e1e",
+  "receiptId": "2b9c8f8c-f70d-4fcd-9571-d9ef87e58fd2",
   "status": "current",
   "command": "deliver",
   "type": "architecture",
   "input": "/Users/williamvasquez/Library/CloudStorage/OneDrive-Personal/Desarrollo/Pruebas tecnicas/Líder Técnico AI Senior Hitss/claro-copilot/docs/evolucion-mvp/diagramas/candidate.json",
   "output": "/Users/williamvasquez/Library/CloudStorage/OneDrive-Personal/Desarrollo/Pruebas tecnicas/Líder Técnico AI Senior Hitss/claro-copilot/docs/evolucion-mvp/diagramas/arquitectura-agente.html",
   "specification": {
-    "sha256": "1131f5ced7f0c3a0cbe1f7e7f0806f78291575d752d3c6d041f0c6f85a9014ad",
-    "bytes": 11066
+    "sha256": "56d753a1ce26940a7947ecca12733a53dbf214b450c8d6494a3ceb470d2d8311",
+    "bytes": 14001
   },
   "artifact": {
-    "sha256": "a06bff7128ff65cb69aa3ae3d8d4e54d8b20058d078f318332b69fb9eb67950e",
-    "bytes": 880369
+    "sha256": "549c97969f27754f73846d3fa519299710eb888fc662c7bb0e2d057eb97ae360",
+    "bytes": 895873
   }
 }

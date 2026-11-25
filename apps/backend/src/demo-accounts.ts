@@ -28,11 +28,6 @@ export function accountInquiry(text: string): AccountInquiry | null {
   return null;
 }
 
-export function requestedAdvisor(text: string) {
-  return /\b(?:hablar|comunicarme|comunicar|atencion)\s+(?:con|de)\s+(?:un |una )?(?:asesor|asesora|humano|persona)\b|\b(?:quiero|necesito|prefiero|pasame con|comunican?me con)\s+(?:que me (?:ayude|atienda) )?(?:un |una |el |la )?asesor(?:a)?\b|^\s*asesor(?:a)?[.!?]?\s*$/i
-    .test(text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
-}
-
 export function isGreeting(text:string) {
   const value=text.trim();
   return /^(?:hola|buen(?:os|as)? (?:días|dias|tardes|noches)|saludos)[.!¡!,\s]*$/i.test(value) ||

@@ -141,10 +141,23 @@ export function runPromptConfig(row: Pick<PromptRevisionRow, 'revision' | 'promp
   return { revision: row.revision, prompts, prompt_metadata };
 }
 
-export async function readRunPromptConfig(db: DataSource | EntityManager, revision: string): Promise<RunPromptConfig> {
+export function runPromptDigest(config:RunPromptConfig) {
+  return digestText(JSON.stringify(Object.entries(config.prompt_metadata).sort(([a],[b])=>a.localeCompare(b))
+    .map(([key,value])=>[key,value.version,value.sha256])));
+}
+
+export async function readRunPromptConfig(db: DataSource | EntityManager, revision: string, includeTurnBrief=false): Promise<RunPromptConfig> {
   const [row]: PromptRevisionRow[] = await db.query('SELECT revision,prompts,manifest FROM prompt_revision WHERE revision=$1', [revision]);
   if (!row) return { revision, prompts: {}, prompt_metadata: {} };
-  return runPromptConfig(row);
+  const config=runPromptConfig(row);
+  if (includeTurnBrief) for (const key of ['conversation_extract','orchestrated_public_answer']) {
+    if (config.prompts[key]) continue;
+    const definition=definitions.get(key)!;
+    const {template,...metadata}=promptEntry(key,definition.template,'git_bootstrap');
+    config.prompts[key]=template;
+    config.prompt_metadata[key]=metadata;
+  }
+  return config;
 }
 
 export function presentRevision(row: PromptRevisionRow, base?: PromptRevisionRow) {

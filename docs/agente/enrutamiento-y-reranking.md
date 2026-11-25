@@ -1,31 +1,31 @@
 # Enrutamiento, clasificación y re-ranking del agente
 
-LangGraph coordina la recuperación de evidencia, los permisos y las reglas de negocio. En modo vivo puede usar **OpenAI Responses API** para redactar y **Jev 1.14 de TypeSafe por OpenRouter** para clasificar. La plataforma aprueba y ejecuta acciones. El clasificador clásico publicado en MLflow aporta una señal para el asesor y permite comparar su desempeño con etiquetas humanas.
+LangGraph coordina la recuperación de evidencia, los permisos y las reglas de negocio. En modo vivo usa **OpenAI Responses API** para las llamadas habilitadas. **Jev 1.14 de TypeSafe por OpenRouter** se usa en evaluaciones. La plataforma aprueba y ejecuta acciones. El clasificador clásico publicado en MLflow aporta una señal en sombra.
 
-El worker NestJS usa `OPENAI_API_KEY` para la generación en vivo y `OPENROUTER_API_KEY` para el adaptador de Jev. [SDD del agente](diseno.md) · [Contratos](../04-contratos.md) · [Jev en OpenRouter](https://openrouter.ai/docs/guides/community/jev)
+El worker NestJS usa `OPENAI_API_KEY` para la generación en vivo. El [plan Multi-LLM y RAG](../evolucion-mvp/orquestacion-multillm-y-rag.md) describe la ampliación a modelos alternativos aprobados por superadmin con `OPENROUTER_API_KEY` y el presupuesto por llamada. [SDD del agente](diseno.md) · [Contratos](../04-contratos.md) · [Jev en OpenRouter](https://openrouter.ai/docs/guides/community/jev)
 
 ## Qué decide cada componente
 
 | Componente | Decisión |
 | --- | --- |
 | Reglas y estado de LangGraph | Aplican autorización, canal, prioridad de derivación, aprobación y capacidad disponible. También determinan qué ruta y modelos pueden usarse según la evidencia y el presupuesto. |
-| Jev | Devuelve intención y complejidad como categorías con probabilidades. Es una llamada tipada; el grafo consume los valores y decide la transición permitida. |
+| Jev | Evalúa la calidad semántica y continuidad de las respuestas en las suites. |
 | LLM directo de OpenAI | Redacta y sintetiza con evidencia, y puede resolver un objetivo compuesto usando herramientas de lectura previamente habilitadas. El esfuerzo de razonamiento se fija en el perfil de la ruta. |
 | Reranker local | Reordena los pasajes autorizados para que el LLM reciba primero la evidencia más relevante. |
 | Selector remoto de evidencia | En la candidata, puede reordenar pasajes públicos aprobados si las comprobaciones locales todavía requieren una respuesta. Recibe señales categóricas de los pasajes. |
-| ML clásico | Devuelve predicción de intención y versión de modelo en paralelo, fuera de la latencia visible. La predicción se compara con Jev y etiquetas revisadas. |
+| ML clásico | Devuelve predicción de intención y versión de modelo en paralelo, fuera de la latencia visible. La predicción se compara con etiquetas revisadas. |
 
 ### Flujo por turno
 
 1. LangGraph valida el ámbito, fija la revisión y aplica guardas de prioridad. Aplica la regla de derivación cuando corresponda. En atención humana mantiene activo el análisis del diálogo y dirige el resultado a la ficha privada del asesor.
-2. Para un objetivo nuevo o ambiguo, manda a Jev el turno saneado y, si hace falta, un resumen mínimo del propósito reciente. Para una respuesta breve que completa una pregunta ya formulada, conserva el propósito registrado en el hilo. La inferencia clásica se despacha aparte.
+2. Para un objetivo nuevo o ambiguo, el orquestador interpreta el turno y el contexto disponible. Para una respuesta breve que completa una pregunta ya formulada, conserva el propósito registrado en el hilo. La inferencia clásica se despacha aparte.
 3. El grafo toma la intención y complejidad como señales. Recupera fuentes vigentes, hechos de cuenta autorizados o ambas cosas. Si la señal está cerca del límite o falta un dato que cambia la ruta, formula una pregunta concreta. Los datos de un cliente se derivan de su vínculo validado por plataforma.
 4. Selecciona el nivel de modelo con criterio determinista según cantidad de objetivos, dependencias, evidencia disponible y presupuesto. Ejecuta la síntesis y comprueba cifras, fechas, estado de acciones y citas. Envía al usuario solo la salida que supera estas comprobaciones.
 5. Si el resultado propone un efecto, crea una propuesta interna y pausa el run. La aprobación de plataforma reanuda el estado registrado con el resultado real. [Playbook de atención, agentes y Evals](atencion-prompts-y-evals.md) · [Contratos de aprobación](../04-contratos.md#aprobación-y-efecto)
 
-## Jev de TypeSafe por OpenRouter
+## Clasificador Jev histórico para replays
 
-Usar **`typesafe/jev-1.14`** mediante `POST https://openrouter.ai/api/alpha/decisions` con `Authorization: Bearer <OPENROUTER_API_KEY>`. El contrato nativo toma `state` y `questions` y devuelve `answers`. El endpoint es alpha. Encapsularlo en un adaptador, validar sus campos al recibirlos y ejecutar un smoke antes de promover. Fijar el ID de familia en el manifiesto y capturar el identificador efectivo devuelto por la API. [Referencia de Decisions](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request) · [Catálogo Jev 1.14](https://openrouter.ai/typesafe/jev-1.14)
+La configuración histórica usaba **`typesafe/jev-1.14`** mediante `POST https://openrouter.ai/api/alpha/decisions` con `Authorization: Bearer <OPENROUTER_API_KEY>`. El contrato nativo toma `state` y `questions` y devuelve `answers`. El ejemplo y sus umbrales permiten interpretar los replays históricos. [Referencia de Decisions](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request) · [Catálogo Jev 1.14](https://openrouter.ai/typesafe/jev-1.14)
 
 Ejemplo de petición para un turno público. La plataforma ya depuró el texto y suministró el canal como contexto.
 
@@ -112,7 +112,7 @@ PostgreSQL filtra los pasajes publicados por audiencia, vigencia y canal. La rec
 
 ## Trazas, controles de administración y promoción
 
-El panel debe exponer perfiles de modelo, esfuerzo permitido, límites, revisión de prompt, configuración de recuperación y Evals por candidata. Plataforma publica una revisión aprobada con ID inmutable. El span `decision.jev` en Langfuse asocia `run_id`, revisión, clase, probabilidades, motivo de aceptación o abstención, modelo efectivo, latencia y costo de OpenRouter. En la misma traza, las generaciones registran los modelos efectivos, motivos de selección, tokens y costo. Recuperación registra candidatos filtrados, latencia y degradación del re-ranking, citas y resultado final. Exponer costos y p95 agregados; guardar identificadores opacos y evitar guardar texto sensible de entrada en spans de decisión. [SDD de plataforma](../plataforma/diseno.md) · [Observabilidad y operación](../plataforma/observabilidad.md) · [Langfuse Evals](https://langfuse.com/docs/evaluation/overview)
+El panel propuesto expone perfiles de modelo, esfuerzo permitido, límites, revisión de prompt, configuración de recuperación y Evals por candidata. Plataforma publica una revisión aprobada con ID inmutable. Las generaciones registran modelos efectivos, motivos de selección, tokens y costo. Recuperación registra candidatos filtrados, latencia, degradación del re-ranking, citas y resultado final. Exponer costos y p95 agregados y guardar identificadores opacos. [SDD de plataforma](../plataforma/diseno.md) · [Observabilidad y operación](../plataforma/observabilidad.md) · [Langfuse Evals](https://langfuse.com/docs/evaluation/overview)
 
 Jev aporta su costo en `usage.cost`, incluso en una respuesta cuyo resultado se descarta por incertidumbre. Se conservan los tokens, el ID opaco de la solicitud y la confianza por separado de la probabilidad de la clase elegida. Para OpenAI el informe estima el costo con los tokens devueltos y las tarifas configuradas. Las llamadas sin uso disponible aparecen en la cobertura de costos. El gasto registrado de evaluación semántica se presenta aparte del gasto de atención. [Formato de respuesta de OpenRouter](https://openrouter.ai/docs/guides/community/jev-tutorial#step-3-read-the-answers)
 
@@ -123,6 +123,6 @@ Jev aporta su costo en `usage.cost`, incluso en una respuesta cuyo resultado se 
 | Re-ranking | Evaluar RRF sin re-ranker y RRF con re-ranker sobre las mismas preguntas documentales. Reportar Recall@5 y nDCG@5, p95 de recuperación y cita correcta. Probar E-202, códigos y el mismo precio consultado con dos fechas de negocio a ambos lados del cambio a catálogo v2. |
 | Autorización y groundedness | Verificar cero lecturas privadas con ámbito público, fuentes vigentes, cifras respaldadas y cero efectos externos sin aprobación. Mantener el conjunto de **30 golden** y **19 complementarias**, con exactitud ≥80 %, groundedness ≥0,85 y Recall@k ≥0,90 donde apliquen. |
 
-Las decisiones de Jev en atención se trazan como `decision.jev`. Las Evals emplean un juez Jev con otra rúbrica y telemetría `eval.jev`. [Jev en Evals y otros procesos](jev-evals.md)
+Las trazas históricas del clasificador llevan el nombre `decision.jev`. Las Evals emplean su propia rúbrica y telemetría `eval.jev`. [Jev en Evals y otros procesos](jev-evals.md)
 
 Los perfiles, tiempos y umbrales anteriores son una configuración inicial. Antes de publicar, confirmar con datos del proyecto y la VPS disponibilidad, costos observados, tiempos y calidad. [Enunciado y métricas del reto](../05-insumos.md#material-del-reto) · [Golden del reto](../05-insumos.md#evaluaciones) · [Fixtures complementarios](../05-insumos.md#evaluaciones)

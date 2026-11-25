@@ -6,6 +6,7 @@ export function agentProviders(env = process.env) {
   const turnTimeoutMs = Number(env.AGENT_TURN_TIMEOUT_MS);
   return {
     requireApprovedPrompts: live,
+    modelCredentials: live ? {openai:env.OPENAI_API_KEY,openrouter:env.OPENROUTER_API_KEY} : undefined,
     turnTimeoutMs: Number.isSafeInteger(turnTimeoutMs) && turnTimeoutMs > 0 ? turnTimeoutMs : undefined,
     writer: openaiKey ? createOpenAIPublicWriter({ apiKey: openaiKey }) : undefined,
     planner: openaiKey ? createOpenAIObjectivePlanner(openaiKey) : undefined,
