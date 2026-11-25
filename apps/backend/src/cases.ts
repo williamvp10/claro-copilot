@@ -713,7 +713,8 @@ export class Cases {
           } else await queueRun(tx,row,message,false,{decision:'resolution_ready'});
           return;
         }
-        if (row.snapshot.attention_mode==='autoservicio' && !row.handoff_pending && !pending) {
+        if (row.snapshot.attention_mode==='autoservicio' && !row.handoff_pending && !pending &&
+            !reading?.domain && !contextIntent(safeText) && !row.snapshot.intake?.pending) {
           await this.channelReply(tx,row,'Me alegra que haya quedado resuelto. Si tienes otra pregunta, puedes seguir en este chat.');
           return;
         }
