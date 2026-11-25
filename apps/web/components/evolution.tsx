@@ -4,6 +4,7 @@ import { ArrowUpRight, Sparkles, ChevronDown, ChevronRight, ContactRound, Histor
 import { Tabs } from 'radix-ui';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { DirectoryBillingPanel } from './integrations';
+import { followUpNames, PriorityBadge } from './follow-ups';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
 import { key } from '@/lib/api';
@@ -83,7 +84,7 @@ export function EscalationRequest({caseId,revision,turnId,active,suggestion,onDo
   return <div className="assisted-escalation">
     {!open ? <>
       {forwarding&&<p className="assisted-escalation-status" data-stage="taken"><ArrowUpRight size={16} aria-hidden="true"/> Nivel 2 · En atención</p>}
-      <Button className="assisted-escalation-button" variant="outline" onClick={()=>{
+      <Button className="button outline assisted-escalation-button" variant="outline" onClick={()=>{
         setDestination(forwarding ? 'supervision' : suggestion?.destination ?? '');
         setOpen(true);setError('');
       }}><ArrowUpRight size={16} aria-hidden="true"/>{forwarding?'Derivar a Supervisión':'Solicitar escalamiento'}</Button>
@@ -653,13 +654,13 @@ function MetricSeries({metric}:{metric:Metric}){const points=metric.series??[];c
 type Operator={id:string;name:string;email:string;capabilities:string[];specialties:string[];enabled:boolean;available:boolean};
 const capabilityOptions=['n1','n2','supervisor','admin','superadmin'];
 const specialtyOptions=['soporte_tecnico','facturacion','comercial_portabilidad'];
-export function Operators(){
+export function Operators({demo=false}:{demo?:boolean}){
  const [audit,setAudit]=useState<Array<{id:string;case_id:string|null;kind:string;created_at:string;metadata:Record<string,unknown>}>>(),[auditError,setAuditError]=useState('');
  const [rows,setRows]=useState<Operator[]>(),[edit,setEdit]=useState<Operator|null>(null),[creating,setCreating]=useState(false),[password,setPassword]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  const load=useCallback(()=>request<Operator[]>('/admin/operators').then(setRows).catch(e=>setError(errorText(e))),[]);useEffect(()=>{void load()},[load]);
  async function save(e:React.FormEvent){e.preventDefault();if(!edit)return;setBusy(true);setError('');try{const {id,name,email,capabilities,specialties,enabled,available}=edit;const body=creating?{name,email,password,capabilities,specialties,enabled,available}:{capabilities,specialties,enabled,available};await request(creating?'/admin/operators':`/admin/operators/${encodeURIComponent(id)}`,{method:creating?'POST':'PATCH',body:JSON.stringify(body)});setEdit(null);setCreating(false);setPassword('');await load()}catch(e){setError(errorText(e))}finally{setBusy(false)}}
  function toggle(field:'capabilities'|'specialties',value:string){setEdit(current=>current?{...current,[field]:current[field].includes(value)?current[field].filter(x=>x!==value):[...current[field],value]}:current)}
- return <div className="admin-page evo-page"><header className="ops-header"><div><span className="eyebrow">SUPERADMINISTRACIÓN</span><h1>Operadores</h1><p>Capacidades, especialidades y disponibilidad del equipo.</p></div><Button onClick={()=>{setCreating(true);setEdit({id:'',name:'',email:'',capabilities:['n1'],specialties:[],enabled:true,available:true})}}>Nuevo operador</Button></header>{error&&<p className="alert error" role="alert">{error}</p>}<div className="evo-split"><section className="ops-plot">{!rows&&!error?<p role="status">Cargando operadores…</p>:rows?.length?rows.map(row=><div className="revision" key={row.id}><div><strong>{row.name}</strong><span>{row.email} · {row.capabilities.join(', ')}</span><span className="badge">{row.enabled?(row.available?'Disponible':'No disponible'):'Deshabilitado'}</span></div><Button variant="outline" onClick={()=>{setCreating(false);setEdit(row)}}>Gestionar</Button></div>):<p>Sin operadores para mostrar.</p>}</section>{edit&&<form className="ops-plot evo-form" onSubmit={save}><h3>{creating?'Nuevo operador':`Gestionar ${edit.name}`}</h3>{creating&&<><label>Nombre<input required value={edit.name} onChange={e=>setEdit({...edit,name:e.target.value})}/></label><label>Correo<input required type="email" value={edit.email} onChange={e=>setEdit({...edit,email:e.target.value})}/></label><label>Contraseña inicial<input required type="password" value={password} onChange={e=>setPassword(e.target.value)}/></label></>}<fieldset><legend>Capacidades</legend>{capabilityOptions.map(value=><label className="evo-check" key={value}><input type="checkbox" checked={edit.capabilities.includes(value)} onChange={()=>toggle('capabilities',value)}/>{value}</label>)}</fieldset><fieldset><legend>Especialidades</legend>{specialtyOptions.map(value=><label className="evo-check" key={value}><input type="checkbox" checked={edit.specialties.includes(value)} onChange={()=>toggle('specialties',value)}/>{destinations[value]}</label>)}</fieldset><label className="evo-check"><input type="checkbox" checked={edit.enabled} onChange={e=>setEdit({...edit,enabled:e.target.checked})}/> Cuenta habilitada</label><label className="evo-check"><input type="checkbox" checked={edit.available} onChange={e=>setEdit({...edit,available:e.target.checked})}/> Disponible para atención</label><div className="ops-actions"><Button disabled={busy}>{busy?'Guardando…':'Guardar cambios'}</Button><Button type="button" variant="outline" onClick={()=>setEdit(null)}>Cancelar</Button></div></form>}</div><section className="ops-plot evo-catalog"><div className="evo-row"><div><h3>Bitácora operativa</h3><p>Altas, cambios y reasignaciones auditadas.</p></div><Button variant="outline" onClick={()=>{setAuditError('');request<typeof audit>('/admin/audit').then(setAudit).catch(e=>setAuditError(errorText(e)))}}>Consultar bitácora</Button></div>{auditError&&<p className="alert error" role="alert">{auditError}</p>}{audit&&<div className="ops-table"><table><thead><tr><th>Fecha</th><th>Evento</th><th>Caso</th><th>Detalle</th></tr></thead><tbody>{audit.map(row=><tr key={row.id}><td>{new Date(row.created_at).toLocaleString('es-CO',{timeZone:'America/Bogota'})}</td><td>{row.kind}</td><td>{row.case_id??'—'}</td><td>{Object.entries(row.metadata??{}).map(([k,v])=>`${k}: ${String(v)}`).join(' · ')}</td></tr>)}</tbody></table>{!audit.length&&<p>Sin eventos disponibles.</p>}</div>}</section></div>;
+ return <div className="admin-page evo-page"><header className="ops-header"><div><span className="eyebrow">{demo?'ADMINISTRACIÓN':'SUPERADMINISTRACIÓN'}</span><h1>Operadores</h1><p>Capacidades, especialidades y disponibilidad del equipo.</p></div><Button onClick={()=>{setCreating(true);setEdit({id:'',name:'',email:'',capabilities:['n1'],specialties:[],enabled:true,available:true})}}>Nuevo operador</Button></header>{error&&<p className="alert error" role="alert">{error}</p>}<div className="evo-split"><section className="ops-plot">{!rows&&!error?<p role="status">Cargando operadores…</p>:rows?.length?rows.map(row=><div className="revision" key={row.id}><div><strong>{row.name}</strong><span>{row.email} · {row.capabilities.join(', ')}</span><span className="badge">{row.enabled?(row.available?'Disponible':'No disponible'):'Deshabilitado'}</span></div><Button variant="outline" onClick={()=>{setCreating(false);setEdit(row)}}>Gestionar</Button></div>):<p>Sin operadores para mostrar.</p>}</section>{edit&&<form className="ops-plot evo-form" onSubmit={save}><h3>{creating?'Nuevo operador':`Gestionar ${edit.name}`}</h3>{creating&&<><label>Nombre<input required value={edit.name} onChange={e=>setEdit({...edit,name:e.target.value})}/></label><label>Correo<input required type="email" value={edit.email} onChange={e=>setEdit({...edit,email:e.target.value})}/></label><label>Contraseña inicial<input required type="password" value={password} onChange={e=>setPassword(e.target.value)}/></label></>}<fieldset><legend>Capacidades</legend>{capabilityOptions.filter(value=>!demo||value!=='superadmin').map(value=><label className="evo-check" key={value}><input type="checkbox" checked={edit.capabilities.includes(value)} onChange={()=>toggle('capabilities',value)}/>{value}</label>)}</fieldset><fieldset><legend>Especialidades</legend>{specialtyOptions.map(value=><label className="evo-check" key={value}><input type="checkbox" checked={edit.specialties.includes(value)} onChange={()=>toggle('specialties',value)}/>{destinations[value]}</label>)}</fieldset><label className="evo-check"><input type="checkbox" checked={edit.enabled} onChange={e=>setEdit({...edit,enabled:e.target.checked})}/> Cuenta habilitada</label><label className="evo-check"><input type="checkbox" checked={edit.available} onChange={e=>setEdit({...edit,available:e.target.checked})}/> Disponible para atención</label><div className="ops-actions"><Button disabled={busy}>{busy?'Guardando…':'Guardar cambios'}</Button><Button type="button" variant="outline" onClick={()=>setEdit(null)}>Cancelar</Button></div></form>}</div><section className="ops-plot evo-catalog"><div className="evo-row"><div><h3>Bitácora operativa</h3><p>Altas, cambios y reasignaciones auditadas.</p></div><Button variant="outline" onClick={()=>{setAuditError('');request<typeof audit>('/admin/audit').then(setAudit).catch(e=>setAuditError(errorText(e)))}}>Consultar bitácora</Button></div>{auditError&&<p className="alert error" role="alert">{auditError}</p>}{audit&&<div className="ops-table"><table><thead><tr><th>Fecha</th><th>Evento</th><th>Caso</th><th>Detalle</th></tr></thead><tbody>{audit.map(row=><tr key={row.id}><td>{new Date(row.created_at).toLocaleString('es-CO',{timeZone:'America/Bogota'})}</td><td>{row.kind}</td><td>{row.case_id??'—'}</td><td>{Object.entries(row.metadata??{}).map(([k,v])=>`${k}: ${String(v)}`).join(' · ')}</td></tr>)}</tbody></table>{!audit.length&&<p>Sin eventos disponibles.</p>}</div>}</section></div>;
 }
 
 const intentNames:Record<Intent,string> = {
@@ -672,17 +673,18 @@ const churnActions = {
   standard_followup:'Sigue el cierre habitual y verifica si queda algún pendiente.'
 };
 
-export function CaseMl({caseId,signals,revision,verified,closing=false}:{
-  caseId:string;signals:CaseMlSignals;revision:number;verified:boolean;closing?:boolean
+export function CaseMl({caseId,signals,revision,verified,closing=false,demo=false}:{
+  caseId:string;signals:CaseMlSignals;revision:number;verified:boolean;closing?:boolean;demo?:boolean
 }){
   const [selection,setSelection]=useState<{predictionId:string;label:Intent}>();
   const [error,setError]=useState('');
   const [notice,setNotice]=useState('');
   const [busy,setBusy]=useState(false);
-  const [due,setDue]=useState('');
+  const [due,setDue]=useState<string>();
   const operation=useRef<{scope:string;id:string}>(null);
   const intent=closing?null:signals.intent;
   const {churn,follow_up:followUp}=signals;
+  const effectiveDue=due ?? signals.recommended_due_date ?? '';
   const label=selection?.predictionId===intent?.prediction_id ? selection?.label : intent?.label;
 
   async function send(path:string,body:Record<string,unknown>,success:string) {
@@ -719,21 +721,23 @@ export function CaseMl({caseId,signals,revision,verified,closing=false}:{
         },'Intención registrada.')}>{label===intent.label?'Confirmar intención':'Registrar corrección'}</Button>
       </>}
     </div>}
-    {verified&&<div className="suggestion">
-      <strong>Seguimiento a 90 días{churn.status==='available'&&` · Prioridad ${churn.priority}`}</strong>
+    {verified&&<div className="follow-up-card">
+      <div className="follow-up-card-title"><strong>Seguimiento recomendado</strong><PriorityBadge priority={followUp?.priority ??
+        (churn.status==='available'?churn.priority:'sin_prediccion')}/></div>
       {churn.status==='available'?<>
         <p>{churnActions[churn.recommendation]}</p>
-        <small>Corte {churn.fecha_corte} · {churn.model_version}{churn.synthetic&&' · Datos de prueba'}</small>
-      </>:<p>Sin datos disponibles para orientar el seguimiento.</p>}
-      {followUp ? <>
-        <p>{followUp.status==='completed'?'Seguimiento completado':'Seguimiento acordado'} · {followUp.due_date} · {followUp.responsible_name}</p>
-        {followUp.status==='agreed'&&<Button variant="outline" disabled={busy} onClick={()=>void send('follow-up',{
+        <small>Predicción de riesgo de baja a 90 días · {churn.model_version} · Corte {churn.fecha_corte}{churn.synthetic&&' · Datos de prueba'}</small>
+      </>:<p>Puedes acordar una fecha de contacto con el cliente.</p>}
+      {followUp&&followUp.status!=='cancelled' ? <>
+        <p>{followUpNames[followUp.status]} · {followUp.due_date} · {followUp.responsible_name}</p>
+        {(followUp.status==='agreed'||followUp.status==='overdue')&&<Button className="button outline"
+          variant="outline" disabled={busy} onClick={()=>void send('follow-up',{
           status:'completed',case_revision:revision
         },'Seguimiento completado.')}>Marcar completado</Button>}
-      </> : churn.status==='available'&&<>
-        <label>Fecha acordada<input type="date" value={due} onChange={event=>setDue(event.target.value)}/></label>
-        <Button variant="outline" disabled={busy||!due} onClick={()=>void send('follow-up',{
-          status:'agreed',due_date:due,case_revision:revision
+      </> : (demo||churn.status==='available')&&<>
+        <label>Fecha acordada<input type="date" value={effectiveDue} onChange={event=>setDue(event.target.value)}/></label>
+        <Button className="button outline" variant="outline" disabled={busy||!effectiveDue} onClick={()=>void send('follow-up',{
+          status:'agreed',due_date:effectiveDue,case_revision:revision
         },'Seguimiento acordado.')}>Acordar seguimiento</Button>
       </>}
     </div>}

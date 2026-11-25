@@ -5,12 +5,13 @@ import { hashPassword } from 'better-auth/crypto';
 import { z } from 'zod';
 import type { DataSource, EntityManager } from 'typeorm';
 import { assistedHistory, assistedWriting, requestedAdvisor, TurnModels, type AgentObservation } from '@claro/agent';
-import { CustomerId, EscalationDestination, escalationDestinations, InvoiceId, type Viewer } from '@claro/contracts';
-import { AUTH, canReadMockBilling, getViewer, type createAuth } from './auth.js';
+import { CustomerId, EscalationDestination, escalationDestinations, FollowUpEntry, FollowUpPriority, FollowUpStatus, InvoiceId, type Viewer } from '@claro/contracts';
+import { AUTH, canManageAdministration, canReadMockBilling, getViewer, type createAuth } from './auth.js';
 import { audit, DATABASE, enqueue, type CaseRow } from './database.js';
 import { attentionNotice, checkCase, clearPersonalData, customerReference, isEscalationWaiting, loadCase, queueRun, saveCase } from './cases.js';
 import { readBilling, readInvoice } from './integration-operations.js';
 import { privateSignals, queueChurn } from './ml-advisory.js';
+import { bogotaDate, recordFollowUp } from './follow-up.js';
 import { SimulatorFailure, simulators } from './simulator-client.js';
 import { activeAgentModels, loadAgentModelPolicy } from './agent-model-storage.js';
 import { agentProviders } from './agent-providers.js';
@@ -52,7 +53,11 @@ export class PlatformEvolutionController {
     if (!['GET','HEAD'].includes(req.method) && req.get('Origin') !== new URL(process.env.BETTER_AUTH_URL!).origin) throw new ForbiddenException('Origen inválido');
     return getViewer(req,this.auth,this.db);
   }
-  private async superadmin(req:Request) { const v=await this.viewer(req); if (!has(v,'superadmin')) throw new ForbiddenException(); return v; }
+  private async administrator(req:Request) {
+    const viewer=await this.viewer(req);
+    if (!canManageAdministration(viewer)) throw new ForbiddenException();
+    return viewer;
+  }
 
   private async confirmCaseOperator(tx:EntityManager,v:Viewer,caseId:string) {
     const row=await loadCase(tx,caseId,true);
@@ -263,41 +268,57 @@ export class PlatformEvolutionController {
       return {status:'queued',event_id:input.event_id};
     });
   }
+  @Get('follow-ups')
+  @Header('Cache-Control','private, no-store')
+  async agenda(@Req() req:Request,@Query() raw:unknown) {
+    const viewer=await this.viewer(req);
+    if (process.env.DEMO_MODE!=='true') throw new ForbiddenException();
+    const admin=canManageAdministration(viewer);
+    if (!admin && !viewer.capabilities?.some(value=>['n1','n2','supervisor'].includes(value))) throw new ForbiddenException();
+    const {priority,status,offset}=parse(z.object({
+      priority:FollowUpPriority.optional(),status:FollowUpStatus.optional(),offset:z.coerce.number().int().min(0).max(10_000).default(0)
+    }),raw);
+    const rows=await this.db.query(`WITH agenda AS (
+      SELECT f.case_id,f.customer_ref,to_char(f.due_date,'YYYY-MM-DD') AS due_date,f.priority,
+        u.name AS responsible_name,(c.snapshot->>'revision')::int AS case_revision,
+        COALESCE(c.snapshot->>'owner_id'=$1,false) AS can_open,
+        ($2 OR f.responsible_id=$1 OR COALESCE(c.snapshot->>'owner_id'=$1,false)) AS can_edit,
+        CASE WHEN c.snapshot->>'owner_id'=$1 THEN c.snapshot->>'display_name' ELSE 'Cliente '||f.customer_ref END AS display_name,
+        CASE WHEN f.cancelled_at IS NOT NULL THEN 'cancelled' WHEN f.completed_at IS NOT NULL THEN 'completed'
+          WHEN f.due_date<$3::date THEN 'overdue' ELSE 'agreed' END AS status
+      FROM case_ml_follow_up f JOIN attention_case c ON c.id=f.case_id JOIN "user" u ON u.id=f.responsible_id
+      WHERE ($2 OR f.responsible_id=$1 OR c.snapshot->>'owner_id'=$1)
+        AND c.snapshot->>'verified'='true'
+        AND (c.account_ref=f.customer_ref OR c.contact_ref=f.customer_ref OR (f.customer_ref='C-1001' AND c.contact_ref LIKE 'web-c1001:%'))
+      ) SELECT * FROM agenda WHERE ($4::text IS NULL OR priority=$4) AND ($5::text IS NULL OR status=$5)
+      ORDER BY due_date,case_id LIMIT 26 OFFSET $6`,[viewer.id,admin,bogotaDate(),priority ?? null,status ?? null,offset]);
+    return {items:z.array(FollowUpEntry).parse(rows.slice(0,25)),next_offset:rows.length>25 ? offset+25 : null};
+  }
+
   @Post('cases/:id/ml/follow-up')
   async followUp(@Req() req:Request,@Param('id') caseId:string,@Body() raw:unknown) {
-    const v=await this.viewer(req);
+    const viewer=await this.viewer(req);
     const command=z.object({case_revision:z.number().int().positive(),event_id:operationKey});
     const input=parse(z.discriminatedUnion('status',[
       command.extend({status:z.literal('agreed'),due_date:z.iso.date()}).strict(),
-      command.extend({status:z.literal('completed')}).strict()
+      command.extend({status:z.literal('rescheduled'),due_date:z.iso.date()}).strict(),
+      command.extend({status:z.literal('completed')}).strict(),
+      command.extend({status:z.literal('cancelled')}).strict()
     ]),raw);
+    const demo=process.env.DEMO_MODE==='true';
+    if (!demo && (input.status==='rescheduled' || input.status==='cancelled')) throw new ForbiddenException();
     return this.db.transaction(async tx=>{
-      const row=await loadCase(tx,parse(id,caseId),true); checkCase(v,row,true);
-      const ref=customerReference(row);
-      if (!ref) throw new ForbiddenException('Se requiere titularidad verificada');
-      const dueDate=input.status==='agreed'?input.due_date:null;
-      await tx.query("SELECT pg_advisory_xact_lock(hashtext('ml-feedback'),hashtext($1))",[input.event_id]);
-      const [prior]=await tx.query('SELECT * FROM ml_feedback WHERE event_id=$1',[input.event_id]);
-      if (prior) {
-        if (prior.case_id!==caseId || prior.kind!=='follow_up' || prior.payload.customer_ref!==ref || prior.payload.status!==input.status ||
-            prior.payload.due_date!==dueDate || prior.payload.case_revision!==input.case_revision) throw new ConflictException('Evento reutilizado');
-        return {status:input.status,event_id:input.event_id};
+      const row=await loadCase(tx,parse(id,caseId),true);
+      if (!demo || input.status==='agreed') checkCase(viewer,row,true);
+      if (demo && await isEscalationWaiting(tx,caseId)) throw new ConflictException('El caso está en espera de otro equipo');
+      const written=await recordFollowUp(tx,row,viewer,input);
+      if (written) {
+        if (demo) {
+          row.snapshot.revision++;
+          if (row.snapshot.status==='open') await queueRun(tx,row);
+        }
+        await saveCase(tx,row);
       }
-      if (row.snapshot.revision!==input.case_revision) throw new ConflictException('El caso cambió');
-      const signal=await privateSignals(tx,row);
-      if (input.status==='agreed') {
-        if (signal.follow_up) throw new ConflictException('El seguimiento ya está registrado');
-        if (signal.churn.status!=='available') throw new ConflictException('Se requiere una señal de seguimiento para esta cuenta');
-        await tx.query(`INSERT INTO case_ml_follow_up(case_id,customer_ref,responsible_id,due_date,model_version,fecha_corte)
-          VALUES($1,$2,$3,$4,$5,$6)`,[caseId,ref,v.id,input.due_date,signal.churn.model_version,signal.churn.fecha_corte]);
-      } else {
-        if (signal.follow_up?.status!=='agreed') throw new ConflictException('Se requiere un seguimiento acordado y pendiente');
-        await tx.query('UPDATE case_ml_follow_up SET completed_at=now() WHERE case_id=$1 AND customer_ref=$2',[caseId,ref]);
-      }
-      await tx.query("INSERT INTO ml_feedback(event_id,case_id,kind,payload) VALUES($1,$2,'follow_up',$3)",
-        [input.event_id,caseId,{...input,customer_ref:ref,due_date:dueDate,actor_id:v.id}]);
-      await audit(tx,caseId,`ml_follow_up_${input.status}`,{channel:row.snapshot.channel});
-      await saveCase(tx,row);
       return {status:input.status,event_id:input.event_id};
     });
   }
@@ -363,7 +384,7 @@ export class PlatformEvolutionController {
 
   @Post('admin/customers')
   async createCustomer(@Req() req:Request,@Body() raw:unknown) {
-    const v=await this.superadmin(req);
+    const v=await this.administrator(req);
     const input=parse(customerDetails,raw);
     const {idempotency_key,...body}=input;
     const receipt=await provider(()=>simulators.customerCommand(null,body,idempotency_key));
@@ -372,7 +393,7 @@ export class PlatformEvolutionController {
   }
   @Patch('admin/customers/:id')
   async updateCustomer(@Req() req:Request,@Param('id') ref:string,@Body() raw:unknown) {
-    const v=await this.superadmin(req); parse(z.string().regex(/^C-\d{4}$/),ref);
+    const v=await this.administrator(req); parse(z.string().regex(/^C-\d{4}$/),ref);
     const input=parse(z.object({revision:z.number().int().positive(),motivo:reason,idempotency_key:operationKey,nombre:id.optional(),celular:id.optional(),email:z.email().optional(),estado:z.enum(['activo','suspendido','retirado']).optional()}),raw);
     const {idempotency_key,...body}=input;
     const receipt=await provider(()=>simulators.customerCommand(ref,body,idempotency_key));
@@ -381,7 +402,7 @@ export class PlatformEvolutionController {
   }
   @Get('admin/audit')
   async operatorAudit(@Req() req:Request) {
-    await this.superadmin(req);
+    await this.administrator(req);
     return this.db.query(`SELECT id,case_id,kind,created_at,metadata FROM attention_event
       WHERE kind LIKE 'operator_%' OR kind LIKE 'customer_%' OR kind LIKE 'escalation_%' ORDER BY id DESC LIMIT 200`);
   }
@@ -402,10 +423,12 @@ export class PlatformEvolutionController {
     await send();
   }
   @Get('admin/operators')
-  async operators(@Req() req:Request) { await this.superadmin(req); return this.db.query(`SELECT u.id,u.name,u.email,o.capabilities,o.specialties,o.enabled,o.available FROM operator_role o JOIN "user" u ON u.id=o.user_id ORDER BY u.name LIMIT 200`); }
+  async operators(@Req() req:Request) { await this.administrator(req); return this.db.query(`SELECT u.id,u.name,u.email,o.capabilities,o.specialties,o.enabled,o.available FROM operator_role o JOIN "user" u ON u.id=o.user_id
+    WHERE (NOT $1 OR NOT ('superadmin'=ANY(o.capabilities) AND NOT ('admin'=ANY(o.capabilities)))) ORDER BY u.name LIMIT 200`,[process.env.DEMO_MODE==='true']); }
   @Post('admin/operators')
   async createOperator(@Req() req:Request,@Body() raw:unknown) {
-    const v=await this.superadmin(req), input=parse(operatorCreate,raw), userId=randomUUID();
+    const v=await this.administrator(req), input=parse(operatorCreate,raw), userId=randomUUID();
+    if (process.env.DEMO_MODE==='true' && input.capabilities.includes('superadmin')) throw new BadRequestException('Usa la capacidad Administración');
     const password=await hashPassword(input.password);
     return this.db.transaction(async tx=>{
       await tx.query(`INSERT INTO "user"(id,name,email,"emailVerified","createdAt","updatedAt") VALUES($1,$2,$3,false,now(),now())`,[userId,input.name,input.email.toLowerCase()]);
@@ -417,13 +440,17 @@ export class PlatformEvolutionController {
   }
   @Patch('admin/operators/:id')
   async updateOperator(@Req() req:Request,@Param('id') operatorId:string,@Body() raw:unknown) {
-    const v=await this.superadmin(req), input=parse(operatorFields,raw); parse(id,operatorId);
+    const v=await this.administrator(req), input=parse(operatorFields,raw); parse(id,operatorId);
+    const demo=process.env.DEMO_MODE==='true';
+    const management=demo ? 'admin' : 'superadmin';
+    if (demo && input.capabilities.includes('superadmin')) throw new BadRequestException('Usa la capacidad Administración');
     return this.db.transaction(async tx=>{
       await tx.query("SELECT pg_advisory_xact_lock(hashtext('superadmin-management'))");
       const [current]=await tx.query('SELECT * FROM operator_role WHERE user_id=$1 FOR UPDATE',[operatorId]); if (!current) throw new NotFoundException();
-      if (current.enabled && current.capabilities.includes('superadmin') && (!input.enabled || !input.capabilities.includes('superadmin'))) {
-        const [{count}]=await tx.query("SELECT count(*)::int AS count FROM operator_role WHERE enabled AND 'superadmin'=ANY(capabilities)");
-        if (count<=1) throw new ConflictException('Se requiere al menos un superadmin activo');
+      if (demo && current.capabilities.includes('superadmin') && !current.capabilities.includes('admin')) throw new NotFoundException();
+      if (current.enabled && current.capabilities.includes(management) && (!input.enabled || !input.capabilities.includes(management))) {
+        const [{count}]=await tx.query('SELECT count(*)::int AS count FROM operator_role WHERE enabled AND $1=ANY(capabilities)',[management]);
+        if (count<=1) throw new ConflictException('Se requiere al menos una cuenta administrativa activa');
       }
       await tx.query('UPDATE operator_role SET role=$2,capabilities=$3,specialties=$4,enabled=$5,available=$6 WHERE user_id=$1',[operatorId,input.capabilities.includes('admin')?'admin':'asesor',input.capabilities,input.specialties,input.enabled,input.available]);
       await tx.query('DELETE FROM session WHERE "userId"=$1',[operatorId]);

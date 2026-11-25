@@ -22,3 +22,5 @@ TypeScript, NestJS, Next.js, Better Auth y contratos Zod compartidos. Compose in
 - Reutilizar las lecturas del adaptador REST y los componentes de saldo y detalle de factura. Mantener la selección enlazada a la ficha activa y montar el panel al abrir su pestaña.
 - Extender las pruebas de evolución con las identidades ya sembradas. Validar el modo demo desactivado en un proceso separado sobre la base aislada, con la misma configuración de Better Auth.
 - Compilar, levantar un proyecto Compose aislado y verificar el flujo en navegador. Actualizar API y web de `claro-demo-local` con la imagen validada y la etiqueta del demo. Conservar las imágenes anteriores, los volúmenes y la configuración.
+
+La ampliación de la cuenta Administración y el trabajo de emisión con descuento se planifican junto con la atención asistida. [Plan de ampliación del demo](../002-atencion-asistida/plan.md#6-plan-de-ampliación-del-25-de-noviembre)

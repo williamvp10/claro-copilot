@@ -64,6 +64,8 @@ export function businessPorts(db: DataSource): AgentPorts {
         conversation_context: row.snapshot.conversation_context,
         pending_support_handoff:escalation?.destination==='soporte_tecnico' && turn.actor==='cliente' && waitingForSupportVisit(turn.text),
         assigned_destination:escalation?.status==='tomado' ? escalation.destination : undefined,
+        retention_discount:turn.audience==='asesor' && row.snapshot.verified ? row.snapshot.retention_discount : undefined,
+        billable_retention:process.env.DEMO_MODE==='true' && turn.channel==='web' && turn.audience==='asesor' && row.snapshot.verified,
         previous_summary:turn.audience==='asesor' && row.snapshot.card ? {
           text:clearPersonalData(row.snapshot.card.summary),pending:row.snapshot.card.pending.map(clearPersonalData)
         } : undefined,

@@ -12,6 +12,7 @@ import { audit, type CaseRow, type ContactRow, type DraftPublication, DATABASE, 
 import { accountHandoffReason, accountInquiry, accountReply, accountVerificationPrompt, codeCandidates, contactCandidates, isGreeting, isVerificationContact, type AccountInquiry, type AccountRead } from './demo-accounts.js';
 import { privateSignals, queueChurn } from './ml-advisory.js';
 import { resolutionSignals } from './customer-resolution.js';
+import { recordFollowUp } from './follow-up.js';
 import { activeAgentModels } from './agent-model-storage.js';
 import { activeKnowledgeRevision } from './knowledge.js';
 import { readRunPromptConfig, runPromptDigest } from './prompt-catalog.js';
@@ -157,7 +158,9 @@ export async function attentionNotice(tx: EntityManager, row: CaseRow, notice: A
     ? options.advisor.trim() : undefined;
   const advisor = safeName ?? 'Un asesor de Claro';
   let text: string;
-  if (notice==='escalated' && options.destination) {
+  if (notice==='closed') {
+    text='Cerramos este caso. Si necesitas ayuda con otra consulta, puedes iniciar un nuevo chat.';
+  } else if (notice==='escalated' && options.destination) {
     row.snapshot.attention={stage:'escalated',destination:options.destination};
     text=`Escalamos tu caso a ${escalationDestinations[options.destination]}. Puedes seguir escribiendo aquí mientras el equipo lo toma.`;
   } else {
@@ -465,10 +468,36 @@ export class Cases {
   }
 
   async close(viewer: Viewer, id: string, input:z.infer<typeof CloseCase>) {
-    return this.change(viewer, id, true, async (tx, row) => {
+    return this.db.transaction(async tx=>{
+      const row=await loadCase(tx,id,true);
+      checkCase(viewer,row,true);
+      const {resolved,retention_outcome,completion}=input;
+      const scope=`case-close:${id}:${viewer.id}`;
+      if (completion) {
+        if (process.env.DEMO_MODE!=='true' || row.snapshot.attention_mode!=='asistido') throw new ForbiddenException();
+        const prior=await this.replay(tx,scope,completion.idempotency_key,input);
+        if (prior) return {...operatorSnapshot(prior.snapshot),ml:await privateSignals(tx,prior)};
+      }
+      if (row.snapshot.status!=='open') throw new UnprocessableEntityException('El caso ya está cerrado');
       if (process.env.DEMO_MODE==='true' && await isEscalationWaiting(tx,id)) throw new ConflictException('El caso está en espera de otro equipo.');
-      const {resolved,retention_outcome} = input;
-      if (resolved && row.snapshot.channel==='web' && row.contact_ref.startsWith('web:') && !row.snapshot.customer_resolution?.close_message_id) {
+      if (completion) {
+        if (row.snapshot.revision!==completion.case_revision) throw new ConflictException('El caso cambió. Verifica el último mensaje.');
+        if (resolved===(completion.evidence==='pendientes') ||
+            (completion.evidence==='cliente' ? !row.snapshot.customer_resolution?.satisfied_message_id : !completion.reason)) {
+          throw new ConflictException('Indica la evidencia de resolución o el motivo del cierre con pendientes');
+        }
+        if (resolved && row.snapshot.retention_discount && row.snapshot.retention_discount.status!=='scheduled') {
+          throw new ConflictException('El beneficio sigue pendiente. Puedes acordar el seguimiento y cerrar con pendientes.');
+        }
+        if (completion.follow_up_date) await recordFollowUp(tx,row,viewer,{
+          status:'agreed',due_date:completion.follow_up_date,case_revision:completion.case_revision,
+          event_id:'close:'+this.fingerprint([id,completion.idempotency_key])
+        });
+        row.snapshot.closure={outcome:resolved?'resolved':'pending',evidence:completion.evidence,
+          ...(completion.reason ? {reason:clearPersonalData(completion.reason)} : {}),
+          ...(completion.evidence==='cliente' ? {message_id:row.snapshot.customer_resolution?.satisfied_message_id} : {})};
+        await this.remember(tx,scope,completion.idempotency_key,input,id);
+      } else if (resolved && row.snapshot.channel==='web' && row.contact_ref.startsWith('web:') && !row.snapshot.customer_resolution?.close_message_id) {
         throw new ConflictException('El cliente debe confirmar que quedó resuelto y que desea cerrar');
       }
       const eligible = row.snapshot.verified && row.intent_hint === 'cancelacion' &&
@@ -490,7 +519,9 @@ export class Cases {
       row.snapshot.status = 'closed';
       row.snapshot.revision += 1;
       await tx.query('UPDATE attention_case SET resolved=$2 WHERE id=$1', [id, resolved]);
-      await audit(tx, id, 'closed', { resolved });
+      await audit(tx, id, 'closed', { resolved, ...(completion ? {evidence:completion.evidence,operator_id:viewer.id,
+        message_id:row.snapshot.closure?.message_id} : {}) });
+      if (completion) await attentionNotice(tx,row,'closed',id);
       await queueChurn(tx,row);
       if (row.snapshot.channel === 'telegram') {
         await enqueue(tx, `feedback:${id}`, id, 'deliver', {
@@ -498,6 +529,8 @@ export class Cases {
           text:'¿Qué tan satisfecho quedaste con esta atención? Elige del 1 al 5.'
         });
       }
+      await saveCase(tx,row);
+      return {...operatorSnapshot(row.snapshot),ml:await privateSignals(tx,row)};
     });
   }
 
@@ -758,7 +791,9 @@ export class Cases {
       : safeText);
     if (verificationTurn) message.verification_input = true;
     if (!verificationTurn && !handoff && !priority) {
-      const signals=resolutionSignals(text);
+      const contextQuestion=demo && row.snapshot.attention_mode==='asistido'
+        ? row.snapshot.messages.findLast(item=>item.turn_seq<message.turn_seq && !item.attention_notice && !item.verification_input) : undefined;
+      const signals=resolutionSignals(text,contextQuestion?.actor==='asesor' ? contextQuestion.text : undefined);
       const previous=row.snapshot.customer_resolution;
       if (signals.satisfied || signals.close && previous) {
         const resolution={satisfied_message_id:signals.satisfied ? message.id : previous!.satisfied_message_id,

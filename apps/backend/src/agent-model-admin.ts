@@ -7,7 +7,7 @@ import type { Request } from 'express';
 import type { DataSource } from 'typeorm';
 import { z } from 'zod';
 import { agentModelDigest, modelRevision } from './agent-model-storage.js';
-import { AUTH, getViewer, type createAuth } from './auth.js';
+import { AUTH, canManageAdministration, getViewer, type createAuth } from './auth.js';
 import { DATABASE } from './database.js';
 import { browserEndpoint } from './dashboard.js';
 import { traceIdentifier } from './telemetry.js';
@@ -69,7 +69,7 @@ export class AgentModelAdminController {
 
   private async viewer(req:Request) {
     const viewer=await getViewer(req,this.auth,this.db);
-    if (!viewer.capabilities?.includes('superadmin')) throw new ForbiddenException();
+    if (!canManageAdministration(viewer)) throw new ForbiddenException();
     if (req.method==='POST' && req.get('Origin')!==new URL(process.env.BETTER_AUTH_URL ?? 'http://127.0.0.1:0').origin) {
       throw new ForbiddenException('Origen inválido');
     }

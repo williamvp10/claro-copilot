@@ -108,7 +108,7 @@ En **Conocimiento RAG → Chat de prueba**, seleccionar audiencia, canal y fecha
 
 Configurar `INTEGRATION_MCP_TOKEN` con al menos 24 caracteres y `INTEGRATION_MCP_SIGNING_KEY` con al menos 32. CRM y Facturación tienen un proceso MCP privado cada uno. Cada proceso recibe las credenciales de su propia API mock. El worker emite una capacidad firmada, acotada a una tool, el run, el caso y su revisión. El servidor revalida el titular y la asignación antes de consultar. Las escrituras pasan por NestJS y el outbox.
 
-Para ensayar traspasos y gestión, completar las parejas `DEMO_N2_*`, `DEMO_SUPERVISOR_*` y `DEMO_SUPERADMIN_*` y volver a ejecutar el seed. El admin actual conserva aprobación de facturación. Las credenciales de prueba se configuran por instancia. Los usuarios de asesor y atención N2 acceden a conversaciones por asignación.
+Para ensayar traspasos y gestión, configurar `DEMO_ADMIN_*`, `DEMO_ASESSOR_*` y, si se requieren puestos especializados, `DEMO_N2_*` y `DEMO_SUPERVISOR_*`. Ejecutar el seed para habilitar esos usuarios y retirar la identidad dedicada de Superadministración de una instalación anterior. Administración gestiona modelos, operadores, CRM y aprobaciones del demo. Los usuarios de atención acceden a conversaciones por asignación.
 
 El catálogo [prompts.claro-copiloto.json](../docs/evolucion-mvp/prompts.claro-copiloto.json) se carga durante la migración de la plataforma. Con Langfuse autohospedado disponible y las claves de proyecto configuradas, importar sus plantillas iniciales con:
 

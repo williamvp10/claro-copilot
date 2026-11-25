@@ -8,6 +8,7 @@ export type { AgentObservation, PublicWriter } from './generation.js';
 import { requestedAdvisor } from './human-attention.js';
 import { TurnModels, type ModelCredentials } from './model-runtime.js';
 import { assistedHistory, assistedWriting } from './assisted-writing.js';
+import { requestedDiscount, retentionAdvisorReply } from './retention-advisor.js';
 import { createBrief, extractBrief, extractorVersion, orchestratedPublicInstructions, modelDraft, modelEvidenceOrder, modelObjectiveOrder, type Brief, type Extracted } from './turn-brief.js';
 import type { AgentObservation, Profile, PublicWriter } from './generation.js';
 import { safeKnowledgeQuery } from './mcp.js';
@@ -753,13 +754,24 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       }
       const alternatives = retention.options.map(o => `${o.title}: ${o.detail}`).join(' · ');
       let proposal;
-      if (turn.actor === 'cliente' && accepted(turn.text)) {
+      if (turn.actor === 'cliente' && accepted(turn.text) && !state.retention_discount) {
         const selected = selectOption(turn.text, retention.options, state.messages.filter(m => m.turn_seq < turn.turn_seq));
+        if (selected?.discount && state.billable_retention) {
+          const result=card(intent,`Alternativas elegibles: ${alternatives}`,facts,citations,
+            ['Confirmar el servicio y las condiciones'], 'Preparar el descuento desde CRM y confirmar los términos del servicio con el cliente.', ['retention_eligible','retention_prepare_discount']);
+          if (result.type==='card') result.card.retention_options=retention.options;
+          return result;
+        }
         if (selected && Date.now() < deadline) proposal = await ports.createProposal(turn.run_id, {option_id:selected.id, citation_ids:[retention.policy.id]});
         else return card(intent, `Alternativas elegibles: ${alternatives}`, facts, citations, ['Precisar la alternativa aceptada'], 'Preguntar cuál alternativa acepta el cliente.', ['option_unclear']);
       }
       const advisorPresented = state.messages.some(m => m.actor === 'asesor' && has(m.text, /oferta|descuento|mejora|alternativa/));
-      return card(intent, `Resultado de elegibilidad: ${retention.reason}. Alternativas: ${alternatives}`, facts, citations, proposal ? ['Aprobación del asesor'] : ['Decisión del cliente'], proposal ? 'Revisar y aprobar la propuesta en consola.' : advisorPresented ? 'Esperar la decisión del cliente.' : 'Presentar las alternativas y esperar la decisión del cliente.', ['retention_eligible'], proposal);
+      const result=card(intent, `Resultado de elegibilidad: ${retention.reason}. Alternativas: ${alternatives}`, facts, citations, proposal ? ['Aprobación del asesor'] : ['Decisión del cliente'], proposal ? 'Revisar y aprobar la propuesta en consola.' : advisorPresented ? 'Esperar la decisión del cliente.' : 'Presentar las alternativas y esperar la decisión del cliente.', ['retention_eligible'], proposal);
+      if (result.type==='card') {
+        result.card.retention_options=retention.options;
+        result.card.requested_discount=requestedDiscount(state.messages);
+      }
+      return result;
     }
     const relevantService=intent==='soporte_tecnico' && has(turn.text,/\b(mi (internet|fibra|modem|equipo|decodificador)|tengo intermitencia|sigo sin (internet|senal))\b/);
     const supportText=contextTerms ? `${contextTerms}. ${turn.text}` : turn.text;
@@ -1179,7 +1191,24 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
         }
         card.summary_update={at:new Date().toISOString(),turn_id:turn.turn_id,revision:turn.case_revision,
           origin:summary ? 'ia' : 'evidencia',...(stale ? {stale:true} : {})};
-        if (current?.models && prompts.assisted_reply && !card.proposal && !card.suggested_escalation) {
+        const retentionTopic=card.intent==='cancelacion' || card.intent==='facturacion' && /\b(?:descuento|beneficio de retenci[oó]n)\b/i.test(turn.text);
+        const discount=retentionTopic && !card.suggested_escalation ? caseState.retention_discount : undefined;
+        const retentionReply=retentionTopic && !card.suggested_escalation ? retentionAdvisorReply(card,discount) : undefined;
+        if (discount) {
+          const pending={requested:'Revisión de Administración',authorized:'Aceptación del cliente',
+            accepted:'Confirmación en CRM',crm_confirmed:'Programación en Facturación',scheduled:'Emisión del siguiente ciclo'} as const;
+          card.pending=discount.schedule?.last_invoice ? [] : [pending[discount.status]];
+          card.next_action=discount.schedule?.last_invoice ? 'Revisar la factura con el cliente.' :
+            discount.status==='authorized' ? 'Compartir los términos autorizados y confirmar la aceptación.' :
+            discount.status==='requested' ? 'Solicitar revisión de la excepción a Administración.' : 'Consultar los comprobantes del beneficio.';
+        }
+        if (retentionReply) {
+          card.advisor_draft=retentionReply;
+          const at=Date.now();
+          options.observe?.(turn.run_id,{name:'advisor.retention_reply',started:at,ended:at,metadata:{
+            step_id:'write_verified_retention_reply',agent_id:'copiloto',status:discount?.status ?? 'eligibility'
+          }});
+        } else if (current?.models && prompts.assisted_reply && !card.proposal && !card.suggested_escalation) {
           const reply=await assistedWriting(current.models,'assisted_reply',prompts.assisted_reply,profile ?? 'economico',history,{
             facts:card.facts,citations:card.citations.map(source=>source.excerpt.slice(0,400)),
             next_action:card.next_action,pending:card.pending,receipts:caseState.confirmed_receipts

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
-  Balance, Customer, CustomerId, Eligibility, Invoice, InvoiceDetail, Receipt, Service, Ticket, type ManualAction
+  Balance, BillingDiscount, Customer, CustomerId, Eligibility, Invoice, InvoiceDetail, InvoiceId, Receipt, Service, Ticket,
+  type DiscountOffer, type DiscountSchedule, type ManualAction
 } from '@claro/contracts';
 import { z } from 'zod';
 import type { DataSource } from 'typeorm';
@@ -85,7 +86,16 @@ export const simulators = {
   directoryCustomer: (ref:string) => request('crm',customerPath(ref),Customer.extend({revision:z.number(),celular:z.string(),email:z.string(),tipo_documento:z.string()})),
   customerCommand: (ref:string | null, body:unknown, key:string) => request('crm',ref ? '/admin/clientes/'+encodeURIComponent(ref) : '/admin/clientes',z.object({cliente_id:CustomerId,revision:z.number()}),{body,key}),
   tickets: (ref: string) => request('crm',customerPath(ref) + '/tickets',z.array(Ticket)),
-  eligibility: (ref: string) => request('crm',customerPath(ref) + '/elegibilidad-retencion',Eligibility),
+  eligibility: (ref: string,previous?:string) => request('crm',customerPath(ref) + '/elegibilidad-retencion'+
+    (previous ? '?'+new URLSearchParams({previous}) : ''),Eligibility),
+  confirmDiscount: (ref:string,body:z.infer<typeof DiscountOffer>,key:string) =>
+    request('crm',customerPath(ref)+'/descuentos-retencion',z.object({oferta_id:z.string()}),{body,key}),
+  scheduleDiscount: (ref:string,body:z.infer<typeof DiscountSchedule>,key:string) =>
+    request('billing',customerPath(ref)+'/descuentos',BillingDiscount,{body,key}),
+  discountStatus: (ref:string,offer:string) =>
+    request('billing',customerPath(ref)+'/descuentos/'+encodeURIComponent(offer),BillingDiscount),
+  issueCycle: (ref:string,periodo:string,key:string) =>
+    request('billing',customerPath(ref)+'/ciclos',z.object({factura_id:InvoiceId}),{body:{periodo},key}),
   invoices: (ref: string) => request('billing',customerPath(ref) + '/facturas?limite=12',z.array(Invoice)),
   balance: (ref: string) => request('billing',customerPath(ref) + '/saldo',Balance),
   invoice: (ref: string) => request('billing',invoicePath(ref),InvoiceDetail),

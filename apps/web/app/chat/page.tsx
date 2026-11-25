@@ -157,9 +157,9 @@ export default function CustomerChat() {
           <div className={styles.suggestions}>{suggestions.map(text => <button key={text} type="button" onClick={() => void send(text)} disabled={!snapshot || sending}>{text}</button>)}</div>
         </div>}
         {messages.map(message => message.attention_notice ? <article key={message.id} className={styles.attentionNotice}
-          data-state={message.attention_notice==='escalated' ? 'escalated' : 'assigned'}>
+          data-state={message.attention_notice==='escalated' ? 'escalated' : message.attention_notice==='closed' ? 'closed' : 'assigned'}>
           {message.attention_notice==='escalated' ? <ArrowUpRight size={18} aria-hidden="true"/> : <CheckCircle2 size={18} aria-hidden="true"/>}
-          <div><strong>{message.attention_notice==='escalated' ? 'Caso escalado' : 'En atención'}</strong><p>{message.text}</p></div>
+          <div><strong>{message.attention_notice==='escalated' ? 'Caso escalado' : message.attention_notice==='closed' ? 'Caso cerrado' : 'En atención'}</strong><p>{message.text}</p></div>
         </article> : <article key={message.id} className={message.actor === 'cliente' ? styles.customer : styles.agent}>
           <span className={styles.author}>{message.actor === 'cliente' ? 'Tú' : message.actor === 'asesor' ? 'Asesor Claro' : 'Claro Copiloto'}</span>
           <p>{message.text}</p>

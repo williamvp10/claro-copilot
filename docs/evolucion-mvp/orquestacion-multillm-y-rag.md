@@ -29,6 +29,8 @@ Claro adopta tres decisiones del patrón de Open Deep Research. El orquestador c
 
 ## Configuración desde Superadministración
 
+La ampliación propuesta del demo lleva **Modelos del agente** a la cuenta **Administración** y retira la identidad de Superadministración de la demo. [Especificación de Administración](../../specs/002-atencion-asistida/spec.md#at-09--una-cuenta-de-administración-en-el-demo)
+
 **Dashboard → Superadministración → Modelos del agente.** La sección tiene tres vistas y usa la capacidad `superadmin` de NestJS. **Configuración** muestra el Orquestador y los tres subagentes. Permite consultar la política activa y editar un modelo fijo, una regla automática por perfil y costo o el respaldo. El Orquestador permite aplicar la regla a una llamada o replicarla en sus cinco llamadas. **Revisiones** conserva los borradores y validaciones. Al activar o restaurar pide motivo, referencia de prueba y revisión activa esperada. **Trazas** muestra los modelos solicitados y efectivos, la revisión, el proveedor, el estado y el enlace a Langfuse cuando la plataforma registra la exportación. Los demás roles reciben `403` en las operaciones de gestión.
 
 | Componente seleccionable | Llamadas configurables | Perfiles iniciales |

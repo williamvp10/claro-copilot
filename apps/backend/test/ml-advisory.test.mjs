@@ -1,6 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ChurnFeatures, demoChurnFeatures, privateSignals, predictChurn, predictIntent } from '../dist/ml-advisory.js';
+import { bogotaDate, recommendedFollowUp } from '../dist/follow-up.js';
+import { resolutionSignals } from '../dist/customer-resolution.js';
+
+test('follow-up recommendations use the Bogotá day and the configured priority intervals',()=>{
+  const today=bogotaDate(new Date('2026-12-01T04:59:59Z'));
+  assert.equal(today,'2026-11-30');
+  assert.equal(bogotaDate(new Date('2026-12-01T05:00:00Z')),'2026-12-01');
+  assert.equal(recommendedFollowUp({status:'available',priority:'alta'},today),'2026-12-01');
+  assert.equal(recommendedFollowUp({status:'available',priority:'media'},today),'2026-12-03');
+  assert.equal(recommendedFollowUp({status:'available',priority:'habitual'},today),'2026-12-07');
+  assert.equal(recommendedFollowUp({status:'unavailable'},today),null);
+});
+test('a brief customer affirmation confirms resolution only after an explicit resolution question',()=>{
+  assert.deepEqual(resolutionSignals('Listo, gracias','¿Aceptas el descuento?'),{satisfied:false,close:false});
+  assert.deepEqual(resolutionSignals('Listo, gracias','¿Quedó resuelta tu consulta?'),{satisfied:true,close:false});
+  assert.deepEqual(resolutionSignals('Sí, pero tengo otra pregunta','¿Quedó resuelta tu consulta?'),{satisfied:false,close:false});
+});
 const zero={cancelacion:0,consulta_planes:0,facturacion:0,portabilidad:0,soporte_tecnico:0,categoria_no_disponible:0};
 const photo={fecha_corte:'2026-10-31',ciudad:'Bogotá',tipo_servicio:'hogar',plan_hogar:'Fibra',plan_movil:null,metodo_pago:'pse',valor_mensual:100000,antiguedad_meses:12,dias_mora:0,tickets_90d:0,tickets_tecnicos_90d:0,caidas_servicio_90d:0,uso_datos_gb_mes:null,nps_ultimo:7,ofertas_retencion_12m:0,historial_30d:zero,historial_90d:zero,dias_desde_ultimo_ticket:null};
 test('churn snapshot rejects inconsistent windows and preserves missing values',()=>{

@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { synchronizeDiscount } from './retention-discount.js';
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { setTimeout as wait } from 'node:timers/promises';
@@ -74,7 +75,7 @@ const runner = createAgent({
 async function claim(db: DataSource, ml: boolean): Promise<CaseJob | undefined> {
   const token = randomUUID();
   const [jobs] = await db.query(`WITH job AS (
-    SELECT current_job.id FROM outbox current_job WHERE (kind IN ('ml','ml_churn','ml_label'))=$1 AND (attempts<5 OR kind IN ('effect','integration')) AND
+    SELECT current_job.id FROM outbox current_job WHERE (kind IN ('ml','ml_churn','ml_label'))=$1 AND (attempts<5 OR kind IN ('effect','integration','retention')) AND
       ((status='queued' AND available_at<=now()) OR (status='processing' AND lease_until<=now()))
       AND (kind<>'deliver' OR NOT EXISTS (SELECT 1 FROM outbox prior WHERE prior.case_id=current_job.case_id
         AND prior.kind='deliver' AND prior.status IN ('queued','processing') AND prior.attempts<5
@@ -336,6 +337,7 @@ async function handle(job: CaseJob) {
       break;
     }
     case 'integration': await executeIntegration(db,job.case_id,job.payload.operation_id); break;
+    case 'retention': await synchronizeDiscount(db,job.case_id,job.payload.discount_id); break;
     case 'deliver': await deliver(job); break;
     case 'ml': await predictIntent(db,job.payload); break;
     case 'ml_churn': await predictChurn(db,job.case_id,job.payload); break;
@@ -357,7 +359,7 @@ async function poll(ml: boolean) {
         await handle(job);
         await db.query("UPDATE outbox SET status='done',lease_until=NULL WHERE id=$1 AND lease_token=$2", [job.id, job.lease_token]);
       } catch (error) {
-        const reconcile = job.kind === 'effect' || job.kind === 'integration';
+        const reconcile = job.kind === 'effect' || job.kind === 'integration' || job.kind === 'retention';
         if (job.attempts === 5) await audit(db.manager,job.case_id,'job_failed',{kind:job.kind});
         const retry = reconcile || job.attempts < 5;
         const backoff = reconcile ? Math.min(60,2 ** Math.min(job.attempts,6)) : 1;

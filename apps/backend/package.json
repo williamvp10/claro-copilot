@@ -14,6 +14,7 @@
     "test:mcp": "node test/mcp-e2e.mjs",
     "test:evolution": "node test/evolution-e2e.mjs",
     "test:assisted": "node test/assisted-workspace-e2e.mjs",
+    "test:retention": "node test/retention-workspace-e2e.mjs",
     "knowledge:ingest": "node dist/knowledge-ingest.js",
     "knowledge:mcp": "node dist/mcp.js",
     "langfuse:smoke": "node scripts/smoke-langfuse.mjs",

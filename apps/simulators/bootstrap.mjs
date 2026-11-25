@@ -122,12 +122,15 @@ try {
               REVOKE ALL ON TABLE claro_migrations FROM "${role}"`);
           } else {
             const readOnly = index === 1 ? 'customer' : 'billing_customer,invoice';
-            const writable = index === 1 ? 'operation_receipt,crm_ticket,crm_offer' : 'operation_receipt,credit';
+            const writable = index === 1 ? 'operation_receipt,crm_ticket,crm_offer' : 'operation_receipt,credit,invoice,billing_discount';
             // Row locks require UPDATE permission. Use immutable-adjacent advisory locks for business records.
             await db.query(`GRANT SELECT ON ${readOnly} TO "${role}";
               GRANT SELECT,INSERT ON ${writable} TO "${role}"`);
             if (index === 1) await db.query(`GRANT INSERT (ref,document_kind,document_number,email,phone,profile),
-              UPDATE (profile,email,phone,revision) ON customer TO "${role}"`);
+              UPDATE (profile,email,phone,revision) ON customer TO "${role}";
+              GRANT UPDATE (body) ON crm_offer TO "${role}"`);
+            else await db.query(`GRANT UPDATE (start_period,end_period,terms) ON billing_discount TO "${role}";
+              GRANT USAGE,SELECT ON SEQUENCE demo_invoice_number TO "${role}"`);
           }
           await db.query('COMMIT');
         } catch (error) {

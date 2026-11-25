@@ -34,3 +34,8 @@ Como administrador o superadministrador de la demo quiero consultar el saldo y l
 - Un administrador de la demo encuentra C-1001 desde el catálogo y abre sus tres facturas sin crear un caso.
 - La suite integrada comprueba las restricciones por sesión, modo y pertenencia.
 - La validación en navegador cubre el caso exitoso, la cuenta sin facturación, la caída de Facturación y una respuesta tardía.
+
+## Ampliación propuesta del demo
+
+- La cuenta **Administración** hereda la gestión del Directorio CRM y los otros permisos administrativos del demo conforme a [AT-09](../002-atencion-asistida/spec.md#at-09--una-cuenta-de-administración-en-el-demo). El control por cuenta, conversación y titularidad se comprueba en el backend.
+- CRM conserva la oferta aprobada y aceptada, y Facturación conserva la programación y los descuentos efectivamente aplicados a cada factura. El detalle de cada ciclo muestra el servicio, cargo fijo base, porcentaje, descuento y cargo neto. La vista de Directorio CRM consulta el estado dentro del alcance autorizado. [AT-07 y pruebas de retención](../002-atencion-asistida/plan.md#pruebas-de-aceptación)

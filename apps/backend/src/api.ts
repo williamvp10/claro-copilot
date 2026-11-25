@@ -8,7 +8,8 @@ import type { Request, Response } from 'express';
 import { type DataSource } from 'typeorm';
 import { randomUUID } from 'node:crypto';
 import { CloseCase, DecideProposal, OpenCase, SendMessage, Text, VerifyHolder, WebVerificationStart, WebVerificationConfirm, Id, ConfirmIntegration, InvoiceId, OperationKey, DashboardFilters, type CaseEvent, type WebChatEvent, type Dashboard, type EvalJob, type EvalStatus, type Viewer } from '@claro/contracts';
-import { AUTH, canReadMockBilling, getViewer, type createAuth } from './auth.js';
+import { AUTH, canManageAdministration, canReadMockBilling, getViewer, type createAuth } from './auth.js';
+import { RetentionDiscountController } from './retention-discount.js';
 import { Cases, constantEqual } from './cases.js';
 import { createDatabase, DATABASE } from './database.js';
 import { readDashboard, projectComparison } from './dashboard.js';
@@ -227,6 +228,7 @@ class PlatformController {
   async me(@Req() req: Request): Promise<Viewer> {
     const viewer = await this.viewer(req);
     return { ...viewer, can_read_mock_billing: canReadMockBilling(viewer),
+      can_manage_administration:canManageAdministration(viewer), demo_features:process.env.DEMO_MODE==='true',
       can_register_case_customer:process.env.DEMO_MODE==='true' && !!viewer.capabilities?.some(value=>['n1','n2','supervisor'].includes(value)) };
   }
 
@@ -471,7 +473,7 @@ class PlatformController {
 export class ApiModule {
   static create(auth: Auth): DynamicModule {
     return {
-      module: ApiModule, controllers: [PlatformController, PlatformEvolutionController, HealthController, WebChatController, KnowledgeAdminController, KnowledgeSourceController, AgentModelAdminController],
+      module: ApiModule, controllers: [PlatformController, PlatformEvolutionController, HealthController, WebChatController, KnowledgeAdminController, KnowledgeSourceController, AgentModelAdminController, RetentionDiscountController],
       providers: [Cases, IntegrationOperations, PromptReleases, { provide: AUTH, useValue: auth }, {
         provide: DATABASE,
         async useFactory() {
