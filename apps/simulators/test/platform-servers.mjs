@@ -27,7 +27,7 @@ for (const [service,prefix,port] of [['crm','CRM',8081],['billing','BILLING',808
     }
     next();
   });
-  facade.use(createSimulator({service,pool,key,date:process.env.DEMO_BUSINESS_DATE||'2026-11-18',faults:'test'}));
+  facade.use(createSimulator({service,pool,key,date:process.env.DEMO_BUSINESS_DATE||'2026-11-18',faults:'test',quota:300}));
   const server = facade.listen(Number(process.env[prefix+'_PORT']||port),'127.0.0.1');
   for (const signal of ['SIGTERM','SIGINT']) process.once(signal,()=>server.close(()=>void pool.end()));
 }
