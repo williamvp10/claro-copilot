@@ -37,7 +37,60 @@ test('a support transfer keeps the reported equipment and excludes procedures fo
 });
 test('unverified account never accesses account ports',async()=>{const f=fixture({verified:false}); const out=await createAgent(f.ports).run(turn({text:'mi factura'})); assert.equal(out.type,'card'); assert.deepEqual(f.calls,[]);});
 test('public plan answer has public citation; unavailable source abstains',async()=>{const f=fixture();const a=createAgent(f.ports);const out=await a.run(turn({audience:'cliente',attention_mode:'autoservicio',text:'¿Cuánto cuesta Fibra 500?'}));assert.equal(out.type,'answer');assert.ok(out.citations.length);assert.deepEqual(f.calls,[]);const b=createAgent(f.ports,{documents:[]});expectAnOfferToEscalate(await b.run(turn({audience:'cliente',text:'precio Fibra 500'})));});
-test('retention proposes only explicit customer acceptance and correct option',async()=>{const f=fixture({messages:[msg('quiero cancelar','cliente',1),msg('Le ofrezco descuento o mejora a Fibra 500','asesor',2),msg('Acepto el descuento','cliente',3)]});const a=createAgent(f.ports);const out=await a.run(turn({turn_seq:3,text:'Acepto el descuento'}));assert.equal(out.type,'card');assert.equal(out.card.proposal.detail,'discount');assert.deepEqual(f.calls.at(-1),{option_id:'discount',citation_ids:['policy']});await a.run(turn({turn_seq:3,text:'Acepto el descuento'}));assert.equal(f.calls.filter(x=>typeof x==='object').length,1);const resumed=await a.resume({run_id:'run1',effect_id:'p1',status:'confirmed',effect_ref:'crm-1'});assert.match(resumed.card.summary,/crm-1/);});
+test('retention proposes only explicit customer acceptance and correct option',async()=>{const f=fixture({messages:[msg('quiero cancelar','cliente',1),msg('Le ofrezco el 30 % de descuento o una mejora a Fibra 500.','asesor',2),msg('Acepto el descuento','cliente',3)]});const a=createAgent(f.ports);const out=await a.run(turn({turn_seq:3,text:'Acepto el descuento'}));assert.equal(out.type,'card');assert.equal(out.card.proposal.detail,'discount');assert.deepEqual(f.calls.at(-1),{option_id:'discount',citation_ids:['policy']});await a.run(turn({turn_seq:3,text:'Acepto el descuento'}));assert.equal(f.calls.filter(x=>typeof x==='object').length,1);const resumed=await a.resume({run_id:'run1',effect_id:'p1',status:'confirmed',effect_ref:'crm-1'});assert.match(resumed.card.summary,/crm-1/);});
+test('assisted retention advances from offers actually sent and the customer response',async()=>{
+  const billing=msg('Tu factura figura como pagada y tu saldo pendiente es $0.','agente',2);
+  const offer='Puedo ofrecerte un 30 % de descuento por seis meses o una mejora a Fibra 500 sin costo por seis meses.';
+  const cases=[
+    {reply:'Sí, quiero cancelarla!', next:'retention_present_options'},
+    {sent:'Voy a revisar si hay ofertas o un descuento del 30 %.',reply:'Acepto el descuento.',next:'retention_present_options'},
+    {sent:'Puedo ofrecerte revisar si corresponde un descuento del 30 %.',reply:'De acuerdo.',next:'retention_present_options'},
+    {sent:offer,reply:'Acepto.',next:'option_unclear'},
+    {sent:offer,clarify:'¿Cuál de las alternativas prefieres?',reply:'Acepto la mejora.',next:'retention_proposal_pending',selected:'upgrade'},
+    {sent:offer,reply:'Acepto el descuento del 35 %.',next:'retention_awaiting_choice'},
+    {sent:offer,reply:'Sí, quiero dar de baja el servicio.',next:'cancellation_requested'},
+    {sent:offer,later:'¿Quieres que te pase con un asesor?',reply:'De acuerdo.',next:'retention_present_options'},
+    {sent:'El descuento del 30 % está pendiente de revisión. Puedo ofrecerte una mejora a Fibra 500.',
+      reply:'Acepto el descuento.',next:'retention_awaiting_choice'},
+    {sent:'Puedo ofrecerte un descuento del 30 % sobre el cargo fijo.',
+      reply:'De acuerdo, y quiero saber si mi factura ya está pagada.',next:'retention_awaiting_choice'},
+    {sent:'Puedo ofrecerte un descuento del 30 % sobre el cargo fijo.',
+      reply:'De acuerdo.',next:'retention_prepare_discount'}
+  ];
+  for (const scenario of cases) {
+    const first=msg('Quiero cancelar mi factura','cliente',1);
+    const messages=[first,billing];
+    if (scenario.sent) messages.push(msg('Sí quiero cancelarla!','cliente',3),
+      msg('Dejé tu solicitud en espera de un asesor.','agente',4));
+    if (scenario.sent) messages.push(msg(scenario.sent,'asesor',messages.length+1));
+    if (scenario.clarify || scenario.later) messages.push(msg(scenario.clarify ?? scenario.later,'asesor',messages.length+1));
+    const customer=msg(scenario.reply,'cliente',messages.length+1);
+    messages.push(customer);
+    if (!scenario.sent) messages.push(msg('Dejé tu solicitud en espera de un asesor.','agente',customer.turn_seq+1));
+    const demo=fixture({messages});
+    const readCase=demo.ports.readCaseForRun;
+    const retain=demo.ports.evaluateRetention;
+    demo.ports.readCaseForRun=async()=>({...await readCase(),billable_retention:true,
+      intake:{intent:'cancelacion',facts:{},asked:[]},previous_summary:{text:'Se encontraron dos alternativas elegibles.',pending:[]}});
+    demo.ports.evaluateRetention=async()=>{
+      const result=await retain();
+      return {...result,options:result.options.map(option=>option.id==='discount'?
+        {...option,title:'30 % de descuento',detail:'Sobre el cargo fijo durante seis meses.',discount:{percentage:30,cycles:6}}:option)};
+    };
+    const out=await createAgent(demo.ports).run(turn({turn_seq:customer.turn_seq,text:customer.text,assisted_summary:true}));
+    assert.equal(out.type,'card',scenario.reply);
+    assert.ok(out.card.reason_codes.includes(scenario.next),JSON.stringify({scenario,reasons:out.card.reason_codes}));
+    assert.equal(out.card.context_question,undefined);
+    assert.deepEqual(demo.calls.filter(call=>typeof call==='object'),
+      scenario.selected ? [{option_id:scenario.selected,citation_ids:['policy']}] : []);
+    if (scenario.next==='retention_present_options') {
+      assert.match(out.card.advisor_draft,/ofrecerte.*30 %.*seis meses.*fibra 500/i);
+      assert.doesNotMatch(out.card.advisor_draft,/revisamos|elegiste/i);
+      assert.equal(out.card.retention_options.length,2);
+    }
+    if (scenario.next==='cancellation_requested') assert.doesNotMatch(out.card.advisor_draft,/ofrecerte|elegiste/i);
+  }
+});
 test('advisor statements and ineligible customers cannot create a proposal',async()=>{for(const scenario of [{actor:'asesor',eligible:true},{actor:'cliente',eligible:false}]){const f=fixture({eligible:scenario.eligible,messages:[msg('quiero cancelar','cliente',1)]});await createAgent(f.ports).run(turn({actor:scenario.actor,text:'Acepto el descuento'}));assert.equal(f.calls.filter(x=>typeof x==='object').length,0);}});
 test('filters knowledge by date and audience',async()=>{const f=fixture();const a=createAgent(f.ports,{documents:[{id:'private',title:'Fibra',excerpt:'Secreto Fibra 500',version:'1',scope:'advisor',effective_from:'2026-01-01'},{id:'future',title:'Fibra',excerpt:'Futuro Fibra 500',version:'2',scope:'public',effective_from:'2026-12-01'}]});expectAnOfferToEscalate(await a.run(turn({audience:'cliente',text:'Fibra 500'})));});
 

@@ -8,7 +8,7 @@ export type { AgentObservation, PublicWriter } from './generation.js';
 import { requestedAdvisor } from './human-attention.js';
 import { TurnModels, type ModelCredentials } from './model-runtime.js';
 import { assistedHistory, assistedWriting } from './assisted-writing.js';
-import { requestedDiscount, retentionAdvisorReply } from './retention-advisor.js';
+import { continuesCancellation, requestedDiscount, retentionAdvisorReply, retentionDialogue } from './retention-advisor.js';
 import { createBrief, extractBrief, extractorVersion, orchestratedPublicInstructions, modelDraft, modelEvidenceOrder, modelObjectiveOrder, type Brief, type Extracted } from './turn-brief.js';
 import type { AgentObservation, Profile, PublicWriter } from './generation.js';
 import { safeKnowledgeQuery } from './mcp.js';
@@ -98,9 +98,13 @@ function planConversation(turn: AgentTurn, messages: Message[]): AgentTurn & Kno
   }
   return turn;
 }
+function isAffirmativeFollowUp(text: string): boolean {
+  return has(text,/\b(acepto|aceptamos|aceptaria|de acuerdo|si quiero|si acepto|me sirve|lo acepto|la acepto|tomare|quiero esa|quiero ese)\b/) &&
+    !has(text,/\b(no acepto|no quiero|no me sirve|acepto si|acepto cuando)\b/);
+}
 function recentPurpose(messages: Message[], turn: AgentTurn): Intent {
   const meaningful = messages.filter(m => m.actor === 'cliente' && m.turn_seq < turn.turn_seq).reverse()
-    .find(m => !accepted(m.text) && (contextIntent(m.text) || has(m.text,alternativePlan)));
+    .find(m => !isAffirmativeFollowUp(m.text) && (contextIntent(m.text) || has(m.text,alternativePlan)));
   const text=meaningful?.text ?? turn.text;
   return classify(text) ?? contextIntent(text) ?? 'soporte_tecnico';
 }
@@ -177,23 +181,6 @@ function asksReconnectionCharge(text: string): boolean {
 function cancellationWithFaults(text:string):boolean {
  return has(text,/\b(?:cancel\w*|retir\w*|dar de baja)\b/) && has(text,/\b(?:fallas?|averias?|intermitencia|caidas?|se cae|sin internet)\b/)
   && !has(text,/\b(?:sin fallas?|no (?:tengo|hay) fallas?|no (?:es )?por fallas?)\b/);
-}
-function accepted(text: string): boolean { return has(text, /\b(acepto|aceptamos|aceptaria|de acuerdo|si quiero|si acepto|me sirve|lo acepto|la acepto|tomare|quiero esa|quiero ese)\b/) && !has(text, /\b(no acepto|no quiero|no me sirve|acepto si|acepto cuando)\b/); }
-function selectOption(text: string, options: Retention['options'], messages: Message[]): Retention['options'][number] | undefined {
-  const context = norm(text);
-  const kind = /descuento|por ciento|%|rebaja/.test(context) ? 'discount' : /mejora|500|upgrade|velocidad/.test(context) ? 'upgrade' : undefined;
-  const choose = (s: string) => kind === 'discount' ? /descuento|por ciento|%|rebaja|discount/.test(s) : /mejora|500|upgrade|velocidad/.test(s);
-  if (kind) return options.find(o => choose(norm(`${o.id} ${o.title} ${o.detail}`)));
-  if (options.length === 1) return options[0];
-  const previous = [...messages].reverse().find(m => m.actor === 'asesor');
-  if (previous) {
-    const p = norm(previous.text), mentioned = options.filter(o => {
-      const s = norm(`${o.id} ${o.title} ${o.detail}`);
-      return (/descuento|%|discount/.test(s) && /descuento|%/.test(p)) || (/mejora|500|upgrade/.test(s) && /mejora|500/.test(p));
-    });
-    if (mentioned.length === 1) return mentioned[0];
-  }
-  return undefined;
 }
 function card(intent: Intent, summary: string, facts: Fact[], citations: Citation[], pending: string[], next_action: string, reason_codes: string[], proposal?: Awaited<ReturnType<AgentPorts['createProposal']>>): RunResult {
   return { type: 'card', route: intent, card: { intent, summary, facts, citations, pending, next_action, reason_codes, ...(proposal ? { proposal } : {}) } };
@@ -692,7 +679,8 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
         [pending.length ? 'source_unavailable' : 'verified_account']);
     }
     const customerContext = () => readFacts('crm.get_customer_context','review_customer_context',() => ports.getCustomerContext(turn.run_id));
-    if (prompts.agent_objectives && intent==='cancelacion' && turn.actor==='cliente' && state.intake?.skip && !accepted(turn.text)) {
+    if (prompts.agent_objectives && intent==='cancelacion' && turn.actor==='cliente' && state.intake?.skip &&
+        (continuesCancellation(turn.text) || !isAffirmativeFollowUp(turn.text))) {
       return card(intent,'El cliente pide continuar con la baja.',[],[],['Tramitar la baja con el responsable de cancelaciones'],
         'Continuar el trámite de cancelación y confirmar el resultado cuando se haya registrado.',['cancellation_requested']);
     }
@@ -753,23 +741,31 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
           'Continuar el trámite solicitado sin ofrecer alternativas no elegibles.',['retention_ineligible']);
       }
       const alternatives = retention.options.map(o => `${o.title}: ${o.detail}`).join(' · ');
-      let proposal;
-      if (turn.actor === 'cliente' && accepted(turn.text) && !state.retention_discount) {
-        const selected = selectOption(turn.text, retention.options, state.messages.filter(m => m.turn_seq < turn.turn_seq));
-        if (selected?.discount && state.billable_retention) {
-          const result=card(intent,`Alternativas elegibles: ${alternatives}`,facts,citations,
-            ['Confirmar el servicio y las condiciones'], 'Preparar el descuento desde CRM y confirmar los términos del servicio con el cliente.', ['retention_eligible','retention_prepare_discount']);
-          if (result.type==='card') result.card.retention_options=retention.options;
-          return result;
-        }
-        if (selected && Date.now() < deadline) proposal = await ports.createProposal(turn.run_id, {option_id:selected.id, citation_ids:[retention.policy.id]});
-        else return card(intent, `Alternativas elegibles: ${alternatives}`, facts, citations, ['Precisar la alternativa aceptada'], 'Preguntar cuál alternativa acepta el cliente.', ['option_unclear']);
+      const dialogue=retentionDialogue(turn,state.messages,retention.options);
+      if (dialogue.continueCancellation && !state.retention_discount) {
+        return card(intent,'El cliente pide continuar con la baja después de recibir una oferta.',facts,citations,['Tramitar la baja con el responsable de cancelaciones'],
+          'Continuar el trámite de cancelación y confirmar el resultado cuando se haya registrado.',['cancellation_requested']);
       }
-      const advisorPresented = state.messages.some(m => m.actor === 'asesor' && has(m.text, /oferta|descuento|mejora|alternativa/));
-      const result=card(intent, `Resultado de elegibilidad: ${retention.reason}. Alternativas: ${alternatives}`, facts, citations, proposal ? ['Aprobación del asesor'] : ['Decisión del cliente'], proposal ? 'Revisar y aprobar la propuesta en consola.' : advisorPresented ? 'Esperar la decisión del cliente.' : 'Presentar las alternativas y esperar la decisión del cliente.', ['retention_eligible'], proposal);
+      const selected=state.retention_discount ? undefined : dialogue.selected;
+      const prepare=selected?.discount && state.billable_retention;
+      const proposal=selected && !prepare && Date.now()<deadline
+        ? await ports.createProposal(turn.run_id,{option_id:selected.id,citation_ids:[retention.policy.id]}) : undefined;
+      const reason=prepare ? 'retention_prepare_discount' : proposal ? 'retention_proposal_pending' :
+        selected ? 'retention_choice_review' : dialogue.unclear ? 'option_unclear' :
+        dialogue.offered.length ? 'retention_awaiting_choice' : 'retention_present_options';
+      const next={
+        retention_prepare_discount:['Confirmar el servicio y las condiciones','Preparar el descuento desde CRM y confirmar los términos del servicio con el cliente.'],
+        retention_proposal_pending:['Aprobación del asesor','Revisar y aprobar la propuesta en consola.'],
+        retention_choice_review:['Verificar la alternativa elegida','Revisar la alternativa elegida antes de registrarla.'],
+        option_unclear:['Precisar la alternativa aceptada','Preguntar cuál de las alternativas enviadas acepta el cliente.'],
+        retention_awaiting_choice:['Decisión del cliente','Aclarar las condiciones que el cliente consulte y esperar su decisión.'],
+        retention_present_options:['Presentar las alternativas','Presentar las alternativas y esperar la decisión del cliente.']
+      }[reason];
+      const result=card(intent,`Resultado de elegibilidad: ${retention.reason}. Alternativas: ${alternatives}`,facts,citations,[next[0]],next[1],
+        ['retention_eligible',reason],proposal);
       if (result.type==='card') {
         result.card.retention_options=retention.options;
-        result.card.requested_discount=requestedDiscount(state.messages);
+        result.card.requested_discount=requestedDiscount(state.messages.filter(message=>message.turn_seq<=turn.turn_seq));
       }
       return result;
     }
@@ -814,7 +810,9 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
     if (handoff) options.observe?.(turn.run_id,{name:'advisor.handoff_summary',started:handoffStarted,ended:Date.now(),metadata:{
       agent_id:'copiloto',step_id:'prepare_handoff',prompt_ref:'handoff_summary'
     }});
-    const question=c.suggested_escalation || c.proposal || c.reason_codes.some(reason=>['human_requested','support_followup','catalogue_comparison'].includes(reason)) ? undefined :
+    const question=c.suggested_escalation || c.proposal || c.reason_codes.some(reason=>[
+      'human_requested','support_followup','catalogue_comparison','retention_eligible','cancellation_requested'
+    ].includes(reason)) ? undefined :
       nextContextQuestion(state.intake ?? evolveContext(turn.text,undefined,c.intent ?? undefined));
     return {...result,card:{...c,...(objectives.length ? {objectives} : {}),context_question:question,advisor_draft:unsafe ? fallback : rendered,advisor_draft_run_id:turn.run_id,...(handoff && handoff.length < 4000 ? {handoff_summary:handoff} : {})}};
   }
@@ -870,7 +868,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const continuation=!explicitIntent ? (turn.actor==='asesor' ? caseState.conversation_context?.active : undefined) ?? context.domain ?? (isPublicContinuation(turn) ? caseState.public_route : undefined) : undefined;
       if (continuation) intent=continuation;
       else if (!explicitIntent && extracted) intent=extracted;
-      if (turn.actor === 'cliente' && !accepted(turn.text) && tokens(turn.text).length > 2) {
+      if (turn.actor === 'cliente' && !isAffirmativeFollowUp(turn.text) && tokens(turn.text).length > 2) {
         const activeOffer = intent === 'cancelacion' && !explicitIntent && has(turn.text,/\b(?:descuento|oferta)\b/);
         if (!activeOffer && !continuation) intent = classify(turn.text) ?? explicitIntent ?? extracted ?? intent;
       }
@@ -1193,7 +1191,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
           origin:summary ? 'ia' : 'evidencia',...(stale ? {stale:true} : {})};
         const retentionTopic=card.intent==='cancelacion' || card.intent==='facturacion' && /\b(?:descuento|beneficio de retenci[oó]n)\b/i.test(turn.text);
         const discount=retentionTopic && !card.suggested_escalation ? caseState.retention_discount : undefined;
-        const retentionReply=retentionTopic && !card.suggested_escalation ? retentionAdvisorReply(card,discount) : undefined;
+        const retentionReply=retentionTopic && !card.suggested_escalation ? retentionAdvisorReply(card,discount,turn.actor) : undefined;
         if (discount) {
           const pending={requested:'Revisión de Administración',authorized:'Aceptación del cliente',
             accepted:'Confirmación en CRM',crm_confirmed:'Programación en Facturación',scheduled:'Emisión del siguiente ciclo'} as const;
@@ -1206,7 +1204,8 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
           card.advisor_draft=retentionReply;
           const at=Date.now();
           options.observe?.(turn.run_id,{name:'advisor.retention_reply',started:at,ended:at,metadata:{
-            step_id:'write_verified_retention_reply',agent_id:'copiloto',status:discount?.status ?? 'eligibility'
+            step_id:'write_verified_retention_reply',agent_id:'copiloto',status:discount?.status ??
+              card.reason_codes.find(reason=>reason!=='retention_eligible') ?? 'eligibility'
           }});
         } else if (current?.models && prompts.assisted_reply && !card.proposal && !card.suggested_escalation) {
           const reply=await assistedWriting(current.models,'assisted_reply',prompts.assisted_reply,profile ?? 'economico',history,{
