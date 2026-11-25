@@ -71,7 +71,7 @@ if(live) {
   assert.match(responses.find(result=>result.status==='rejected').reason.message,/409/);
   try {
     const chat=await start();
-    await chat.send('¿Cómo funciona la portabilidad?');
+    await chat.send('¿Cómo uso el roaming si viajo fuera del país?');
     assert.ok(await until(async()=> (await chat.history()).messages.find(message=>message.actor==='agente'),'published live reply'));
     console.log('Live policy revision and conversation',id,chat.conversation);
   } finally {

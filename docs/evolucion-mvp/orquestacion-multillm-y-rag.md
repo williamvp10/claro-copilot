@@ -95,3 +95,19 @@ El presupuesto es por turno. Cada especialista recibe el mismo diálogo autoriza
 | Conformidad sin solicitud de cierre, seguida de «Sí, quedó resuelto. Puedes cerrar» | La conformidad sola conserva el caso abierto. La confirmación de resolución y cierre habilita la transición de plataforma y queda registrada. |
 
 **Evidencia del requisito del reto.** Mostrar en el dashboard una política activa con perfiles de costo y reglas por caso. Ejecutar un turno simple con OpenAI directo y uno compuesto que use un modelo alternativo autorizado por OpenRouter. Cambiar la configuración por superadmin, repetir el turno y comprobar en la traza la revisión y el modelo efectivo, junto con la evidencia RAG y los resultados de la suite.
+
+### Resultado de la validación local
+
+- **Catálogo y contratación.** 10 de 10 conversaciones aprobaron las aserciones de plataforma y recibieron los 20 scores nativos esperados. El replay de la imagen final conservó las mismas respuestas públicas, citas y selecciones.
+- **Llamadas originales.** Jev aprobó las mismas 9 de 15 llamadas de la base. El replay de la revisión final produjo 30 scores y preservó los 15 controles de ruta y alcance público.
+- **Continuidad.** Los dos chats largos cumplieron las aserciones de plataforma, incluidas las retomadas, la verificación y la corrección de la oferta. Jev marcó `required=parcial` y `forbidden=limpio` en ambos. Sus respuestas y transiciones coincidieron con el replay anterior. La aprobación semántica estricta sigue pendiente.
+- **Chat asistido.** La prueba web confirmó una espera, la toma por el asesor, el registro del mensaje enviado, la actualización de una sugerencia privada y el cierre tras la confirmación del cliente. La sesión de Langfuse contiene el visitante seudonimizado, el contexto por turno y los mensajes públicos sintéticos.
+
+Para repetir la prueba de plataforma desde la raíz del repositorio:
+
+```bash
+node --env-file=.env.demo.local --env-file=.env.demo.release.local \
+  apps/backend/test/multillm-web-e2e.mjs
+```
+
+La opción `--change-model` valida, activa y restaura una política con una cuenta de superadministración en el demo sintético. Usa las credenciales de los proveedores configuradas en el despliegue.
