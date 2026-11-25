@@ -29,7 +29,7 @@ Claro adopta tres decisiones del patrón de Open Deep Research. El orquestador c
 
 ## Configuración desde Superadministración
 
-**Dashboard → Superadministración → Modelos del agente.** Reutilizar la capacidad `superadmin` de NestJS. Mostrar la revisión activa y sus perfiles, un borrador editable, el resultado de la validación, el historial y la acción para restaurar una revisión evaluada. El backend ofrece el catálogo disponible y las operaciones de consulta, guardar borrador, validar, activar y restaurar. Para activar o restaurar, pedir motivo y revisión esperada. Los demás roles reciben `403` en las operaciones de gestión.
+**Dashboard → Superadministración → Modelos del agente.** La sección tiene tres vistas y usa la capacidad `superadmin` de NestJS. **Configuración** muestra el Orquestador y los tres subagentes. Permite consultar la política activa y editar un modelo fijo, una regla automática por perfil y costo o el respaldo. El Orquestador permite aplicar la regla a una llamada o replicarla en sus cinco llamadas. **Revisiones** conserva los borradores y validaciones. Al activar o restaurar pide motivo, referencia de prueba y revisión activa esperada. **Trazas** muestra los modelos solicitados y efectivos, la revisión, el proveedor, el estado y el enlace a Langfuse cuando la plataforma registra la exportación. Los demás roles reciben `403` en las operaciones de gestión.
 
 | Componente seleccionable | Llamadas configurables | Perfiles iniciales |
 | --- | --- | --- |
@@ -43,6 +43,7 @@ Cada llamada hereda un modelo por componente y perfil. Superadministración pued
 | Operación bajo `/api/v1/admin/agent-models` | Contrato |
 | --- | --- |
 | `GET /catalog` y `GET /revisions` | Devuelven el catálogo permitido, estado de proveedores, revisión activa e historial. |
+| `GET /executions` | Devuelve hasta 40 llamadas registradas en los últimos siete días y el enlace a la traza exportada. |
 | `POST /revisions` | Guarda un snapshot candidato con la revisión base, las asignaciones y los límites. |
 | `POST /revisions/:id/validate` | Devuelve los problemas por paso y perfil. Vincula la validación al digest de la candidata. |
 | `POST /revisions/:id/activate` y `POST /revisions/:id/restore` | Aplican una revisión validada con motivo, evidencia y revisión activa esperada. Un cambio concurrente devuelve `409`. |

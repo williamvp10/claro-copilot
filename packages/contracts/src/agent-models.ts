@@ -67,7 +67,7 @@ export function assignedModelIds(rule:ModelAssignment) {
 export type ModelValidation = { digest:string; checked_at:string; issues:{step:ModelStep;model:string;reason:string}[] };
 export type AgentModelRevision = {
   revision:string; base_revision:string|null; digest:string; policy:AgentModelPolicy;
-  created_by:string; reason:string; created_at:string; validation:ModelValidation|null;
+  created_by:string; reason:string; created_at:string; validation:ModelValidation|null; was_active:boolean;
 };
 export type AgentModelRevisions = {active:string; revisions:AgentModelRevision[]};
 export type AgentModelActivation = {active:string; revision:AgentModelRevision};
@@ -75,3 +75,10 @@ export type AgentModelCatalog = {
   providers:Record<ModelProvider,boolean>;
   models:(ModelOption & {available:boolean; structured_outputs:boolean|null})[];
 };
+
+export type AgentModelExecution = {
+  id:string; at:string; step:ModelStep; provider:ModelProvider; revision:string;
+  requested_model:string; effective_model:string|null; status:string; attempt:number;
+  latency_ms:number|null; cost_usd:number|null; cost_basis:string|null; trace_url:string|null;
+};
+export type AgentModelExecutions = {items:AgentModelExecution[];langfuse_url:string|null};

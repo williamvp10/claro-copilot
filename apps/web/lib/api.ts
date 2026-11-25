@@ -1,4 +1,4 @@
-import type { AgentModelActivation, AgentModelCatalog, AgentModelPolicy, AgentModelRevision, AgentModelRevisions, ModelValidation } from '@claro/contracts';
+import type { AgentModelActivation, AgentModelCatalog, AgentModelExecutions, AgentModelPolicy, AgentModelRevision, AgentModelRevisions, ModelValidation } from '@claro/contracts';
 import type { CaseEvent, CaseSnapshot, CaseSummary, Contact, Dashboard, DashboardFilters, EvalJob, EvalStatus, PromptRevision, Viewer, BillingView, CrmView, InvoiceDetail, ManualAction, IntegrationHealth, IntegrationOperation, KnowledgeInventory, KnowledgeLabQuery, KnowledgeLabResult, KnowledgePassage } from '@claro/contracts';
 import type { LangfuseEvaluations } from '@claro/contracts';
 
@@ -53,6 +53,7 @@ export const integrations = {
 };
 export const api = {
   agentModelCatalog:()=>request<AgentModelCatalog>('/api/v1/admin/agent-models/catalog'),
+  agentModelExecutions:()=>request<AgentModelExecutions>('/api/v1/admin/agent-models/executions'),
   agentModelRevisions:()=>request<AgentModelRevisions>('/api/v1/admin/agent-models/revisions'),
   saveAgentModelRevision:(input:{base_revision:string;reason:string;policy:AgentModelPolicy})=>request<AgentModelRevision>(
     '/api/v1/admin/agent-models/revisions',{method:'POST',body:JSON.stringify(input)}),

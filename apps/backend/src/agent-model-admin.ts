@@ -1,20 +1,25 @@
 import { BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, Inject, NotFoundException, Param, Post, Req } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { objectSchema, requestModel, type ModelCredentials } from '@claro/agent';
-import { AgentModelPolicy, ModelStep, agentModelCatalog, assignedModelIds, modelProfileRank,
-  type AgentModelCatalog, type AgentModelRevision, type ModelOption, type ModelProvider, type ModelValidation } from '@claro/contracts';
+import { AgentModelPolicy, ModelProvider as ProviderSchema, ModelStep, agentModelCatalog, assignedModelIds, modelProfileRank,
+  type AgentModelCatalog, type AgentModelExecutions, type AgentModelRevision, type ModelOption, type ModelProvider, type ModelValidation } from '@claro/contracts';
 import type { Request } from 'express';
 import type { DataSource } from 'typeorm';
 import { z } from 'zod';
 import { agentModelDigest, modelRevision } from './agent-model-storage.js';
 import { AUTH, getViewer, type createAuth } from './auth.js';
 import { DATABASE } from './database.js';
+import { browserEndpoint } from './dashboard.js';
+import { traceIdentifier } from './telemetry.js';
 
 const Revision=z.string().min(1).max(128);
 const Reason=z.string().trim().min(5).max(300);
 const Draft=z.object({base_revision:Revision,reason:Reason,policy:AgentModelPolicy}).strict();
 const Change=z.object({expected_revision:Revision,reason:Reason,evidence:z.string().trim().min(3).max(240)}).strict();
-const SELECT_REVISIONS=`SELECT r.*,v.report AS validation FROM agent_model_config_revision r
+const SELECT_REVISIONS=`SELECT r.*,v.report AS validation,
+  (EXISTS (SELECT 1 FROM agent_model_config_active a WHERE a.revision=r.revision) OR
+   EXISTS (SELECT 1 FROM agent_model_config_event e WHERE e.revision=r.revision OR e.previous_revision=r.revision)) AS was_active
+  FROM agent_model_config_revision r
   LEFT JOIN agent_model_config_validation v USING(revision)`;
 
 function parse<T>(schema:z.ZodType<T>, value:unknown):T {
@@ -101,6 +106,40 @@ export class AgentModelAdminController {
     return {active,revisions:result};
   }
 
+  @Get('executions')
+  async executions(@Req() req:Request):Promise<AgentModelExecutions> {
+    await this.viewer(req);
+    const endpoint=browserEndpoint(process.env.LANGFUSE_UI_URL);
+    const project=encodeURIComponent(process.env.LANGFUSE_PROJECT_ID || 'claro-copiloto');
+    const projectUrl=endpoint ? `${endpoint}/project/${project}` : null;
+    const recent:{id:string;created_at:Date;metadata:Record<string,unknown>;exported:boolean}[]=await this.db.query(`
+      WITH recent AS (
+        SELECT id,case_id,created_at,metadata FROM attention_event
+        WHERE kind='model.call' AND created_at>=now()-interval '7 days'
+        ORDER BY created_at DESC,id DESC LIMIT 40
+      )
+      SELECT r.id,r.created_at,r.metadata,EXISTS(
+        SELECT 1 FROM attention_event e WHERE e.case_id=r.case_id AND e.kind='langfuse_exported'
+          AND e.metadata->>'run_id'=r.metadata->>'run_id'
+      ) AS exported FROM recent r ORDER BY r.created_at DESC,r.id DESC`);
+    return {
+      langfuse_url:projectUrl ? `${projectUrl}/traces` : null,
+      items:recent.flatMap(({id,created_at,metadata,exported})=>{
+        const {step_id,provider,model_config_revision,requested_model,effective_model,status,attempt,ms,cost_usd,cost_basis,run_id}=metadata;
+        const step=ModelStep.safeParse(step_id), route=ProviderSchema.safeParse(provider);
+        if (!step.success || !route.success || typeof model_config_revision!=='string' ||
+            typeof requested_model!=='string' || typeof status!=='string' || typeof attempt!=='number') return [];
+        return [{
+          id:String(id),at:created_at.toISOString(),step:step.data,provider:route.data,revision:model_config_revision,
+          requested_model,effective_model:typeof effective_model==='string' && effective_model ? effective_model : null,
+          status,attempt,latency_ms:typeof ms==='number' ? ms : null,cost_usd:typeof cost_usd==='number' ? cost_usd : null,
+          cost_basis:typeof cost_basis==='string' ? cost_basis : null,
+          trace_url:projectUrl && exported && typeof run_id==='string' ? `${projectUrl}/traces/${traceIdentifier(run_id)}` : null
+        }];
+      })
+    };
+  }
+
   @Post('revisions')
   async save(@Req() req:Request,@Body() input:unknown) {
     const viewer=await this.viewer(req);
@@ -175,7 +214,7 @@ export class AgentModelAdminController {
         VALUES($1,$2,$3,$4,$5,$6)`,[kind,id,active.revision,viewer.id,reason,evidence]);
       return revision;
     });
-    return {active:id,revision:selected};
+    return {active:id,revision:{...selected,was_active:true}};
   }
 
   @Post('revisions/:id/activate')
