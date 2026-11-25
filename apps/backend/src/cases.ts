@@ -223,7 +223,8 @@ export class Cases {
     const rows: CaseRow[] = await this.db.query(`SELECT * FROM attention_case WHERE snapshot->>'owner_id'=$1 OR
       ($2 AND snapshot->>'owner_id' IS NULL AND (handoff_pending IS NOT NULL OR snapshot->>'attention_mode'='asistido'))
       ORDER BY snapshot->>'updated_at' DESC LIMIT 100`, [viewer.id, canIntake]);
-    return rows.map(({ snapshot: { messages: _messages, card: _card, intake: _intake, cursor: _cursor, ...summary } }) => summary);
+    return rows.map(({snapshot:{messages:_messages,card:_card,intake:_intake,cursor:_cursor,
+      conversation_context:_context,conversation_memory:_memory,customer_resolution:_resolution,...summary}})=>summary);
   }
 
   async contacts(viewer: Viewer): Promise<Contact[]> {
@@ -238,7 +239,8 @@ export class Cases {
     if (!row.snapshot.owner_id && row.handoff_pending && row.snapshot.status==='open' &&
         (viewer.capabilities?.includes('n1') ?? viewer.role==='asesor')) {
       // A queue preview exposes the reason. Account facts and conversation history require assignment.
-      const {tracking:_tracking,ml:_ml,intake:_intake,...snapshot}=row.snapshot;
+      const {tracking:_tracking,ml:_ml,intake:_intake,conversation_context:_context,
+        conversation_memory:_memory,customer_resolution:_resolution,...snapshot}=row.snapshot;
       return {...snapshot,handoff_reason:reason,messages:[],card:null,last_message:null};
     }
     checkCase(viewer, row, true);
@@ -972,7 +974,7 @@ export class Cases {
   private async assessorMessage(tx: EntityManager, row: CaseRow, text: string, publication?:DraftPublication) {
     const citations=publication?.source ? row.snapshot.card?.citations : undefined;
     const m = addMessage(row, 'asesor', text,citations);
-    recordPublishedReply(row.snapshot.conversation_context,m,contextIntent(text) ?? row.snapshot.card?.intent ?? undefined);
+    recordPublishedReply(row.snapshot.conversation_context,m,contextIntent(text));
     const question=row.snapshot.card?.context_question;
     if (question && row.snapshot.intake && text.includes(question.text)) recordQuestion(row.snapshot.intake,question);
     if (row.snapshot.channel === 'telegram') {

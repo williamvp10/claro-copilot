@@ -136,6 +136,7 @@ export function finishConversation(prepared:ReturnType<typeof prepareConversatio
   const {before,state,reading}=prepared;
   const domain=domainOf(result.route);
   if (result.type==='failed' || !domain || turn.actor!=='cliente' || (reading.ambiguous && extracted?.intent!==domain)) return;
+  if (result.type==='card' && result.card.reason_codes.includes('human_requested')) return;
   const old=before?.frames[domain];
   const grounded=result.type==='answer' && (result.citations.length || result.context_question)
     || result.type==='handoff' && (result.verification_required || result.commercial_plan)

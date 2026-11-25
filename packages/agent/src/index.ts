@@ -98,7 +98,8 @@ function planConversation(turn: AgentTurn, messages: Message[]): AgentTurn & Kno
 function recentPurpose(messages: Message[], turn: AgentTurn): Intent {
   const meaningful = messages.filter(m => m.actor === 'cliente' && m.turn_seq < turn.turn_seq).reverse()
     .find(m => !accepted(m.text) && (contextIntent(m.text) || has(m.text,alternativePlan)));
-  return classify(meaningful?.text ?? turn.text) ?? 'soporte_tecnico';
+  const text=meaningful?.text ?? turn.text;
+  return classify(text) ?? contextIntent(text) ?? 'soporte_tecnico';
 }
 
 function isPublicContinuation(turn: AgentTurn) {
@@ -473,7 +474,7 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
   };
   const sourceUnavailable = (facts:Fact[]) => facts.some(fact => fact.id.endsWith('-unavailable'));
   const catalogPart = (text:string) => text.split(/\s+(?:y|adem[aá]s|tambi[eé]n)\s+|[;\n]/i).find(part=>
-    has(part,/\b(?:planes?|ofertas?|opciones|alternativas|paquetes?|catalogo)\b/) &&
+    has(part,/\b(?:plan(?:es)?|ofertas?|opciones|alternativas|paquetes?|catalogo)\b/) &&
     has(part,/\b(?:que|cuales|compar\w*|muestr\w*|ofrec\w*|precios?|barat\w*|econom\w*|ten\w*|conocer|nuev\w*)\b/) &&
     !has(part,/\b(?:mi factura|mi saldo|me cobr\w*)\b/));
   const explicitAccountBilling = (text:string) => has(text,/\b(mi factura|mi saldo|saldo actual|saldo pendiente|mi vencimiento|mi deuda|cuanto debo|cuanto adeudo|me cobro|me cobraron|f-\d{4,10})\b/);
@@ -806,7 +807,8 @@ export function createAgent(ports: AgentPorts, options: AgentOptions = {}): Agen
       const context=prepareConversation(turn,{...caseState,messages:allowedMessages});
       return {turn:context.turn,caseState:context.state,context,prompts:config.prompts,
         publicPrompt:models ? config.prompts.orchestrated_public_answer ?? orchestratedPublicInstructions : config.prompts.public_answer ?? '',
-        intent:context.domain ?? recentPurpose(caseState.messages,turn)};
+        intent:context.domain ?? contextIntent(turn.text) ?? caseState.conversation_context?.active ??
+          recentPurpose(caseState.messages,turn)};
     })
     .addNode('extract_turn', async ({turn,caseState,prompts,context}) => {
       const current=runtime.get(turn.run_id);

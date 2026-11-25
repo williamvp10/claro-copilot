@@ -7,7 +7,7 @@ const origin=new URL(process.env.PLATFORM_E2E_TARGET ?? process.env.BETTER_AUTH_
 assert.ok(['localhost','127.0.0.1','[::1]'].includes(origin.hostname),'Use a local synthetic demo.');
 const web='/api/v1/web-chat', admin='/api/v1/admin/agent-models', cases='/api/v1/cases';
 
-async function request(path,{body,cookie,status,timeout=10000}={}) {
+async function request(path,{body,cookie,status,timeout=25000}={}) {
   const response=await fetch(new URL(path,origin),{method:body===undefined?'GET':'POST',
     headers:{Origin:origin.origin,...cookie?{Cookie:cookie}:{},...body===undefined?{}:{'Content-Type':'application/json'}},
     body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(timeout)});
@@ -63,6 +63,7 @@ if(live) {
     assert.deepEqual(data.issues,[]);
   };
   await request(admin+`/revisions/${id}/activate`,{cookie:superadmin,body:{...apply,expected_revision:prior.revision},status:409});
+  await validate(prior.revision);
   await validate(id);
   const responses=await Promise.allSettled([0,1].map(()=>request(admin+`/revisions/${id}/activate`,
     {cookie:superadmin,body:{...apply,expected_revision:prior.revision}})));
@@ -74,7 +75,6 @@ if(live) {
     assert.ok(await until(async()=> (await chat.history()).messages.find(message=>message.actor==='agente'),'published live reply'));
     console.log('Live policy revision and conversation',id,chat.conversation);
   } finally {
-    await validate(prior.revision);
     await request(admin+`/revisions/${prior.revision}/restore`,{cookie:superadmin,body:{...apply,expected_revision:id}});
   }
 }
@@ -107,7 +107,12 @@ assert.ok(active);
 await request(cases+`/${active.id}/take`,{cookie:advisor,body:{}});
 assert.equal((await chat.history()).attention_mode,'asistido');
 const card=()=>request(cases+'/'+active.id,{cookie:advisor}).then(result=>result.data);
-await until(async()=> (await card()).card?.advisor_draft,'first private draft');
+await until(async()=>{
+  const snapshot=await card();
+  if (!snapshot.card?.advisor_draft) return null;
+  assert.equal(snapshot.conversation_context?.active,'consulta_planes');
+  return snapshot.card;
+},'first private draft');
 await request(cases+`/${active.id}/messages`,{cookie:advisor,body:{
   text:'Te ayudo a revisar los beneficios del plan que vimos.',idempotency_key:randomUUID()
 }});
@@ -125,4 +130,6 @@ assert.ok(!Object.hasOwn(await chat.history(),'card'));
 await chat.send('Sí, quedó resuelto. Puedes cerrar.');
 assert.equal((await chat.history()).status,'open');
 await until(async()=> (await card()).card?.reason_codes.includes('customer_resolution_confirmed'),'private closure suggestion');
+await request(cases+`/${active.id}/close`,{cookie:advisor,body:{resolved:true}});
+assert.equal((await chat.history()).status,'closed');
 console.log('Shared dialogue, catalogue, explicit handoff, assisted follow-up and requested closure',chat.conversation);

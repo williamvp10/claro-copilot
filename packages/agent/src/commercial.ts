@@ -10,7 +10,7 @@ const labels: Record<CatalogSegment, string> = { hogar: 'Internet Hogar', movil_
 type Action = 'list' | 'select' | 'price' | 'detail' | 'download' | 'purchase';
 export type CatalogRequest = { action: Action; query: string; groups: CatalogSegment[] };
 
-const categoryReply = /^(?:(?:me interesa |prefiero |quiero (?:ver )?|busco |opciones (?:de|para) ))?(?:(?:el|la|los|las|un|una) )?(?:planes? )?(?:(?:de|para) )?(?:(?:mi|el|la) )?(?:(?:telefonia |linea )?movil(?:es)?(?: (?:pospago|prepago))?|celular(?:es)?|(?:internet (?:para (?:el |la |mi )?)?)?(?:hogar|casa)|(?:internet de )?fibra|pospago|prepago|recargas?)(?:,? por favor)?$/;
+const categoryReply = /^(?:(?:me interesa |prefiero |quiero (?:ver )?|busco |opciones (?:de|para) ))?(?:(?:el|la|los|las|un|una) )?(?:plan(?:es)? )?(?:(?:de|para) )?(?:(?:mi|el|la) )?(?:(?:telefonia |linea )?movil(?:es)?(?: (?:pospago|prepago))?|celular(?:es)?|(?:internet (?:para (?:el |la |mi )?)?)?(?:hogar|casa)|(?:internet de )?fibra|pospago|prepago|recargas?)(?:,? por favor)?$/;
 const overview = /^(?:y )?(?:(?:dime|cuentame) )?que (?:incluye|trae|tiene|beneficios (?:incluye|tiene))\b\s*(.*)$/;
 const featureQuestion = /^(?:(.*?) )?(?:incluye|trae|tiene|cuenta con) (.+)$/;
 const detailFollowUp = /^(?:y )?(?:(?:el|la|los|las) )?(roaming|velocidad|vigencia|condiciones|beneficios)$/;

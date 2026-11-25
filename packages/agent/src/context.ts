@@ -57,7 +57,7 @@ export function contextIntent(input:string):Intent|undefined {
   if (portabilityRequest.test(text)) return 'portabilidad';
   if (/\b(?:factur\w*|saldo|cobro|cargo|pague|pagar|pago|pse|fecha de corte)\b/.test(text)) return 'facturacion';
   if (measuredSpeed.test(text) || /\b(?:e[ -]?202|los roja?|wi[ -]?fi|lent\w*|intermiten\w*|se cae|sin internet|sin senal|decodificador|decobox|modem|control parental)\b/.test(text)) return 'soporte_tecnico';
-  if (/\b(?:planes?|fibra|pospago|prepago|paquetes?|(?:claro )?max (?:\d+ gb|ilimitado))\b/.test(text)) return 'consulta_planes';
+  if (/\b(?:plan(?:es)?|fibra|pospago|prepago|paquetes?|(?:claro )?max (?:\d+ gb|ilimitado))\b/.test(text)) return 'consulta_planes';
   return undefined;
 }
 
